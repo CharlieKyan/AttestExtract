@@ -1,0 +1,34 @@
+{
+  "records": [
+    {
+      "record_type": "purchase_line",
+      "fields": {
+        "item": {"value": "desk lamps", "quote": "Purchase request: 5 desk lamps at USD 24.50 each, delivery within 10 days."},
+        "quantity": {"value": 5, "quote": "Purchase request: 5 desk lamps at USD 24.50 each, delivery within 10 days."},
+        "unit_price": {"value": 24.5, "quote": "Purchase request: 5 desk lamps at USD 24.50 each, delivery within 10 days."},
+        "currency": {"value": "USD", "quote": "Purchase request: 5 desk lamps at USD 24.50 each, delivery within 10 days."},
+        "delivery_days": {"value": 10, "quote": "Purchase request: 5 desk lamps at USD 24.50 each, delivery within 10 days."}
+      }
+    },
+    {
+      "record_type": "purchase_line",
+      "fields": {
+        "item": {"value": "Notebooks", "quote": "| Notebooks | 20 | 3.20 | USD | 7 |"},
+        "quantity": {"value": 20, "quote": "| Notebooks | 20 | 3.20 | USD | 7 |"},
+        "unit_price": {"value": 3.2, "quote": "| Notebooks | 20 | 3.20 | USD | 7 |"},
+        "currency": {"value": "USD", "quote": "| Notebooks | 20 | 3.20 | USD | 7 |"},
+        "delivery_days": {"value": 7, "quote": "| Notebooks | 20 | 3.20 | USD | 7 |"}
+      }
+    },
+    {
+      "record_type": "purchase_line",
+      "fields": {
+        "item": {"value": "Keyboards", "quote": "| Keyboards | 2 | 45.00 | USD | 14 |"},
+        "quantity": {"value": 2, "quote": "| Keyboards | 2 | 45.00 | USD | 14 |"},
+        "unit_price": {"value": 45.0, "quote": "| Keyboards | 2 | 45.00 | USD | 14 |"},
+        "currency": {"value": "USD", "quote": "| Keyboards | 2 | 45.00 | USD | 14 |"},
+        "delivery_days": {"value": 14, "quote": "| Keyboards | 2 | 45.00 | USD | 14 |"}
+      }
+    }
+  ]
+}

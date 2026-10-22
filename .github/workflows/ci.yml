@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.11", "3.13"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install development dependencies
+        run: python -m pip install -e ".[dev]"
+      - name: Run offline tests
+        run: python -m pytest
+      - name: Build distribution
+        run: python -m build
+      - name: Install wheel and run both demos outside the checkout
+        shell: python
+        run: |
+          import json
+          import os
+          from pathlib import Path
+          import subprocess
+          import tempfile
+          import venv
+
+          wheel = next(Path("dist").glob("attestextract-*.whl")).resolve()
+          with tempfile.TemporaryDirectory(prefix="attestextract-smoke-") as directory:
+              root = Path(directory)
+              environment = root / "venv"
+              venv.EnvBuilder(with_pip=True).create(environment)
+              python = environment / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+              env = dict(os.environ)
+              env.pop("PYTHONPATH", None)
+              env.pop("PYTHONHOME", None)
+              subprocess.run([str(python), "-m", "pip", "install", str(wheel)], check=True, cwd=root, env=env)
+              output = root / "results.json"
+              subprocess.run([str(python), "-m", "attestextract", "demo", "--output", str(output)], check=True, cwd=root, env=env)
+              examples = json.loads(output.read_text(encoding="utf-8"))["examples"]
+              assert set(examples) == {"ccus", "procurement"}
+              for name, count in (("ccus", 2), ("procurement", 3)):
+                  result = examples[name]
+                  assert result["package_version"] == "0.1.0.dev0"
+                  assert result["run"]["mode"] == "replay"
+                  assert len(result["candidates"]) == count
+                  assert result["review"] == []

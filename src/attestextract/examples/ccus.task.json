@@ -1,0 +1,18 @@
+{
+  "name": "synthetic-ccus-observations",
+  "description": "Extract each stated pressure observation separately. Keep different temperature conditions as separate observations. Do not infer missing values.",
+  "record_types": {
+    "observation": {
+      "description": "One pressure observation for a sample at a stated temperature.",
+      "fields": {
+        "subject": {"type": "string", "description": "Sample name as stated in the source.", "required": true},
+        "pressure": {"type": "number", "description": "Stated CO2 adsorption pressure.", "required": true},
+        "pressure_unit": {"type": "string", "description": "Pressure unit as stated.", "required": true},
+        "temperature": {"type": "number", "description": "Temperature for this observation.", "required": true},
+        "temperature_unit": {"type": "string", "description": "Temperature unit as stated.", "required": true}
+      },
+      "identity_fields": ["subject"],
+      "condition_fields": ["temperature", "temperature_unit"]
+    }
+  }
+}

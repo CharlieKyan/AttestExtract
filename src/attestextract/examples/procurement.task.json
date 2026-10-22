@@ -1,0 +1,18 @@
+{
+  "name": "synthetic-procurement-lines",
+  "description": "Extract purchase lines from prose and simple Markdown tables. Read table headers and preserve each line. Do not infer unstated values.",
+  "record_types": {
+    "purchase_line": {
+      "description": "One requested item and its stated commercial terms.",
+      "fields": {
+        "item": {"type": "string", "description": "Requested item name as stated.", "required": true},
+        "quantity": {"type": "integer", "description": "Number of items requested.", "required": true},
+        "unit_price": {"type": "number", "description": "Price per item, without currency conversion.", "required": true},
+        "currency": {"type": "string", "description": "Currency code as stated.", "required": true},
+        "delivery_days": {"type": "integer", "description": "Stated delivery time in days.", "required": true}
+      },
+      "identity_fields": ["item"],
+      "condition_fields": ["currency", "delivery_days"]
+    }
+  }
+}

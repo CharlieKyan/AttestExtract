@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "attestextract"
+version = "0.1.0.dev0"
+description = "Schema-driven extraction from text and tables, with source-linked evidence and pluggable decision backends."
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{name = "CharlieKyan"}]
+dependencies = ["pydantic>=2.8,<3", "httpx>=0.27,<1"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Text Processing",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<10", "build>=1,<2"]
+
+[project.scripts]
+attestextract = "attestextract.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/CharlieKyan/AttestExtract"
+Repository = "https://github.com/CharlieKyan/AttestExtract"
+Issues = "https://github.com/CharlieKyan/AttestExtract/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+attestextract = ["examples/*.json", "examples/*.txt", "examples/*.md"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

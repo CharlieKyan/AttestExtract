@@ -1,0 +1,24 @@
+{
+  "records": [
+    {
+      "record_type": "observation",
+      "fields": {
+        "subject": {"value": "样品A", "quote": "样品A在25 °C时的CO2吸附压力为12 bar。"},
+        "pressure": {"value": 12, "quote": "样品A在25 °C时的CO2吸附压力为12 bar。"},
+        "pressure_unit": {"value": "bar", "quote": "样品A在25 °C时的CO2吸附压力为12 bar。"},
+        "temperature": {"value": 25, "quote": "样品A在25 °C时的CO2吸附压力为12 bar。"},
+        "temperature_unit": {"value": "°C", "quote": "样品A在25 °C时的CO2吸附压力为12 bar。"}
+      }
+    },
+    {
+      "record_type": "observation",
+      "fields": {
+        "subject": {"value": "样品A", "quote": "样品A在50 °C时的CO2吸附压力为12 bar。"},
+        "pressure": {"value": 12, "quote": "样品A在50 °C时的CO2吸附压力为12 bar。"},
+        "pressure_unit": {"value": "bar", "quote": "样品A在50 °C时的CO2吸附压力为12 bar。"},
+        "temperature": {"value": 50, "quote": "样品A在50 °C时的CO2吸附压力为12 bar。"},
+        "temperature_unit": {"value": "°C", "quote": "样品A在50 °C时的CO2吸附压力为12 bar。"}
+      }
+    }
+  ]
+}
