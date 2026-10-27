@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal, Protocol
+from typing import Any, Literal, Protocol
 
 from pydantic import (
     BaseModel, ConfigDict, Field, StrictBool, StrictFloat, StrictInt, StrictStr,
@@ -75,6 +75,7 @@ class DocumentChunk(ContractModel):
 class ExtractionRequest(ContractModel):
     messages: list[dict[str, str]]
     chunk_id: str
+    output_schema: dict[str, Any] | None = None
 
 
 class BackendResponse(ContractModel):
@@ -147,7 +148,7 @@ class RunInfo(ContractModel):
 
 class ExtractionResult(ContractModel):
     schema_version: Literal["0.1"] = "0.1"
-    package_version: str = "0.1.0.dev2"
+    package_version: str = "0.1.0.dev3"
     task: TaskSpec
     source: SourceInfo
     candidates: list[Candidate]

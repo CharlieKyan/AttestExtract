@@ -52,6 +52,7 @@ def test_offline_trace_keeps_all_pipeline_artifacts_and_original_unicode_offsets
     assert result.source.sha256 == hashlib.sha256(TEXT.encode("utf-8")).hexdigest()
 
     manifest = read_json(directory / "manifest.json")
+    assert manifest["trace_schema_version"] == "0.2"
     assert manifest["status"] == "succeeded"
     assert read_json(directory / "result.json") == result.model_dump(mode="json")
     assert read_json(directory / "document.json")["text"] == TEXT
@@ -65,9 +66,16 @@ def test_offline_trace_keeps_all_pipeline_artifacts_and_original_unicode_offsets
     chunk = read_json(chunks[0])
     chunk_id = chunk["chunk_id"]
     assert chunk["text"] == TEXT
-    request = read_json(directory / "requests" / f"{chunk_id}.json")
+    request = read_json(directory / "requests" / f"{chunk_id}.request.json")
     assert json.loads(request["messages"][-1]["content"])["source"] == TEXT
+    assert set(request) == {"messages", "chunk_id", "output_schema"}
+    assert manifest["artifact_roles"][f"requests/{chunk_id}.request.json"] == "extraction_request"
+    assert any(item.get("kind") == "extraction_request" for item in events(directory))
+    assert read_json(directory / "responses" / f"{chunk_id}.meta.json")["attempts"] == 1
     assert (directory / "responses" / f"{chunk_id}.txt").read_bytes().decode("utf-8") == raw
+    assert (directory / "prompts" / f"{chunk_id}.system.txt").read_text(encoding="utf-8") == request["messages"][0]["content"]
+    assert read_json(directory / "prompts" / f"{chunk_id}.task.json") == result.task.model_dump(mode="json")
+    assert (directory / "prompts" / f"{chunk_id}.source.txt").read_bytes().decode("utf-8") == TEXT
     candidates = read_json(directory / "candidates" / f"{chunk_id}.json")
     assert candidates["candidates"] == [candidate.model_dump(mode="json") for candidate in result.candidates]
     assert candidates["review"] == [item.model_dump(mode="json") for item in result.review]
@@ -288,7 +296,7 @@ def test_http_trace_records_rate_limit_retry_without_recording_error_body(tmp_pa
     backend = OpenAICompatibleBackend(
         base_url="https://example.invalid/v1", model="synthetic-retry-model",
         api_key="synthetic-retry-token", transport=httpx.MockTransport(endpoint),
-        sleep_fn=lambda _: None, trace=trace,
+        sleep_fn=lambda _: None, trace=trace, structured_output="json_schema",
     )
     result = extract(TEXT, TASK, backend=backend, trace=trace)
     trace.finish(result.model_dump(mode="json"))
@@ -300,6 +308,14 @@ def test_http_trace_records_rate_limit_retry_without_recording_error_body(tmp_pa
     retries = [item for item in http_events if item["event"] == "retry"]
     assert len(retries) == 1 and retries[0]["status_code"] == 429
     assert read_json(directory / "manifest.json")["status"] == "succeeded"
+    request_files = list((directory / "requests").glob("*.request.json"))
+    assert len(request_files) == 1
+    payload = read_json(request_files[0])
+    assert payload == json.loads(received[0].content) == json.loads(received[1].content)
+    assert set(payload) == {"model", "messages", "response_format"}
+    assert payload["response_format"]["type"] == "json_schema"
+    manifest = read_json(directory / "manifest.json")
+    assert manifest["artifact_roles"][f"requests/{request_files[0].name}"] == "http_json_body"
     diagnostic_text = all_artifact_text(directory)
     assert private_body not in diagnostic_text
     assert "synthetic-retry-token" not in diagnostic_text

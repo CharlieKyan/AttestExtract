@@ -15,6 +15,16 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def redact_text(value: str, secrets: Iterable[str]) -> str:
+    """Mask raw and JSON-escaped secrets in diagnostic strings."""
+    for secret in sorted({item for item in secrets if isinstance(item, str) and item}, key=len, reverse=True):
+        value = value.replace(secret, "[REDACTED]")
+        escaped = json.dumps(secret, ensure_ascii=False)[1:-1]
+        if escaped != secret:
+            value = value.replace(escaped, "[REDACTED]")
+    return value
+
+
 class RunTrace:
     """Write one run to an empty directory, masking explicitly supplied secrets.
 
@@ -38,9 +48,9 @@ class RunTrace:
         self._progress = progress
         self.stage = "configuration"
         self._manifest: dict[str, Any] = {
-            "trace_schema_version": "0.1", "status": "running",
+            "trace_schema_version": "0.2", "status": "running",
             "package_version": __version__,
-            "started_at": _now(), "artifacts": [],
+            "started_at": _now(), "artifacts": [], "artifact_roles": {},
             "notice": "Contains source text and model output; not fact verification.",
         }
         self.directory.mkdir(parents=True, exist_ok=True)
@@ -57,14 +67,11 @@ class RunTrace:
     def add_secrets(self, *secrets: str) -> None:
         self._secrets.update(secret for secret in secrets if isinstance(secret, str) and secret)
 
+    def describe_artifact(self, relative: str, role: str) -> None:
+        self._manifest["artifact_roles"][relative] = role
+
     def _mask_text(self, value: str) -> str:
-        for secret in sorted(self._secrets, key=len, reverse=True):
-            value = value.replace(secret, "[REDACTED]")
-            # A secret echoed inside a JSON string may be escaped in raw text.
-            escaped = json.dumps(secret, ensure_ascii=False)[1:-1]
-            if escaped != secret:
-                value = value.replace(escaped, "[REDACTED]")
-        return value
+        return redact_text(value, self._secrets)
 
     def _mask(self, value: Any) -> Any:
         if isinstance(value, str):
@@ -101,9 +108,9 @@ class RunTrace:
         payload = self._mask({"timestamp": _now(), "stage": stage, "event": event, **details})
         with (self.directory / "events.jsonl").open("a", encoding="utf-8") as stream:
             stream.write(json.dumps(payload, ensure_ascii=False, allow_nan=False) + "\n")
-        if self._progress is not None and event in {"started", "completed", "failed", "retry", "succeeded"}:
+        if self._progress is not None and event in {"started", "completed", "failed", "retry", "succeeded", "rejected"}:
             suffix = " ".join(
-                f"{key}={payload[key]}" for key in ("chunk_id", "attempt", "status_code", "candidate_count", "review_count")
+                f"{key}={payload[key]}" for key in ("chunk_id", "attempt", "status_code", "candidate_count", "review_count", "error_count", "path")
                 if key in payload
             )
             self._progress(f"[{stage}] {event}" + (f" {suffix}" if suffix else ""))
@@ -130,6 +137,11 @@ class RunTrace:
             error["message"] = "Operation failed; inspect the error type and preceding diagnostic artifacts."
         if isinstance(exc, BackendError):
             error.update(status_code=exc.status_code, attempts=exc.attempts)
+        diagnostic = getattr(exc, "validation_details", None)
+        if diagnostic is not None:
+            error.update(validation_phase=diagnostic["phase"], error_count=diagnostic["error_count"],
+                         validation_details=getattr(exc, "validation_artifact", None),
+                         first_error=diagnostic["errors"][0] if diagnostic["errors"] else None)
         self.write_json("error.json", error)
         self._manifest.update(status="failed", finished_at=_now(), error=error)
         self.event(failure_stage, "failed", error_type=type(exc).__name__)

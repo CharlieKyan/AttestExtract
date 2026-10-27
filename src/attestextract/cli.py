@@ -12,7 +12,7 @@ from pathlib import Path
 from . import __version__, extract, load_task
 from .backends import OpenAICompatibleBackend, ReplayBackend
 from .d1_examples import d1_example_names, load_d1_example
-from .diagnostics import RunTrace
+from .diagnostics import RunTrace, redact_text
 from .envconfig import load_env_file
 from .errors import AttestExtractError, ConfigurationError
 from .models import TaskSpec
@@ -46,6 +46,10 @@ def _parser() -> argparse.ArgumentParser:
     live.add_argument("--timeout", type=float, default=60.0, help="HTTP timeout in seconds (default: 60)")
     live.add_argument("--env-file", type=Path, help="Explicit KEY=value configuration file; existing environment takes precedence")
     live.add_argument("--log-dir", type=Path, help="Empty directory for source, prompts, responses and diagnostic events")
+    live.add_argument(
+        "--structured-output", choices=("off", "json_schema"), default="off",
+        help="Opt in to a provider's strict JSON Schema response format (default: off)",
+    )
     return parser
 
 
@@ -130,12 +134,14 @@ def main(argv: list[str] | None = None) -> int:
             trace.event("configuration", "backend_validation_started")
         backend = OpenAICompatibleBackend(
             base_url=base_url, model=model, api_key=api_key, timeout=args.timeout, trace=trace,
+            structured_output=args.structured_output,
         )
         if trace is not None:
             trace.write_json("backend.json", {
                 "backend": backend.name, "model": model, "timeout": args.timeout,
                 "max_attempts": 3, "api_key_configured": bool(api_key),
                 "env_file_used": args.env_file is not None,
+                "structured_output": args.structured_output,
             })
             trace.event("configuration", "completed")
         result = extract(text, task, backend=backend, source_name=args.input.name, trace=trace)
@@ -150,8 +156,6 @@ def main(argv: list[str] | None = None) -> int:
     except (AttestExtractError, OSError, ValueError) as exc:
         if trace is not None:
             trace.fail(exc)
-        message = str(exc)
-        if api_key:
-            message = message.replace(api_key, "[REDACTED]")
+        message = redact_text(str(exc), [api_key] if api_key else [])
         print(f"attestextract: {message}", file=sys.stderr)
         return 1

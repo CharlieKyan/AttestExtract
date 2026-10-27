@@ -2,7 +2,7 @@
 
 Schema-driven extraction from text and tables, with source-linked evidence and pluggable decision backends.
 
-**Early prototype · `0.1.0.dev2` · Python 3.11+**
+**Early prototype · `0.1.0.dev3` · Python 3.11+**
 
 AttestExtract is an independent, domain-configurable extraction core. It grew out of work on a CCUS extraction workflow, but its task schema and runtime contain no CCUS-specific rules and do not depend on LangExtract. It produces typed candidates, exact source references, and a review queue. An optional archive preserves the exact document, explicit review decisions, and accepted records. **Jev integration is planned and is not implemented.**
 
@@ -71,6 +71,14 @@ On Bash, use `export ATTESTEXTRACT_BASE_URL=...`, `export ATTESTEXTRACT_MODEL=..
 
 Live extraction sends document chunks to your configured endpoint. There is no automatic fallback to demo responses. Authentication failures, invalid configuration, invalid responses, and exhausted retries fail with a nonzero exit status. Transport failures and transient HTTP statuses are retried at most three times by default; schema/response errors and authentication failures are not retried. A failed chunk fails the run rather than returning a successful partial result.
 
+### Optional structured output
+
+`extract --structured-output off|json_schema` defaults to `off`. With `json_schema`, AttestExtract generates the response schema from the task and sends `response_format` with `type: "json_schema"` and `strict: true`. The Python equivalent is `OpenAICompatibleBackend(..., structured_output="json_schema")`.
+
+In strict mode, every declared field has a required `{ "value": ..., "quote": ... }` wrapper. The task's scalar type constrains the **inner `value`**, and `quote` remains a string. For an unreported field, return `value: null` and `quote: ""`; the existing review rules apply, and this does not create an accepted record. With structured output off, optional unreported fields may still be omitted.
+
+The provider/model must support this schema format. HTTP 400/422 failures stop the run; AttestExtract does not silently fall back to unstructured output or issue a repair retry. Normal transient-network retry rules still apply. [Wenwen's structured-output documentation](https://wenwen-ai.apifox.cn/305807074e0) shows this request format; the actual Gemini route has not been tested, so provider documentation is not a compatibility guarantee.
+
 ### Explicit `.env` configuration and run logs
 
 Create a local `.env` from `.env.example`, or edit your existing file, with the provider values:
@@ -87,7 +95,7 @@ From the repository root, this PowerShell example writes research outputs and de
 
 ```powershell
 New-Item -ItemType Directory -Force ..\research\attestextract_runs | Out-Null
-attestextract extract --env-file .env --input src/attestextract/examples/procurement.md --task src/attestextract/examples/procurement.task.json --output ..\research\attestextract_runs\paper-001.json --log-dir ..\research\attestextract_runs\logs\paper-001
+attestextract extract --env-file .env --structured-output json_schema --input src/attestextract/examples/procurement.md --task src/attestextract/examples/procurement.task.json --output ..\research\attestextract_runs\paper-001-schema.json --log-dir ..\research\attestextract_runs\logs\paper-001-schema
 ```
 
 `--log-dir` enables file-based tracing and key stage progress on stderr. Its directory must be empty or not yet exist; an existing run is never overwritten. Choose a new directory for each run. Omit it for ordinary extraction without these trace files.
@@ -95,18 +103,24 @@ attestextract extract --env-file .env --input src/attestextract/examples/procure
 | Trace file | What it records |
 | --- | --- |
 | `events.jsonl` | Structured processing events for following progress by module/chunk. |
-| `manifest.json` | Run status, versions, run summary, and an artifact list. |
+| `manifest.json` | Run status, versions, run summary, artifact list, and `artifact_roles` describing each artifact's purpose. |
 | `document.json` | Input document text, identity, hash, and source metadata. |
 | `task.json` | The effective, validated extraction task. |
 | `backend.json` | Sanitized backend configuration, excluding endpoint and key values. |
 | `chunk_plan.json` | Planned chunk IDs, sizes, and original source segments. |
 | `chunks/{chunk_id}.json` | Chunk text and its mapping to the original source. |
-| `requests/{chunk_id}.json` | Sanitized extraction prompt/messages, excluding HTTP headers, API keys, and the endpoint. |
+| `requests/{chunk_id}.request.json` | Sanitized actual HTTP request body: `model`, `messages`, and `response_format` when enabled. Replay/custom backends without HTTP instead store their `ExtractionRequest`; request kind is identified in the manifest/events. No HTTP headers or endpoint are included. |
+| `prompts/{chunk_id}.system.txt` | Directly readable system instructions. |
+| `prompts/{chunk_id}.task.json` | The task supplied in this chunk's prompt. |
+| `prompts/{chunk_id}.source.txt` | The source text supplied in this chunk's prompt. |
 | `responses/{chunk_id}.txt` | Raw model response text for diagnosing parsing and extraction. |
-| `responses/{chunk_id}.json` | Response metadata, including model, usage, attempts, and elapsed time. |
+| `responses/{chunk_id}.meta.json` | Response metadata only: model, usage, attempts, and elapsed time. |
+| `validation/{chunk_id}.errors.json` | Validation phase, total error count, and up to 50 safe details with field paths, codes, expected types, actual types, and messages; no rejected input values. |
 | `candidates/{chunk_id}.json` | Candidates and structural/evidence checks for the chunk. |
 | `result.json` | Final extraction result after a successful run. |
-| `error.json` | Safe failure summary when the run fails. |
+| `error.json` | Safe failure summary, linking validation detail paths and total counts when applicable. |
+
+New traces use `trace_schema_version: "0.2"`. Existing `0.1` log directories are not rewritten; new runs use the explicit `.request.json` and `.meta.json` names rather than the earlier ambiguous JSON names. The `.txt` response contains model text, while `.meta.json` contains its metadata.
 
 A failed run can leave earlier chunk files for diagnosis; they are not a successful partial result. Trace files can contain **the full paper text, task instructions, and model output**, even when credentials and backend details are sanitized. Store them outside this repository, as above, and do not commit or publicly share them without reviewing their contents. These are logs of the implemented extraction pipeline; Jev and Stage2.5/Stage3 decision modules are not implemented or simulated by tracing.
 
@@ -129,7 +143,7 @@ result = extract("Purchase request: 5 desk lamps at USD 24.50 each, delivery wit
 print(result.model_dump_json(indent=2))
 ```
 
-A task declares record types, scalar fields, and optional identity/condition field lists. Names in these lists must refer to declared fields. Change the task and descriptions to change domains; no domain adapter is required.
+A task declares record types, scalar fields, and optional identity/condition field lists. Names in these lists must refer to declared fields. Change the task and descriptions to change domains; no domain adapter is required. Prompts include a complete synthetic example tailored to the task's record types, fields, and scalar types. These generated examples explain the output contract; they are not evidence or records to copy from the input.
 
 ```json
 {
@@ -149,13 +163,15 @@ A task declares record types, scalar fields, and optional identity/condition fie
 }
 ```
 
-Types are `string`, `integer`, `number`, and `boolean`; booleans do not count as integers. The generated completion must follow this shape:
+Types are `string`, `integer`, `number`, and `boolean`; booleans do not count as integers. These types apply to the inner `value`, not to its field wrapper; `quote` must always be a string. For the synthetic source `Sample A measured 12 bar at 20 °C.`, a complete completion for the task above is:
 
 ```json
-{"records": [{"record_type": "measurement", "fields": {"subject": {"value": "Sample A", "quote": "Sample A measured 12 bar."}, "value": {"value": 12, "quote": "Sample A measured 12 bar."}}}]}
+{"records": [{"record_type": "measurement", "fields": {"subject": {"value": "Sample A", "quote": "Sample A measured 12 bar at 20 °C."}, "value": {"value": 12, "quote": "Sample A measured 12 bar at 20 °C."}, "condition": {"value": "20 °C", "quote": "Sample A measured 12 bar at 20 °C."}}}]}
 ```
 
-Only declared record types and fields are accepted. Invalid JSON, unknown fields, and wrong scalar types fail explicitly. Missing/null required, identity, or condition fields enter the review queue. Optional null values and empty records also require review. Omitting an optional field is allowed.
+Only declared record types and fields are accepted. Invalid JSON, unknown fields, and wrong scalar types fail explicitly. Missing/null required, identity, or condition fields enter the review queue. Optional null values and empty records also require review. Outside strict structured mode, omitting an optional field is allowed.
+
+Evidence quotes must preserve the input **verbatim**, including OCR errors, spaces, Unicode symbols, and LaTeX notation. Do not replace a source expression such as `$10^{-3}$` with `0.001` inside `quote`, or silently fix OCR text. A typed field value can represent the reported scalar, but its quotation must remain the exact source substring. JSON string escaping is still required, for example `\\` for a literal LaTeX backslash.
 
 ## Document, review, and archive contracts
 
@@ -223,7 +239,7 @@ python -m pytest
 python -m build
 ```
 
-CI runs on Windows and Ubuntu with Python 3.11 and 3.13. Tests use fixed responses and mocked HTTP, never paid model requests. They compare all three D1 cases to hand-written expected semantic output and check archive persistence and invalid references. CI also installs the wheel in a clean environment outside the checkout and runs both original demos and all three D1 archives. End-to-end model quality and provider compatibility require separate evaluation against your chosen endpoint and corpus.
+CI runs on Windows and Ubuntu with Python 3.11 and 3.13. Public tests use synthetic fixed responses and mocked HTTP, never paid model requests. They compare all three D1 cases to hand-written expected semantic output and check archive persistence and invalid references. CI also installs the wheel in a clean environment outside the checkout and runs both original demos and all three D1 archives. The dev3 changes were evaluated offline; any existing real run logs were replayed locally without automatically calling the model again. End-to-end model quality and provider compatibility require separate evaluation against your chosen endpoint and corpus.
 
 Next steps are a Jev-style bounded decision adapter, conflict handling and support verification, and compatibility outputs for the earlier CCUS workflow. These are plans, not implemented features or performance claims. The public prototype contains only new framework code and synthetic examples; it does not include research documents, annotations, patents, original workflow outputs, or credentials.
 

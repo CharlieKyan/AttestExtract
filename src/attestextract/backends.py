@@ -6,7 +6,8 @@ import json
 import math
 import time
 from collections.abc import Callable, Sequence
-from typing import Any
+from copy import deepcopy
+from typing import Any, Literal
 
 import httpx
 
@@ -40,6 +41,7 @@ class OpenAICompatibleBackend:
         *,
         sleep_fn: Callable[[float], None] = time.sleep,
         trace: RunTrace | None = None,
+        structured_output: Literal["off", "json_schema"] = "off",
     ) -> None:
         if not isinstance(base_url, str) or not base_url.strip():
             raise ConfigurationError("A nonempty HTTP(S) API base URL is required.")
@@ -83,11 +85,14 @@ class OpenAICompatibleBackend:
             raise ConfigurationError("max_attempts must be a positive integer.")
         if not callable(sleep_fn):
             raise ConfigurationError("sleep_fn must be callable.")
+        if structured_output not in ("off", "json_schema"):
+            raise ConfigurationError("structured_output must be 'off' or 'json_schema'.")
 
         self.base_url = str(url).rstrip("/")
         self.model = model
         self.timeout = float(timeout)
         self.max_attempts = max_attempts
+        self.structured_output = structured_output
         self._api_key = api_key
         self._transport = transport
         self._sleep = sleep_fn
@@ -99,10 +104,38 @@ class OpenAICompatibleBackend:
         return (
             f"OpenAICompatibleBackend(model={self.model!r}, "
             f"timeout={self.timeout!r}, max_attempts={self.max_attempts!r}, "
+            f"structured_output={self.structured_output!r}, "
             "api_key=<redacted>)"
         )
 
+    def prepare_payload(self, request: ExtractionRequest) -> dict[str, Any]:
+        """Build the HTTP JSON body without I/O or mutating the request.
+
+        Structured output is opt-in because compatibility layers may accept
+        chat completions without implementing strict JSON Schema enforcement.
+        Local response and evidence validation remains mandatory in either mode.
+        """
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "messages": [dict(message) for message in request.messages],
+        }
+        if self.structured_output == "json_schema":
+            if request.output_schema is None:
+                raise ConfigurationError("json_schema structured output requires a request output_schema.")
+            payload["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "attestextract_records",
+                    "strict": True,
+                    "schema": deepcopy(request.output_schema),
+                },
+            }
+        return payload
+
     def generate(self, request: ExtractionRequest) -> BackendResponse:
+        payload = self.prepare_payload(request)
+        if self._trace is not None:
+            self._trace.write_json(f"requests/{request.chunk_id}.request.json", payload)
         headers = {"Accept": "application/json"}
         if self._api_key is not None:
             headers["Authorization"] = f"Bearer {self._api_key}"
@@ -119,7 +152,7 @@ class OpenAICompatibleBackend:
                     response = client.post(
                         self.base_url + "/chat/completions",
                         headers=headers,
-                        json={"model": self.model, "messages": request.messages},
+                        json=payload,
                     )
                 except httpx.TimeoutException:
                     if attempt == self.max_attempts:
@@ -160,9 +193,15 @@ class OpenAICompatibleBackend:
                                               attempt=attempt, status_code=response.status_code)
                         self._pause(attempt)
                         continue
+                    compatibility_hint = ""
+                    if self.structured_output == "json_schema" and response.status_code in {400, 422}:
+                        compatibility_hint = (
+                            " The endpoint may not support response_format/json_schema or the supplied schema;"
+                            " no fallback was attempted."
+                        )
                     raise BackendError(
                         f"The model endpoint returned HTTP {response.status_code} "
-                        f"after {attempt} attempt(s).",
+                        f"after {attempt} attempt(s).{compatibility_hint}",
                         status_code=response.status_code,
                         attempts=attempt,
                     )
@@ -208,6 +247,11 @@ class OpenAICompatibleBackend:
             if isinstance(diagnostic_content, str):
                 self._trace.write_text(f"responses/{chunk_id}.txt", diagnostic_content)
         finish_reason = choice.get("finish_reason")
+        if self._trace is not None:
+            self._trace.event(
+                "model_response", "completion_status", chunk_id=chunk_id,
+                finish_reason=finish_reason if isinstance(finish_reason, str) else None,
+            )
         if finish_reason is not None and finish_reason != "stop":
             raise InvalidResponseError(
                 "The model completion was truncated, refused, or did not finish normally.",

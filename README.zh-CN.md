@@ -2,7 +2,7 @@
 
 按任务模式从正文和表格抽取候选数据，保留原文证据，并预留可替换的决策后端。
 
-**早期原型 · `0.1.0.dev2` · Python 3.11+**
+**早期原型 · `0.1.0.dev3` · Python 3.11+**
 
 本项目从 CCUS 抽取工作流的经验出发，独立实现通用小内核，不依赖 LangExtract，也不导入原有 CCUS 工程。当前实现字段验证、候选保留、原文位置回溯和复核清单；可另行保存包含精确原文、显式审阅决定和接受记录的档案。**Jev 尚未接入**；当前检查不能证明抽取结果在语义上得到原文支持或事实正确。
 
@@ -67,6 +67,14 @@ attestextract extract --input src/attestextract/examples/procurement.md --task s
 
 网络传输失败和暂时性 HTTP 错误默认最多尝试三次；鉴权、配置及格式错误明确失败，不伪装成“未抽到数据”，也不自动退回演示。任一分块失败会使整个运行失败，避免把部分输出当作完整成功结果。
 
+### 可选的结构化输出
+
+`extract --structured-output off|json_schema` 默认值为 `off`。选择 `json_schema` 时，框架根据任务自动生成 JSON Schema，发送 `response_format.type: "json_schema"` 和 `strict: true`。Python 对应参数为 `OpenAICompatibleBackend(..., structured_output="json_schema")`。
+
+严格模式要求每个已声明字段都带 `{ "value": ..., "quote": ... }` 包装；任务中的标量类型限制的是内部 **`value`**，`quote` 始终是字符串。未报告的字段返回 `value: null`、`quote: ""`，按既有规则进入复核，不会自动接受。关闭结构化输出时，可继续省略未报告的可选字段。
+
+模型服务需支持相应格式。HTTP 400／422 会明确失败，不自动降级为非结构化请求，也不发起修复重试；网络及暂时性 HTTP 错误仍使用原有有限重试。[Wenwen 官方结构化说明](https://wenwen-ai.apifox.cn/305807074e0) 给出了这类请求格式，但实际 Gemini 渠道尚未实测，不能据此保证兼容。
+
 ### 显式加载 `.env` 并保存运行日志
 
 参照 `.env.example` 创建本地 `.env`；已有文件时直接编辑，填入实际端点、模型和密钥：
@@ -83,7 +91,7 @@ ATTESTEXTRACT_API_KEY=replace-with-your-key
 
 ```powershell
 New-Item -ItemType Directory -Force ..\research\attestextract_runs | Out-Null
-attestextract extract --env-file .env --input src/attestextract/examples/procurement.md --task src/attestextract/examples/procurement.task.json --output ..\research\attestextract_runs\paper-001.json --log-dir ..\research\attestextract_runs\logs\paper-001
+attestextract extract --env-file .env --structured-output json_schema --input src/attestextract/examples/procurement.md --task src/attestextract/examples/procurement.task.json --output ..\research\attestextract_runs\paper-001-schema.json --log-dir ..\research\attestextract_runs\logs\paper-001-schema
 ```
 
 `--log-dir` 开启文件日志，并在标准错误实时显示关键阶段进度。指定目录必须为空或尚不存在，不会覆盖已有运行；每次运行请使用新目录。不传该参数时，照常抽取且不生成这些跟踪文件。
@@ -91,18 +99,24 @@ attestextract extract --env-file .env --input src/attestextract/examples/procure
 | 日志文件 | 用途 |
 | --- | --- |
 | `events.jsonl` | 结构化流程事件，按模块、分块查看进度。 |
-| `manifest.json` | 运行状态、版本、运行摘要和产物清单。 |
+| `manifest.json` | 运行状态、版本、运行摘要、产物清单及说明用途的 `artifact_roles`。 |
 | `document.json` | 输入原文、文档标识、哈希和来源元数据。 |
 | `task.json` | 实际使用且已通过验证的抽取任务。 |
 | `backend.json` | 去敏后的后端配置，不含端点或密钥值。 |
 | `chunk_plan.json` | 分块计划，包括分块 ID、大小和原文区间。 |
 | `chunks/{chunk_id}.json` | 分块文本及对应的原文位置映射。 |
-| `requests/{chunk_id}.json` | 去敏后的抽取提示与消息，不含 HTTP 头、API 密钥或端点。 |
+| `requests/{chunk_id}.request.json` | 去敏后的实际 HTTP 请求体，含 `model`、`messages` 和启用时的 `response_format`；无 HTTP 的 Replay／自定义后端保存 `ExtractionRequest`，并在清单／事件中标明请求种类。不含 HTTP 头或端点。 |
+| `prompts/{chunk_id}.system.txt` | 可直接阅读的系统提示。 |
+| `prompts/{chunk_id}.task.json` | 该分块提示中的任务配置。 |
+| `prompts/{chunk_id}.source.txt` | 该分块提示中的原文。 |
 | `responses/{chunk_id}.txt` | 模型原始响应文本，便于定位格式或抽取问题。 |
-| `responses/{chunk_id}.json` | 模型、用量、请求尝试次数和耗时等响应元数据。 |
+| `responses/{chunk_id}.meta.json` | 仅保存模型、用量、请求尝试次数和耗时等响应元数据。 |
+| `validation/{chunk_id}.errors.json` | 验证阶段、错误总数及最多 50 条安全详情：字段路径、错误代码、预期类型、实际类型和说明，不含被拒绝的输入值。 |
 | `candidates/{chunk_id}.json` | 该分块的候选及结构／证据检查。 |
 | `result.json` | 运行成功后的完整抽取结果。 |
-| `error.json` | 运行失败后的安全错误摘要。 |
+| `error.json` | 运行失败后的安全错误摘要；适用时关联验证详情路径及错误总数。 |
+
+新版日志使用 `trace_schema_version: "0.2"`，不修改已有 `0.1` 日志。新运行改用明确的 `.request.json`、`.meta.json` 文件名，不再生成旧版含义模糊的同名 JSON；模型原文在 `.txt`，元信息在 `.meta.json`。
 
 失败运行可能留下此前已处理分块的文件，供排查使用，不代表部分结果已成功。即使已去除凭据和后端敏感信息，日志仍可能包含**整篇论文、任务说明和模型输出**。请像上述示例一样放在仓库之外，不提交到 GitHub；对外分享前先检查内容。日志只对应当前已实现的抽取流程，尚未实现或模拟 Jev、Stage2.5／Stage3 决策模块。
 
@@ -110,7 +124,9 @@ attestextract extract --env-file .env --input src/attestextract/examples/procure
 
 ## 任务、证据和扩展接口
 
-JSON 任务包含 `name`、可选 `description` 和 `record_types`。每种记录声明 `fields`，字段类型为 `string`、`integer`、`number` 或 `boolean`，并可声明说明和 `required`。`identity_fields`、`condition_fields` 引用已声明的字段；缺少这些字段会进入复核。完整配置见两个打包示例。
+JSON 任务包含 `name`、可选 `description` 和 `record_types`。每种记录声明 `fields`，字段类型为 `string`、`integer`、`number` 或 `boolean`，并可声明说明和 `required`。类型约束作用于字段内部的 `value`，不是 `{value, quote}` 包装对象；`quote` 必须是字符串，布尔值不能当作整数。`identity_fields`、`condition_fields` 引用已声明的字段；缺少这些字段会进入复核。完整配置见打包示例。
+
+提示会根据当前任务的记录类型、全部字段和标量类型构造完整合成示例，用于展示输出约定，不是论文证据，也不能把示例直接复制为抽取结果。每个输出字段都保留 `value` 与逐字 `quote`；引文必须保留 OCR 错误、空格、Unicode 符号和 LaTeX 写法。例如原文为 `$10^{-3}$`，不能把引文改写成 `0.001`，也不能默默纠正 OCR。标量值可表达原文报告的数值，但引文仍须是原文子串；在 JSON 字符串中，LaTeX 的字面反斜杠应按 JSON 规则写成 `\\`。
 
 Python API：
 
@@ -168,7 +184,7 @@ python -m pytest
 python -m build
 ```
 
-CI 在 Windows／Ubuntu、Python 3.11／3.13 下运行，使用固定响应和模拟 HTTP，不调用付费模型；测试逐字段对比三类手工预期答案，并验证档案保存、重读和错误引用。另外在源码目录外的新环境安装 wheel，运行两个原有示例和三类 D1 档案。真实端点兼容性与抽取效果需针对所用模型和数据单独评估。
+CI 在 Windows／Ubuntu、Python 3.11／3.13 下运行，公共测试仅使用合成固定响应和模拟 HTTP，不调用付费模型；测试逐字段对比三类手工预期答案，并验证档案保存、重读和错误引用。另外在源码目录外的新环境安装 wheel，运行两个原有示例和三类 D1 档案。本次 dev3 先进行离线验收，已有真实日志只在本地回放，不自动再次调用真实模型。真实端点兼容性与抽取效果需针对所用模型和数据单独评估。
 
 后续优先接入 Jev 类决策模型，再增加冲突判别、支持性核验和旧 CCUS 格式兼容。首版尚不替代旧工作流完整的 Stage2.5／Stage3，也不承诺零幻觉或模型效果。
 
