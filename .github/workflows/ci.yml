@@ -26,7 +26,7 @@ jobs:
         run: python -m pytest
       - name: Build distribution
         run: python -m build
-      - name: Install wheel and run both demos outside the checkout
+      - name: Install wheel and run demos and D1 archives outside the checkout
         shell: python
         run: |
           import json
@@ -52,7 +52,18 @@ jobs:
               assert set(examples) == {"ccus", "procurement"}
               for name, count in (("ccus", 2), ("procurement", 3)):
                   result = examples[name]
-                  assert result["package_version"] == "0.1.0.dev0"
+                  assert result["package_version"] == "0.1.0.dev2"
                   assert result["run"]["mode"] == "replay"
                   assert len(result["candidates"]) == count
                   assert result["review"] == []
+              d1_output = root / "d1-results.json"
+              subprocess.run([str(python), "-m", "attestextract", "d1", "--output", str(d1_output)], check=True, cwd=root, env=env)
+              archives = json.loads(d1_output.read_text(encoding="utf-8"))["examples"]
+              assert set(archives) == {"attribute", "observation", "relation"}
+              for name, candidate_count, record_count in (("attribute", 2, 1), ("observation", 2, 2), ("relation", 1, 1)):
+                  archive = archives[name]
+                  assert archive["extraction"]["package_version"] == "0.1.0.dev2"
+                  assert archive["extraction"]["run"]["mode"] == "replay"
+                  assert len(archive["extraction"]["candidates"]) == candidate_count
+                  assert len(archive["records"]) == record_count
+                  assert all(review["origin"] == "synthetic_fixture" for review in archive["reviews"])

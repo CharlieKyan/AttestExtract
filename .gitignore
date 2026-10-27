@@ -5,6 +5,7 @@ __pycache__/
 htmlcov/
 .venv/
 .local-temp/
+.build/
 venv/
 build/
 dist/
@@ -14,3 +15,10 @@ dist/
 !.env.example
 demo-results.json
 extraction-results.json
+d1-results.json
+d1-archives.json
+pending-archive.json
+.attestextract-*.tmp
+logs/
+run-logs/
+*.log

@@ -2,9 +2,9 @@
 
 按任务模式从正文和表格抽取候选数据，保留原文证据，并预留可替换的决策后端。
 
-**早期原型 · `0.1.0.dev0` · Python 3.11+**
+**早期原型 · `0.1.0.dev2` · Python 3.11+**
 
-本项目从 CCUS 抽取工作流的经验出发，独立实现通用小内核，不依赖 LangExtract，也不导入原有 CCUS 工程。当前实现字段验证、候选保留、原文位置回溯和复核清单。**Jev 尚未接入**；当前检查不能证明抽取结果在语义上得到原文支持或事实正确。
+本项目从 CCUS 抽取工作流的经验出发，独立实现通用小内核，不依赖 LangExtract，也不导入原有 CCUS 工程。当前实现字段验证、候选保留、原文位置回溯和复核清单；可另行保存包含精确原文、显式审阅决定和接受记录的档案。**Jev 尚未接入**；当前检查不能证明抽取结果在语义上得到原文支持或事实正确。
 
 [English README and API details](README.md)
 
@@ -20,6 +20,29 @@ attestextract demo --example procurement
 演示使用**预先编写的合成模型响应回放**，不调用模型、不进行自动抽取，也不代表模型效果。它运行与真实抽取相同的字段验证和证据定位流程。两组示例分别包含中文 CCUS 条件观测和英文采购正文／Markdown 表格；后者使用不同任务配置运行同一内核。
 
 默认 `--example all` 输出单个 JSON 文件，结构为 `{"examples": {"ccus": ..., "procurement": ...}}`；单例输出一个抽取结果。不指定 `--output` 时 JSON 写入标准输出，回放说明写入标准错误。
+
+## D1 三类手工样例
+
+```bash
+attestextract d1 --output d1-archives.json
+attestextract d1 --example attribute
+attestextract d1 --example observation
+attestextract d1 --example relation
+```
+
+这些是**人工编写预期答案的合成样例**：回放固定响应，再应用样例作者明确给出的审阅标签。不调用模型，不是实际专家验证，也不用于证明模型准确率。每个目录包含 `source.txt`（原文）、`task.json`（任务）、`response.json`（固定候选响应）、`reviews.json`（显式标签）和 `expected.json`（手工预期正式结果）。数据打包在 `src/attestextract/examples/d1/` 中，安装 wheel 后也可运行。
+
+| 类别 | 验收重点 | 候选数 / 接受记录数 |
+| --- | --- | --- |
+| 属性 `attribute` | 保存产品额定功率；拒绝故意写错数值且引文不存在的候选 | 2 / 1 |
+| 条件观测 `observation` | 同一试样、同一通量在两个温度下保留为两条观测 | 2 / 2 |
+| 关系 `relation` | 保存原文明示的主体、关系、客体 | 1 / 1 |
+
+关系样例使用任务声明的三个字符串字段，是 D1 的最小关系表示，尚不包含图谱推理、实体消歧或通用事件本体。`reviews.json` 的 `candidate_index` 是候选回放顺序的零基索引，必须唯一且不能越界；加载时才转换为实际候选 ID。标签带有 `origin: "synthetic_fixture"`、作者和理由。`expected.json` 独立写明候选数、正式记录数、状态和每个字段的值、引文及字符位置，排除运行时间和自动生成的 ID。
+
+当前 D1 已实现独立安装工程，文档／任务／候选／证据／正式记录的代码格式，三类合成手工样例，以及带校验的 JSON 保存与重读。默认 `--example all` 输出 `{"examples": {"attribute": ..., "observation": ..., "relation": ...}}`，其中每项是完整档案；单例返回一份档案。原有 `demo` 继续输出抽取候选结果。
+
+本地专家意见用于识别需要覆盖的失败模式。论文、真实批注和原始机器输出留在公共工程之外；公开样例重新编写，不复制这些材料，也不把模拟标签标为专家标准答案。
 
 ## 连接真实模型
 
@@ -40,9 +63,50 @@ attestextract extract --input src/attestextract/examples/procurement.md --task s
 
 模型端点需兼容 OpenAI Chat Completions 的非流式文本协议。`base_url` 包含 `/v1` 等 API 前缀，后端追加 `/chat/completions`，发送 `model` 与 `messages`，读取 `choices[0].message.content`。运行时将把文档分块发送给配置的端点。
 
-`--base-url`、`--model` 优先于对应环境变量；`--api-key-env` 可指定保存密钥的环境变量名，不接受命令行密钥值。无需认证的本地端点可以不设置密钥。`.env.example` 仅作变量模板，程序不会自动加载 `.env`。`--timeout` 为每次请求超时，默认 60 秒，范围为大于 0 且不超过 60 秒。
+也可以使用下面的 `--env-file` 显式加载配置文件。配置优先级为 **命令行参数 → 当前进程已有环境变量 → 显式指定的 `.env` 文件**，程序不会自动搜索或加载 `.env`。`--api-key-env` 可指定保存密钥的变量名，不接受命令行密钥值。无需认证的本地端点可以不设置密钥。`--timeout` 为每次请求超时，默认 60 秒，范围为大于 0 且不超过 60 秒。
 
 网络传输失败和暂时性 HTTP 错误默认最多尝试三次；鉴权、配置及格式错误明确失败，不伪装成“未抽到数据”，也不自动退回演示。任一分块失败会使整个运行失败，避免把部分输出当作完整成功结果。
+
+### 显式加载 `.env` 并保存运行日志
+
+参照 `.env.example` 创建本地 `.env`；已有文件时直接编辑，填入实际端点、模型和密钥：
+
+```dotenv
+ATTESTEXTRACT_BASE_URL=https://your-provider.example/v1
+ATTESTEXTRACT_MODEL=your-model-name
+ATTESTEXTRACT_API_KEY=replace-with-your-key
+```
+
+文件支持 `KEY=value`、可选的 `export` 前缀和带引号的值，只作为数据解析，不执行 shell 命令。密钥保存在本地，不加入提交。已有环境变量优先于文件；切换模型服务时，需清除或更新终端中残留的旧变量。
+
+从工程根目录运行下面的 PowerShell 命令，可将研究结果和日志保存在 Git 工程之外：
+
+```powershell
+New-Item -ItemType Directory -Force ..\research\attestextract_runs | Out-Null
+attestextract extract --env-file .env --input src/attestextract/examples/procurement.md --task src/attestextract/examples/procurement.task.json --output ..\research\attestextract_runs\paper-001.json --log-dir ..\research\attestextract_runs\logs\paper-001
+```
+
+`--log-dir` 开启文件日志，并在标准错误实时显示关键阶段进度。指定目录必须为空或尚不存在，不会覆盖已有运行；每次运行请使用新目录。不传该参数时，照常抽取且不生成这些跟踪文件。
+
+| 日志文件 | 用途 |
+| --- | --- |
+| `events.jsonl` | 结构化流程事件，按模块、分块查看进度。 |
+| `manifest.json` | 运行状态、版本、运行摘要和产物清单。 |
+| `document.json` | 输入原文、文档标识、哈希和来源元数据。 |
+| `task.json` | 实际使用且已通过验证的抽取任务。 |
+| `backend.json` | 去敏后的后端配置，不含端点或密钥值。 |
+| `chunk_plan.json` | 分块计划，包括分块 ID、大小和原文区间。 |
+| `chunks/{chunk_id}.json` | 分块文本及对应的原文位置映射。 |
+| `requests/{chunk_id}.json` | 去敏后的抽取提示与消息，不含 HTTP 头、API 密钥或端点。 |
+| `responses/{chunk_id}.txt` | 模型原始响应文本，便于定位格式或抽取问题。 |
+| `responses/{chunk_id}.json` | 模型、用量、请求尝试次数和耗时等响应元数据。 |
+| `candidates/{chunk_id}.json` | 该分块的候选及结构／证据检查。 |
+| `result.json` | 运行成功后的完整抽取结果。 |
+| `error.json` | 运行失败后的安全错误摘要。 |
+
+失败运行可能留下此前已处理分块的文件，供排查使用，不代表部分结果已成功。即使已去除凭据和后端敏感信息，日志仍可能包含**整篇论文、任务说明和模型输出**。请像上述示例一样放在仓库之外，不提交到 GitHub；对外分享前先检查内容。日志只对应当前已实现的抽取流程，尚未实现或模拟 Jev、Stage2.5／Stage3 决策模块。
+
+`extract` 将 JSON 写入必填的 `--output` 文件。开启日志后，关键阶段开始、完成和重试会实时显示在标准错误，写入提示和错误摘要也发往标准错误；字段级细节保存在 `events.jsonl`，模型响应和跟踪内容不逐条打印到标准输出。原有 `demo`、`d1` 在不传 `--output` 时仍将 JSON 写入标准输出；中间结果可查看各分块文件。
 
 ## 任务、证据和扩展接口
 
@@ -66,6 +130,37 @@ print(result.model_dump_json(indent=2))
 - 输出为版本化 JSON，包含任务、源文档摘要、候选、复核项及运行信息。当前 `schema_version` 为 `0.1`。原文定位通过只说明引文存在，**不等于语义支持性核验或事实验证**。
 - `ExtractionBackend` 负责生成；`ReplayBackend` 仅显式回放。`DecisionBackend`、`DecisionTask`、`DecisionResult` 和 `validate_decision` 为后续决策预留边界，只允许选择已有候选、拒绝或转复核。当前抽取流程尚未调用决策后端。
 
+## 文档、审阅与正式结果的保存约定
+
+`extract(text, task, backend=...)` 保留原接口，也接受 `Document`；其输出仍然是候选结果。正式档案通过单独的 `create_archive` 建立：
+
+```python
+from attestextract import Document, create_archive, extract, load_archive, save_archive
+
+document = Document.from_text("合成原文。", source_name="source.txt")
+# task、backend 按上面的真实抽取示例配置。
+result = extract(document, task, backend=backend)
+archive = create_archive(document, result)
+assert archive.records == []  # 引文定位通过不能自动接受候选。
+save_archive(archive, "pending-archive.json")
+restored = load_archive("pending-archive.json")
+```
+
+实际审阅后，使用 `CandidateReview(candidate_id=..., status="accepted", reviewer=..., rationale=...)` 记录决定，再调用 `create_archive(document, result, reviews=[...])`。只有明确接受且必填字段、证据检查均通过的候选才生成正式记录。也可以直接用 `from attestextract.d1_examples import load_d1_example` 和 `load_d1_example("attribute")` 查看带合成标签的完整例子。
+
+| 代码对象 | 保存内容与规则 |
+| --- | --- |
+| `Document` | 精确解码原文、文档 ID、SHA-256、字符数、来源名、正文／Markdown 表示及表示版本；`DocumentMetadata` 可选保存题名、作者、年份、DOI、来源 URI。 |
+| `TaskSpec` | 任务名、记录类型、标量字段、字段说明和身份／条件字段引用。 |
+| `Candidate` / `EvidenceRef` | 候选 ID、字段值、逐字引文、字符位置或未定位状态、分块引用和结构检查。 |
+| `CandidateReview` | 候选 ID、接受／拒绝／待复核／未审定状态、审阅者、理由、可选标注引用及来源类别。人工或样例的非“未审定”决定必须填写审阅者和理由。 |
+| `FinalRecord` | 接受候选的原字段和证据，以及文档、来源候选和记录 ID；不覆盖候选值。 |
+| `ExtractionArchive` | `archive_schema_version: "0.1"`，包含 `document`、`extraction`、`reviews`、`records`；候选结果保留自身格式版本与运行信息。 |
+
+未显式提供审阅时，结构正常的候选标为 `unreviewed`，存在未解决检查的候选标为 `needs_review`；系统检查不会设为 `accepted`。`origin: "human"` 表示调用者记录的人工归因，不提供身份认证；`synthetic_fixture` 表示合成标签，`system` 表示系统补齐的待审状态。“正式／接受记录”指有明确审阅决定的记录，不表示事实已获独立证明。改值必须形成新候选并重新审阅，不能直接改正式记录而保留旧候选引用。
+
+`save_document`／`load_document` 和 `save_archive`／`load_archive` 读写 UTF-8 JSON，并在重读时验证原文哈希、字符数、ID、引用及证据。文档 ID 对应精确文本表示；元数据不构成来源真实性认证。读取文件可用 `Path(path).read_bytes().decode("utf-8")` 保留原有换行；证据偏移始终指向这份精确字符串。PDF 转换后的 Markdown 是独立文本表示，位置不代表 PDF 页码或坐标框。
+
 ## 开发和后续方向
 
 ```bash
@@ -73,7 +168,7 @@ python -m pytest
 python -m build
 ```
 
-CI 在 Windows／Ubuntu、Python 3.11／3.13 下运行，使用固定响应和模拟 HTTP，不调用付费模型；另外在源码目录外的新环境安装 wheel，运行两个打包示例。真实端点兼容性与抽取效果需针对所用模型和数据单独评估。
+CI 在 Windows／Ubuntu、Python 3.11／3.13 下运行，使用固定响应和模拟 HTTP，不调用付费模型；测试逐字段对比三类手工预期答案，并验证档案保存、重读和错误引用。另外在源码目录外的新环境安装 wheel，运行两个原有示例和三类 D1 档案。真实端点兼容性与抽取效果需针对所用模型和数据单独评估。
 
 后续优先接入 Jev 类决策模型，再增加冲突判别、支持性核验和旧 CCUS 格式兼容。首版尚不替代旧工作流完整的 Stage2.5／Stage3，也不承诺零幻觉或模型效果。
 

@@ -13,6 +13,9 @@ from pydantic import Field, StrictStr, ValidationError
 
 from .chunking import chunk_document
 from .errors import InvalidResponseError, TaskValidationError
+from .diagnostics import RunTrace
+from .documents import Document
+from .identity import grounded_candidate_id
 from .models import (
     Candidate, CheckResult, ContractModel, DocumentChunk, EvidenceRef,
     ExtractionBackend, ExtractionRequest, ExtractionResult, FieldValue,
@@ -126,29 +129,81 @@ def _value_has_type(value: Scalar, field_type: str) -> bool:
 
 
 def extract(
-    text: str,
+    text: str | Document,
     task: TaskSpec | dict[str, Any],
     *,
     backend: ExtractionBackend,
     source_name: str | None = None,
     max_chunk_chars: int = 6000,
     table_rows_per_chunk: int = 12,
+    trace: RunTrace | None = None,
 ) -> ExtractionResult:
     """Extract candidates. Matching evidence does not establish factual validity.
 
     Failure of any chunk raises an explicit exception; a partial run is never
     returned as a successful empty extraction. Backends receive source text.
+    An optional trace records diagnostics; its owner calls ``finish`` after
+    successfully saving the result. Failures mark the trace failed immediately.
     """
+    try:
+        return _extract(
+            text, task, backend=backend, source_name=source_name,
+            max_chunk_chars=max_chunk_chars, table_rows_per_chunk=table_rows_per_chunk,
+            trace=trace,
+        )
+    except Exception as exc:
+        if trace is not None:
+            trace.fail(exc)
+        raise
+
+
+def _extract(
+    text: str | Document,
+    task: TaskSpec | dict[str, Any],
+    *,
+    backend: ExtractionBackend,
+    source_name: str | None,
+    max_chunk_chars: int,
+    table_rows_per_chunk: int,
+    trace: RunTrace | None,
+) -> ExtractionResult:
     started = time.perf_counter()
-    if not isinstance(text, str):
-        raise TypeError("text must be a string")
+    if trace is not None:
+        trace.event("document", "started")
+    if isinstance(text, Document):
+        document = Document.model_validate(text.model_dump())
+        if source_name is not None and source_name != document.source_name:
+            raise ValueError("source_name must agree with the supplied Document")
+        source_name = document.source_name
+        text = document.text
+    elif isinstance(text, str):
+        document = Document.from_text(
+            text, source_name=source_name,
+            representation="text/markdown" if source_name and source_name.lower().endswith(".md") else "text/plain",
+        )
+    else:
+        raise TypeError("text must be a string or Document")
+    if trace is not None:
+        trace.write_json("document.json", document.model_dump(mode="json"))
+        trace.event("document", "completed", character_count=len(text), document_id=document.document_id)
+        trace.event("configuration", "task_validation_started")
     try:
         spec = task if isinstance(task, TaskSpec) else TaskSpec.model_validate(task)
     except (ValidationError, TypeError) as exc:
         raise TaskValidationError("Task does not match the task specification contract") from exc
+    if trace is not None:
+        trace.write_json("task.json", spec.model_dump(mode="json"))
+        trace.event("chunking", "started", max_chunk_chars=max_chunk_chars, table_rows_per_chunk=table_rows_per_chunk)
     chunks = chunk_document(
         text, max_chars=max_chunk_chars, table_rows_per_chunk=table_rows_per_chunk,
     )
+    if trace is not None:
+        trace.write_json("chunk_plan.json", {"chunks": [
+            {"chunk_id": chunk.chunk_id, "character_count": len(chunk.text),
+             "segments": [segment.model_dump() for segment in chunk.segments]}
+            for chunk in chunks
+        ]})
+        trace.event("chunking", "completed", chunk_count=len(chunks))
     source_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
     candidates: list[Candidate] = []
     review: list[ReviewItem] = []
@@ -160,14 +215,31 @@ def extract(
     usage: dict[str, int] = {}
     model: str | None = None
     for chunk in chunks:
-        response = backend.generate(_request(spec, chunk))
+        request = _request(spec, chunk)
+        if trace is not None:
+            trace.write_json(f"chunks/{chunk.chunk_id}.json", chunk.model_dump(mode="json"))
+            trace.write_json(f"requests/{chunk.chunk_id}.json", request.model_dump(mode="json"))
+            trace.event("model_request", "started", chunk_id=chunk.chunk_id)
+        response = backend.generate(request)
+        if trace is not None:
+            trace.write_text(f"responses/{chunk.chunk_id}.txt", response.text)
+            trace.write_json(f"responses/{chunk.chunk_id}.json", {
+                "model": response.model, "attempts": response.attempts,
+                "usage": response.usage, "elapsed_seconds": response.elapsed_seconds,
+            })
+            trace.event("model_response", "completed", chunk_id=chunk.chunk_id, attempts=response.attempts)
+            trace.event("validation", "started", chunk_id=chunk.chunk_id)
         response_count += 1
         request_attempts += response.attempts
         model = response.model or model
         for name, count in response.usage.items():
             usage[name] = usage.get(name, 0) + count
         raw = _parse_response(response.text)
+        if trace is not None:
+            trace.event("validation", "json_parsed", chunk_id=chunk.chunk_id, record_count=len(raw.records))
         for ordinal, record in enumerate(raw.records):
+            if trace is not None:
+                trace.event("validation", "record_started", chunk_id=chunk.chunk_id, ordinal=ordinal)
             if record.record_type not in spec.record_types:
                 raise InvalidResponseError("Model returned an undeclared record type")
             record_spec = spec.record_types[record.record_type]
@@ -177,9 +249,14 @@ def extract(
             checks = [CheckResult(code="schema_passed", passed=True)]
             pending: list[tuple[str, str | None, str]] = []
             for name, raw_field in record.fields.items():
+                if trace is not None:
+                    trace.event("validation", "field_started", chunk_id=chunk.chunk_id, ordinal=ordinal, field=name)
                 if not _value_has_type(raw_field.value, record_spec.fields[name].type):
                     raise InvalidResponseError("Model returned a value with an incorrect task field type")
                 evidence = _ground_quote(text, chunk, raw_field.quote)
+                if trace is not None:
+                    trace.event("grounding", "field_checked", chunk_id=chunk.chunk_id, ordinal=ordinal,
+                                field=name, status=evidence.status, matches=len(evidence.matches))
                 fields[name] = FieldValue(value=raw_field.value, evidence=evidence)
                 checks.append(CheckResult(
                     code="evidence_matched", passed=evidence.status == "matched", field=name,
@@ -211,12 +288,17 @@ def extract(
             )
             if not can_dedup:
                 identity.update(chunk_id=chunk.chunk_id, ordinal=ordinal)
-            encoded = json.dumps(identity, sort_keys=True, ensure_ascii=False, allow_nan=False)
-            identifier = "candidate-" + hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:24]
+            if can_dedup:
+                identifier = grounded_candidate_id(source_hash, record.record_type, fields)
+            else:
+                encoded = json.dumps(identity, sort_keys=True, ensure_ascii=False, allow_nan=False)
+                identifier = "candidate-" + hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:24]
             if can_dedup and identifier in dedup:
                 prior = dedup[identifier]
                 if chunk.chunk_id not in prior.chunk_ids:
                     prior.chunk_ids.append(chunk.chunk_id)
+                if trace is not None:
+                    trace.event("deduplication", "merged", chunk_id=chunk.chunk_id, candidate_id=identifier)
                 continue
             candidate = Candidate(
                 candidate_id=identifier, record_type=record.record_type, fields=fields,
@@ -227,9 +309,24 @@ def extract(
                 dedup[identifier] = candidate
             review.extend(ReviewItem(candidate_id=identifier, code=code, field=field, message=message)
                           for code, field, message in pending)
+            if trace is not None:
+                trace.event("deduplication", "retained", chunk_id=chunk.chunk_id,
+                            candidate_id=identifier, needs_review=bool(pending), review_count=len(pending))
+        if trace is not None:
+            chunk_candidates = [candidate for candidate in candidates if chunk.chunk_id in candidate.chunk_ids]
+            chunk_ids = {candidate.candidate_id for candidate in chunk_candidates}
+            chunk_reviews = [item for item in review if item.candidate_id in chunk_ids]
+            trace.write_json(f"candidates/{chunk.chunk_id}.json", {
+                "candidates": [candidate.model_dump(mode="json") for candidate in chunk_candidates],
+                "review": [item.model_dump(mode="json") for item in chunk_reviews],
+            })
+            trace.event("chunk", "completed", chunk_id=chunk.chunk_id,
+                        candidate_count=len(chunk_candidates), review_count=len(chunk_reviews))
+    if trace is not None:
+        trace.event("extraction", "completed", candidate_count=len(candidates), review_count=len(review))
     return ExtractionResult(
         task=spec,
-        source=SourceInfo(name=source_name, sha256=source_hash, character_count=len(text)),
+        source=SourceInfo(name=source_name, sha256=source_hash, character_count=len(text), document_id=document.document_id),
         candidates=candidates, review=review,
         run=RunInfo(
             backend=backend.name, mode="replay" if backend.name == "replay" else "live",

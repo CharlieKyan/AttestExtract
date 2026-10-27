@@ -1,0 +1,15 @@
+{
+  "name": "synthetic-d1-attribute",
+  "description": "Extract the stated rated power of the named product. Do not infer unreported ratings.",
+  "record_types": {
+    "product_attribute": {
+      "description": "One explicitly stated product power rating.",
+      "fields": {
+        "product": {"type": "string", "description": "Product name as stated.", "required": true},
+        "rated_power": {"type": "number", "description": "Reported rated power, without unit conversion.", "required": true},
+        "power_unit": {"type": "string", "description": "Unit as stated.", "required": true}
+      },
+      "identity_fields": ["product"]
+    }
+  }
+}

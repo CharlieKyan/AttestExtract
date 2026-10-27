@@ -1,0 +1,9 @@
+[
+  {
+    "candidate_index": 0,
+    "status": "accepted",
+    "reviewer": "Synthetic fixture author",
+    "rationale": "Manual synthetic label: the sentence explicitly states the supplier, relation verb, and supplied product.",
+    "origin": "synthetic_fixture"
+  }
+]

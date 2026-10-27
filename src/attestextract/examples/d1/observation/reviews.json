@@ -1,0 +1,16 @@
+[
+  {
+    "candidate_index": 0,
+    "status": "accepted",
+    "reviewer": "Synthetic fixture author",
+    "rationale": "Manual synthetic label: the first sentence states 7 L/h at 18 °C.",
+    "origin": "synthetic_fixture"
+  },
+  {
+    "candidate_index": 1,
+    "status": "accepted",
+    "reviewer": "Synthetic fixture author",
+    "rationale": "Manual synthetic label: 7 L/h at 36 °C is a second observation, despite the equal flow value.",
+    "origin": "synthetic_fixture"
+  }
+]

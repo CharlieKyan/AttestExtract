@@ -130,6 +130,7 @@ class SourceInfo(ContractModel):
     name: str | None = None
     sha256: str
     character_count: int
+    document_id: str | None = None
 
 
 class RunInfo(ContractModel):
@@ -146,7 +147,7 @@ class RunInfo(ContractModel):
 
 class ExtractionResult(ContractModel):
     schema_version: Literal["0.1"] = "0.1"
-    package_version: str = "0.1.0.dev0"
+    package_version: str = "0.1.0.dev2"
     task: TaskSpec
     source: SourceInfo
     candidates: list[Candidate]

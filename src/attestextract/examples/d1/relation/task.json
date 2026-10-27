@@ -1,0 +1,15 @@
+{
+  "name": "synthetic-d1-relation",
+  "description": "Extract only an explicitly stated supplier-to-product relation, using the stated verb. Do not infer a recipient, event, or additional graph relations.",
+  "record_types": {
+    "supply_relation": {
+      "description": "A minimal subject-relation-object statement, not a graph inference result.",
+      "fields": {
+        "subject": {"type": "string", "description": "Supplier explicitly named in the statement.", "required": true},
+        "relation": {"type": "string", "description": "Supply relation verb as stated.", "required": true},
+        "object": {"type": "string", "description": "Product explicitly supplied.", "required": true}
+      },
+      "identity_fields": ["subject", "relation", "object"]
+    }
+  }
+}

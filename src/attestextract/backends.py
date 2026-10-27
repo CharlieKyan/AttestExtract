@@ -11,6 +11,7 @@ from typing import Any
 import httpx
 
 from .errors import BackendError, ConfigurationError, InvalidResponseError
+from .diagnostics import RunTrace
 from .models import BackendResponse, ExtractionRequest
 
 _RETRYABLE_STATUS_CODES = frozenset({408, 409, 429, 500, 502, 503, 504})
@@ -38,6 +39,7 @@ class OpenAICompatibleBackend:
         transport: httpx.BaseTransport | None = None,
         *,
         sleep_fn: Callable[[float], None] = time.sleep,
+        trace: RunTrace | None = None,
     ) -> None:
         if not isinstance(base_url, str) or not base_url.strip():
             raise ConfigurationError("A nonempty HTTP(S) API base URL is required.")
@@ -89,6 +91,9 @@ class OpenAICompatibleBackend:
         self._api_key = api_key
         self._transport = transport
         self._sleep = sleep_fn
+        self._trace = trace
+        if trace is not None and api_key:
+            trace.add_secrets(api_key)
 
     def __repr__(self) -> str:
         return (
@@ -108,6 +113,8 @@ class OpenAICompatibleBackend:
             follow_redirects=False,
         ) as client:
             for attempt in range(1, self.max_attempts + 1):
+                if self._trace is not None:
+                    self._trace.event("http", "started", chunk_id=request.chunk_id, attempt=attempt)
                 try:
                     response = client.post(
                         self.base_url + "/chat/completions",
@@ -120,6 +127,8 @@ class OpenAICompatibleBackend:
                             f"The model request timed out after {attempt} attempt(s).",
                             attempts=attempt,
                         ) from None
+                    if self._trace is not None:
+                        self._trace.event("http", "retry", chunk_id=request.chunk_id, attempt=attempt, reason="timeout")
                     self._pause(attempt)
                     continue
                 except httpx.TransportError:
@@ -128,6 +137,8 @@ class OpenAICompatibleBackend:
                             f"The model request failed in transport after {attempt} attempt(s).",
                             attempts=attempt,
                         ) from None
+                    if self._trace is not None:
+                        self._trace.event("http", "retry", chunk_id=request.chunk_id, attempt=attempt, reason="transport")
                     self._pause(attempt)
                     continue
                 except httpx.DecodingError:
@@ -136,11 +147,17 @@ class OpenAICompatibleBackend:
                         attempts=attempt,
                     ) from None
 
+                if self._trace is not None:
+                    self._trace.event("http", "completed", chunk_id=request.chunk_id,
+                                      attempt=attempt, status_code=response.status_code)
                 if not 200 <= response.status_code < 300:
                     if (
                         response.status_code in _RETRYABLE_STATUS_CODES
                         and attempt < self.max_attempts
                     ):
+                        if self._trace is not None:
+                            self._trace.event("http", "retry", chunk_id=request.chunk_id,
+                                              attempt=attempt, status_code=response.status_code)
                         self._pause(attempt)
                         continue
                     raise BackendError(
@@ -149,7 +166,9 @@ class OpenAICompatibleBackend:
                         status_code=response.status_code,
                         attempts=attempt,
                     )
-                return self._parse_response(response, attempt, started)
+                if self._trace is not None:
+                    self._trace.event("model_response", "started", chunk_id=request.chunk_id)
+                return self._parse_response(response, attempt, started, chunk_id=request.chunk_id)
 
         raise BackendError("The model request did not complete.")  # pragma: no cover
 
@@ -157,7 +176,8 @@ class OpenAICompatibleBackend:
         self._sleep(min(0.5 * (2 ** min(attempt - 1, 3)), 2.0))
 
     def _parse_response(
-        self, response: httpx.Response, attempt: int, started: float
+        self, response: httpx.Response, attempt: int, started: float,
+        *, chunk_id: str | None = None,
     ) -> BackendResponse:
         try:
             payload = response.json()
@@ -179,6 +199,14 @@ class OpenAICompatibleBackend:
                 "The model response has no valid completion choice.", attempts=attempt
             )
         choice = choices[0]
+        # Preserve model text even when finish_reason or message validation
+        # subsequently rejects a truncated/refused completion. Never save an
+        # HTTP error body or headers here.
+        diagnostic_message = choice.get("message")
+        if self._trace is not None and chunk_id is not None and isinstance(diagnostic_message, dict):
+            diagnostic_content = diagnostic_message.get("content")
+            if isinstance(diagnostic_content, str):
+                self._trace.write_text(f"responses/{chunk_id}.txt", diagnostic_content)
         finish_reason = choice.get("finish_reason")
         if finish_reason is not None and finish_reason != "stop":
             raise InvalidResponseError(

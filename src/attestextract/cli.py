@@ -11,7 +11,10 @@ from pathlib import Path
 
 from . import __version__, extract, load_task
 from .backends import OpenAICompatibleBackend, ReplayBackend
-from .errors import AttestExtractError
+from .d1_examples import d1_example_names, load_d1_example
+from .diagnostics import RunTrace
+from .envconfig import load_env_file
+from .errors import AttestExtractError, ConfigurationError
 from .models import TaskSpec
 
 
@@ -27,6 +30,12 @@ def _parser() -> argparse.ArgumentParser:
     demo.add_argument("--example", choices=("ccus", "procurement", "all"), default="all")
     demo.add_argument("--output", type=Path, help="Write JSON here instead of printing it")
 
+    d1 = commands.add_parser(
+        "d1", help="Replay synthetic manual expected examples; no real expert validation",
+    )
+    d1.add_argument("--example", choices=(*d1_example_names(), "all"), default="all")
+    d1.add_argument("--output", type=Path, help="Write archive JSON here instead of printing it")
+
     live = commands.add_parser("extract", help="Extract UTF-8 text or Markdown using a configured model")
     live.add_argument("--input", type=Path, required=True, help="UTF-8 .txt or .md input")
     live.add_argument("--task", type=Path, required=True, help="JSON task specification")
@@ -35,6 +44,8 @@ def _parser() -> argparse.ArgumentParser:
     live.add_argument("--model", help="Model name, or ATTESTEXTRACT_MODEL")
     live.add_argument("--api-key-env", default="ATTESTEXTRACT_API_KEY", help="Environment variable containing the API key")
     live.add_argument("--timeout", type=float, default=60.0, help="HTTP timeout in seconds (default: 60)")
+    live.add_argument("--env-file", type=Path, help="Explicit KEY=value configuration file; existing environment takes precedence")
+    live.add_argument("--log-dir", type=Path, help="Empty directory for source, prompts, responses and diagnostic events")
     return parser
 
 
@@ -54,14 +65,31 @@ def _write(payload: dict, output: Path | None) -> None:
     if output is None:
         print(serialized, end="")
     else:
-        output.write_text(serialized, encoding="utf-8")
+        output.write_bytes(serialized.encode("utf-8"))
         print(f"Wrote {output}", file=sys.stderr)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     api_key = None
+    trace = None
     try:
+        if args.command == "d1":
+            print(
+                "Synthetic manual expected examples: fixed replay and explicit fixture labels; "
+                "no model inference or real expert validation.",
+                file=sys.stderr,
+            )
+            if args.example == "all":
+                payload = {"examples": {
+                    name: load_d1_example(name).model_dump(mode="json")
+                    for name in d1_example_names()
+                }}
+            else:
+                payload = load_d1_example(args.example).model_dump(mode="json")
+            _write(payload, args.output)
+            return 0
+
         if args.command == "demo":
             print("Offline replay of fixed synthetic responses; no model inference is performed.", file=sys.stderr)
             if args.example == "all":
@@ -71,22 +99,57 @@ def main(argv: list[str] | None = None) -> int:
             _write(payload, args.output)
             return 0
 
+        api_key = os.environ.get(args.api_key_env)
+        if args.log_dir is not None:
+            if args.output.resolve().is_relative_to(args.log_dir.resolve()):
+                raise ConfigurationError(
+                    "Output must be outside --log-dir; diagnostics writes its own result.json."
+                )
+            trace = RunTrace(
+                args.log_dir, secrets=[api_key] if api_key else [],
+                progress=lambda message: print(message, file=sys.stderr),
+            )
+            trace.event("configuration", "started")
+        environment = load_env_file(args.env_file) if args.env_file else os.environ
+        api_key = environment.get(args.api_key_env)
+        if trace is not None and api_key:
+            trace.add_secrets(api_key)
         if args.input.suffix.lower() not in {".txt", ".md"}:
             raise ValueError("Input must be a UTF-8 .txt or .md file; convert PDFs externally first")
-        base_url = args.base_url or os.environ.get("ATTESTEXTRACT_BASE_URL")
-        model = args.model or os.environ.get("ATTESTEXTRACT_MODEL")
+        base_url = args.base_url or environment.get("ATTESTEXTRACT_BASE_URL")
+        model = args.model or environment.get("ATTESTEXTRACT_MODEL")
         if not base_url or not model:
             raise ValueError("Configure --base-url and --model, or ATTESTEXTRACT_BASE_URL and ATTESTEXTRACT_MODEL")
-        api_key = os.environ.get(args.api_key_env)
+        if trace is not None:
+            trace.event("configuration", "task_validation_started")
         task = load_task(args.task)
+        if trace is not None:
+            trace.event("document", "started")
         text = args.input.read_bytes().decode("utf-8")
+        if trace is not None:
+            trace.event("configuration", "backend_validation_started")
         backend = OpenAICompatibleBackend(
-            base_url=base_url, model=model, api_key=api_key, timeout=args.timeout
+            base_url=base_url, model=model, api_key=api_key, timeout=args.timeout, trace=trace,
         )
-        result = extract(text, task, backend=backend, source_name=args.input.name)
-        _write(result.model_dump(mode="json"), args.output)
+        if trace is not None:
+            trace.write_json("backend.json", {
+                "backend": backend.name, "model": model, "timeout": args.timeout,
+                "max_attempts": 3, "api_key_configured": bool(api_key),
+                "env_file_used": args.env_file is not None,
+            })
+            trace.event("configuration", "completed")
+        result = extract(text, task, backend=backend, source_name=args.input.name, trace=trace)
+        if trace is not None:
+            trace.event("output", "started")
+        payload = result.model_dump(mode="json")
+        _write(payload, args.output)
+        if trace is not None:
+            trace.finish(payload)
+            print(f"Run diagnostics: {trace.directory}", file=sys.stderr)
         return 0
     except (AttestExtractError, OSError, ValueError) as exc:
+        if trace is not None:
+            trace.fail(exc)
         message = str(exc)
         if api_key:
             message = message.replace(api_key, "[REDACTED]")

@@ -1,0 +1,16 @@
+{
+  "case_type": "attribute",
+  "candidate_count": 2,
+  "record_count": 1,
+  "review_statuses": ["accepted", "rejected"],
+  "records": [
+    {
+      "record_type": "product_attribute",
+      "fields": {
+        "product": {"value": "云杉灯", "quote": "产品云杉灯的额定功率为8 W。", "start": 0, "end": 15},
+        "rated_power": {"value": 8, "quote": "产品云杉灯的额定功率为8 W。", "start": 0, "end": 15},
+        "power_unit": {"value": "W", "quote": "产品云杉灯的额定功率为8 W。", "start": 0, "end": 15}
+      }
+    }
+  ]
+}

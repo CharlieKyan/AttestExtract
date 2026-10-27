@@ -2,9 +2,9 @@
 
 Schema-driven extraction from text and tables, with source-linked evidence and pluggable decision backends.
 
-**Early prototype · `0.1.0.dev0` · Python 3.11+**
+**Early prototype · `0.1.0.dev2` · Python 3.11+**
 
-AttestExtract is an independent, domain-configurable extraction core. It grew out of work on a CCUS extraction workflow, but its task schema and runtime contain no CCUS-specific rules and do not depend on LangExtract. The first version produces typed candidates, exact source references, and a review queue. **Jev integration is planned and is not implemented.**
+AttestExtract is an independent, domain-configurable extraction core. It grew out of work on a CCUS extraction workflow, but its task schema and runtime contain no CCUS-specific rules and do not depend on LangExtract. It produces typed candidates, exact source references, and a review queue. An optional archive preserves the exact document, explicit review decisions, and accepted records. **Jev integration is planned and is not implemented.**
 
 [中文说明](README.zh-CN.md)
 
@@ -25,6 +25,29 @@ python -m attestextract --version
 
 With `--example all` (the default), the output is `{"examples": {"ccus": ..., "procurement": ...}}`. A single example returns one extraction result. Without `--output`, demo JSON is printed to stdout; replay notices go to stderr.
 
+## D1 document-to-record examples
+
+```bash
+attestextract d1 --output d1-archives.json
+attestextract d1 --example attribute
+attestextract d1 --example observation
+attestextract d1 --example relation
+```
+
+These are **synthetic manual expected examples**, replaying fixed responses and explicit fixture review labels. They are not real expert validation, model inference, or an accuracy benchmark. Each case packages `source.txt`, `task.json`, `response.json`, `reviews.json`, and a hand-written `expected.json` under `src/attestextract/examples/d1/`.
+
+| Case | Intended behavior | Candidates / accepted records |
+| --- | --- | --- |
+| `attribute` | Preserve a reported product power rating; reject a deliberately wrong candidate with an absent quotation | 2 / 1 |
+| `observation` | Preserve two equal flow values under different temperature conditions | 2 / 2 |
+| `relation` | Preserve an explicit subject–relation–object statement | 1 / 1 |
+
+The relation case uses three declared string fields; it does not implement graph inference, entity resolution, or a general event ontology. `reviews.json` refers to candidates by zero-based `candidate_index` in replay order. Indices must be unique and in range; the loader resolves them to real candidate IDs. The fixture author supplies each review label and rationale with `origin: "synthetic_fixture"`. `expected.json` independently specifies counts, review states, and accepted field values with exact source quotations and offsets; it excludes generated IDs and run timing.
+
+The D1 implementation covers a separate installable project, document/task/candidate/evidence/accepted-record contracts, all three manual cases, and validated JSON save/reload. `attestextract d1 --example all` (the default) outputs `{"examples": {"attribute": ..., "observation": ..., "relation": ...}}`; each value is an archive. A single case returns one archive. The earlier `demo` command retains its extraction-result output.
+
+Private expert feedback informs which failure patterns to exercise. Original papers, expert comments, and machine outputs stay outside the public project. The public cases were written from scratch and do not reproduce those materials.
+
 ## Extract with a model
 
 Clone the repository to use the example input and task files:
@@ -44,9 +67,50 @@ $env:ATTESTEXTRACT_API_KEY = "your-key"
 attestextract extract --input src/attestextract/examples/procurement.md --task src/attestextract/examples/procurement.task.json --output extraction-results.json
 ```
 
-On Bash, use `export ATTESTEXTRACT_BASE_URL=...`, `export ATTESTEXTRACT_MODEL=...`, and `export ATTESTEXTRACT_API_KEY=...`. `.env.example` documents these variables; `.env` files are **not automatically loaded**. `--base-url` and `--model` override their environment variables. `--api-key-env OTHER_VARIABLE` reads a key from another environment variable; no command-line key value is accepted. A key may be omitted for a local endpoint that does not require authentication. `--timeout` accepts seconds greater than zero and at most 60, defaulting to 60 per attempt.
+On Bash, use `export ATTESTEXTRACT_BASE_URL=...`, `export ATTESTEXTRACT_MODEL=...`, and `export ATTESTEXTRACT_API_KEY=...`. Alternatively, load a configuration file explicitly with `--env-file`, as below. Configuration precedence is **CLI arguments → existing process environment → the explicit `.env` file**. No `.env` file is loaded automatically. `--api-key-env OTHER_VARIABLE` selects the variable containing the key; no command-line key value is accepted. A key may be omitted for a local endpoint that does not require authentication. `--timeout` accepts seconds greater than zero and at most 60, defaulting to 60 per attempt.
 
 Live extraction sends document chunks to your configured endpoint. There is no automatic fallback to demo responses. Authentication failures, invalid configuration, invalid responses, and exhausted retries fail with a nonzero exit status. Transport failures and transient HTTP statuses are retried at most three times by default; schema/response errors and authentication failures are not retried. A failed chunk fails the run rather than returning a successful partial result.
+
+### Explicit `.env` configuration and run logs
+
+Create a local `.env` from `.env.example`, or edit your existing file, with the provider values:
+
+```dotenv
+ATTESTEXTRACT_BASE_URL=https://your-provider.example/v1
+ATTESTEXTRACT_MODEL=your-model-name
+ATTESTEXTRACT_API_KEY=replace-with-your-key
+```
+
+The file accepts `KEY=value` assignments, an optional `export` prefix, and quoted values. It is parsed as data; shell commands are not executed. Keep credentials in the local file and out of commits. An existing environment variable takes precedence over the file, so clear or update stale shell variables when switching providers.
+
+From the repository root, this PowerShell example writes research outputs and detailed logs outside the Git project:
+
+```powershell
+New-Item -ItemType Directory -Force ..\research\attestextract_runs | Out-Null
+attestextract extract --env-file .env --input src/attestextract/examples/procurement.md --task src/attestextract/examples/procurement.task.json --output ..\research\attestextract_runs\paper-001.json --log-dir ..\research\attestextract_runs\logs\paper-001
+```
+
+`--log-dir` enables file-based tracing and key stage progress on stderr. Its directory must be empty or not yet exist; an existing run is never overwritten. Choose a new directory for each run. Omit it for ordinary extraction without these trace files.
+
+| Trace file | What it records |
+| --- | --- |
+| `events.jsonl` | Structured processing events for following progress by module/chunk. |
+| `manifest.json` | Run status, versions, run summary, and an artifact list. |
+| `document.json` | Input document text, identity, hash, and source metadata. |
+| `task.json` | The effective, validated extraction task. |
+| `backend.json` | Sanitized backend configuration, excluding endpoint and key values. |
+| `chunk_plan.json` | Planned chunk IDs, sizes, and original source segments. |
+| `chunks/{chunk_id}.json` | Chunk text and its mapping to the original source. |
+| `requests/{chunk_id}.json` | Sanitized extraction prompt/messages, excluding HTTP headers, API keys, and the endpoint. |
+| `responses/{chunk_id}.txt` | Raw model response text for diagnosing parsing and extraction. |
+| `responses/{chunk_id}.json` | Response metadata, including model, usage, attempts, and elapsed time. |
+| `candidates/{chunk_id}.json` | Candidates and structural/evidence checks for the chunk. |
+| `result.json` | Final extraction result after a successful run. |
+| `error.json` | Safe failure summary when the run fails. |
+
+A failed run can leave earlier chunk files for diagnosis; they are not a successful partial result. Trace files can contain **the full paper text, task instructions, and model output**, even when credentials and backend details are sanitized. Store them outside this repository, as above, and do not commit or publicly share them without reviewing their contents. These are logs of the implemented extraction pipeline; Jev and Stage2.5/Stage3 decision modules are not implemented or simulated by tracing.
+
+`extract` writes JSON to its required `--output` file. With tracing enabled, key stages, completions, and retries appear on stderr in real time, alongside file-written notices and error summaries. Field-level details remain in `events.jsonl`; model responses and trace contents are not streamed to stdout. `demo` and `d1` still print JSON to stdout when `--output` is omitted. Inspect the per-chunk files for intermediate results.
 
 ## Python API and task format
 
@@ -93,6 +157,54 @@ Types are `string`, `integer`, `number`, and `boolean`; booleans do not count as
 
 Only declared record types and fields are accepted. Invalid JSON, unknown fields, and wrong scalar types fail explicitly. Missing/null required, identity, or condition fields enter the review queue. Optional null values and empty records also require review. Omitting an optional field is allowed.
 
+## Document, review, and archive contracts
+
+`extract(text, task, backend=...)` remains a candidate-producing API and also accepts a `Document`. Creating an archive is a separate, explicit action:
+
+```python
+from attestextract import (
+    CandidateReview, Document, DocumentMetadata, create_archive, extract,
+    load_archive, save_archive,
+)
+
+document = Document.from_text(
+    "Synthetic source text.",
+    source_name="source.txt",
+    metadata=DocumentMetadata(title="Synthetic example"),
+)
+# `task` and `backend` are configured as in the extraction example above.
+result = extract(document, task, backend=backend)
+pending = create_archive(document, result)
+assert pending.records == []  # Exact evidence matching does not accept a candidate.
+
+# After actually reviewing the candidate and evidence, record that decision:
+if result.candidates:
+    review = CandidateReview(
+        candidate_id=result.candidates[0].candidate_id,
+        status="accepted",
+        reviewer="Example reviewer",
+        rationale="Reviewed this candidate against the exact source and task.",
+    )
+    reviewed = create_archive(document, result, reviews=[review])
+    save_archive(reviewed, "reviewed-archive.json")
+    restored = load_archive("reviewed-archive.json")
+```
+
+The sample review must be supplied only after real review; it is not a recipe for automatically accepting the first candidate. An accepted candidate must also have complete required fields and exact evidence. To inspect an already labelled synthetic case directly, use `from attestextract.d1_examples import load_d1_example` followed by `load_d1_example("attribute")`.
+
+| Contract | Stored information and rules |
+| --- | --- |
+| `Document` | Embedded exact decoded `text`, `document_id`, SHA-256, character count, source name, representation (`text/plain` or `text/markdown`), and representation version. `DocumentMetadata` optionally stores title, authors, year, DOI, and source URI. |
+| `TaskSpec` | Named task, record types, typed scalar fields, instructions, and identity/condition field references. |
+| `Candidate` / `EvidenceRef` | Candidate ID, typed fields, exact quotations, Unicode character spans or unresolved evidence states, chunk references, and structural checks. |
+| `CandidateReview` | Existing candidate ID, `accepted` / `rejected` / `needs_review` / `unreviewed`, reviewer, rationale, optional annotation reference, and origin. Nontrivial human/fixture decisions require a reviewer and rationale. |
+| `FinalRecord` | Accepted candidate's unchanged fields/evidence, its candidate and document references, and a record ID. Rejected and pending candidates remain in the archive without becoming accepted records. |
+| `ExtractionArchive` | `archive_schema_version: "0.1"`, `document`, `extraction`, `reviews`, and `records`; extraction retains its own schema version and run information. |
+
+If no explicit review is supplied, candidates become `unreviewed`, or `needs_review` when checks are unresolved; system checks never set `accepted`. `origin: "human"` records caller-provided attribution and does not authenticate a person's identity. Synthetic cases are labelled `synthetic_fixture`, and automatically assigned pending states are labelled `system`. “Accepted record” means an explicit recorded review decision, not an independently proven fact. Changing a value requires a new candidate and review; a final record cannot silently overwrite its source candidate.
+
+`save_document` / `load_document` and `save_archive` / `load_archive` persist UTF-8 JSON and validate hashes, counts, IDs, references, and evidence on reload. Document IDs identify an exact text representation; metadata does not establish source authenticity. Preserve the input string's line endings when reading source files, for example with `Path(path).read_bytes().decode("utf-8")`. Markdown converted from a PDF has its own text positions, not PDF page or bounding-box coordinates.
+
 ## Evidence, output, and limits
 
 - Input is a UTF-8 `.txt` or `.md` document. Paragraphs and simple pipe tables are chunked, preserving original source segments; later table batches repeat their original headers. The default target is 6,000 characters and at most 12 rows per table batch. A header or row is atomic and may exceed the character target. Convert PDFs externally with a tool such as MinerU before extraction.
@@ -111,7 +223,7 @@ python -m pytest
 python -m build
 ```
 
-CI runs on Windows and Ubuntu with Python 3.11 and 3.13. Tests use fixed responses and mocked HTTP, never paid model requests. CI also installs the wheel in a clean environment outside the checkout and runs both packaged demos. End-to-end model quality and provider compatibility require separate evaluation against your chosen endpoint and corpus.
+CI runs on Windows and Ubuntu with Python 3.11 and 3.13. Tests use fixed responses and mocked HTTP, never paid model requests. They compare all three D1 cases to hand-written expected semantic output and check archive persistence and invalid references. CI also installs the wheel in a clean environment outside the checkout and runs both original demos and all three D1 archives. End-to-end model quality and provider compatibility require separate evaluation against your chosen endpoint and corpus.
 
 Next steps are a Jev-style bounded decision adapter, conflict handling and support verification, and compatibility outputs for the earlier CCUS workflow. These are plans, not implemented features or performance claims. The public prototype contains only new framework code and synthetic examples; it does not include research documents, annotations, patents, original workflow outputs, or credentials.
 

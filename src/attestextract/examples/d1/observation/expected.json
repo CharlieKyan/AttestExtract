@@ -1,0 +1,28 @@
+{
+  "case_type": "observation",
+  "candidate_count": 2,
+  "record_count": 2,
+  "review_statuses": ["accepted", "accepted"],
+  "records": [
+    {
+      "record_type": "flow_observation",
+      "fields": {
+        "sample": {"value": "试样青禾", "quote": "试样青禾在18 °C下的通量为7 L/h。", "start": 0, "end": 21},
+        "flow": {"value": 7, "quote": "试样青禾在18 °C下的通量为7 L/h。", "start": 0, "end": 21},
+        "flow_unit": {"value": "L/h", "quote": "试样青禾在18 °C下的通量为7 L/h。", "start": 0, "end": 21},
+        "temperature": {"value": 18, "quote": "试样青禾在18 °C下的通量为7 L/h。", "start": 0, "end": 21},
+        "temperature_unit": {"value": "°C", "quote": "试样青禾在18 °C下的通量为7 L/h。", "start": 0, "end": 21}
+      }
+    },
+    {
+      "record_type": "flow_observation",
+      "fields": {
+        "sample": {"value": "试样青禾", "quote": "试样青禾在36 °C下的通量为7 L/h。", "start": 22, "end": 43},
+        "flow": {"value": 7, "quote": "试样青禾在36 °C下的通量为7 L/h。", "start": 22, "end": 43},
+        "flow_unit": {"value": "L/h", "quote": "试样青禾在36 °C下的通量为7 L/h。", "start": 22, "end": 43},
+        "temperature": {"value": 36, "quote": "试样青禾在36 °C下的通量为7 L/h。", "start": 22, "end": 43},
+        "temperature_unit": {"value": "°C", "quote": "试样青禾在36 °C下的通量为7 L/h。", "start": 22, "end": 43}
+      }
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "case_type": "relation",
+  "candidate_count": 1,
+  "record_count": 1,
+  "review_statuses": ["accepted"],
+  "records": [
+    {
+      "record_type": "supply_relation",
+      "fields": {
+        "subject": {"value": "岚桥工厂", "quote": "岚桥工厂供应霁灯组件。", "start": 0, "end": 11},
+        "relation": {"value": "供应", "quote": "岚桥工厂供应霁灯组件。", "start": 0, "end": 11},
+        "object": {"value": "霁灯组件", "quote": "岚桥工厂供应霁灯组件。", "start": 0, "end": 11}
+      }
+    }
+  ]
+}
