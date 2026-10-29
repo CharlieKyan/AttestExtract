@@ -16,6 +16,7 @@ from .diagnostics import RunTrace, redact_text
 from .envconfig import load_env_file
 from .errors import AttestExtractError, ConfigurationError
 from .models import TaskSpec
+from .reporting import render_markdown_report
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -40,6 +41,7 @@ def _parser() -> argparse.ArgumentParser:
     live.add_argument("--input", type=Path, required=True, help="UTF-8 .txt or .md input")
     live.add_argument("--task", type=Path, required=True, help="JSON task specification")
     live.add_argument("--output", type=Path, required=True, help="Destination JSON file")
+    live.add_argument("--report", type=Path, help="Also write a readable Markdown review of candidates and evidence")
     live.add_argument("--base-url", help="OpenAI-compatible API base URL, or ATTESTEXTRACT_BASE_URL")
     live.add_argument("--model", help="Model name, or ATTESTEXTRACT_MODEL")
     live.add_argument("--api-key-env", default="ATTESTEXTRACT_API_KEY", help="Environment variable containing the API key")
@@ -77,6 +79,28 @@ def _write(payload: dict, output: Path | None) -> None:
         print(f"Wrote {output}", file=sys.stderr)
 
 
+def _check_output_paths(args: argparse.Namespace) -> None:
+    """Reject accidental input overwrites and unwritable layouts before model calls."""
+    outputs = [args.output.resolve()]
+    if args.report is not None:
+        outputs.append(args.report.resolve())
+    if len(set(outputs)) != len(outputs):
+        raise ConfigurationError("--output and --report must use different files.")
+    protected = {args.input.resolve(), args.task.resolve()}
+    if args.env_file is not None:
+        protected.add(args.env_file.resolve())
+    for target in outputs:
+        if target in protected:
+            raise ConfigurationError("Output files must differ from the input, task, and environment files.")
+        if args.log_dir is not None and target.is_relative_to(args.log_dir.resolve()):
+            label = "Output" if target == args.output.resolve() else "Report"
+            raise ConfigurationError(f"{label} must be outside --log-dir; diagnostics writes its own result.json.")
+        if args.log_dir is not None and args.log_dir.resolve().is_relative_to(target):
+            raise ConfigurationError("Output files cannot be parent directories of --log-dir.")
+        if target.is_dir() or not target.parent.is_dir():
+            raise ConfigurationError("Output files need an existing parent directory and cannot be directories.")
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     api_key = None
@@ -107,12 +131,9 @@ def main(argv: list[str] | None = None) -> int:
             _write(payload, args.output)
             return 0
 
+        _check_output_paths(args)
         api_key = os.environ.get(args.api_key_env)
         if args.log_dir is not None:
-            if args.output.resolve().is_relative_to(args.log_dir.resolve()):
-                raise ConfigurationError(
-                    "Output must be outside --log-dir; diagnostics writes its own result.json."
-                )
             trace = RunTrace(
                 args.log_dir, secrets=[api_key] if api_key else [],
                 progress=lambda message: print(message, file=sys.stderr),
@@ -155,6 +176,10 @@ def main(argv: list[str] | None = None) -> int:
             trace.event("output", "started")
         payload = result.model_dump(mode="json")
         _write(payload, args.output)
+        if args.report is not None:
+            report = render_markdown_report(result, secrets=[api_key] if api_key else [])
+            args.report.write_bytes(report.encode("utf-8"))
+            print(f"Wrote {args.report}", file=sys.stderr)
         if trace is not None:
             trace.finish(payload)
             print(f"Run diagnostics: {trace.directory}", file=sys.stderr)

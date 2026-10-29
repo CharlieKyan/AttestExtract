@@ -154,7 +154,7 @@ class RunInfo(ContractModel):
 
 class ExtractionResult(ContractModel):
     schema_version: Literal["0.1"] = "0.1"
-    package_version: str = "0.1.0.dev5"
+    package_version: str = "0.1.0.dev6"
     task: TaskSpec
     source: SourceInfo
     candidates: list[Candidate]

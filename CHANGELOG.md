@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.1.0.dev6
+
+- Add optional CLI `--report PATH` to render a readable Markdown review report
+  from the successful extraction result, including candidates, field values,
+  quotations, source positions, evidence status and review reasons. The report
+  makes no additional model call and does not accept or verify facts.
+- Preserve the JSON result contract and original source/evidence mapping. Keep
+  report/output paths distinct from protected input, task and configuration files
+  and outside the diagnostic directory; redact known API keys from reports.
+- Document complete-paper extraction and a local layout separating reusable
+  inputs/tasks from timestamped run directories containing `extraction.json`,
+  `review.md` and `diagnostics/`. Historical-run summaries and cleanup remain
+  explicit local housekeeping, not automatic CLI deletion. No PDF reader or new
+  runtime dependency is introduced. Verification is offline, not a real model test.
+
 ## 0.1.0.dev5
 
 - Explicitly instruct unique object keys and standard JSON in extraction prompts.

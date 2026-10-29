@@ -2,7 +2,7 @@
 
 按任务模式从正文和表格抽取候选数据，保留原文证据，并预留可替换的决策后端。
 
-**早期原型 · `0.1.0.dev5` · Python 3.11+**
+**早期原型 · `0.1.0.dev6` · Python 3.11+**
 
 本项目从 CCUS 抽取工作流的经验出发，独立实现通用小内核，不依赖 LangExtract，也不导入原有 CCUS 工程。当前实现字段验证、候选保留、原文位置回溯和复核清单；可另行保存包含精确原文、显式审阅决定和接受记录的档案。**Jev 尚未接入**；当前检查不能证明抽取结果在语义上得到原文支持或事实正确。
 
@@ -98,8 +98,9 @@ ATTESTEXTRACT_API_KEY=replace-with-your-key
 从工程根目录运行下面的 PowerShell 命令，可将研究结果和日志保存在 Git 工程之外：
 
 ```powershell
-New-Item -ItemType Directory -Force ..\research\attestextract_runs | Out-Null
-attestextract extract --env-file .env --structured-output json_schema --input src/attestextract/examples/procurement.md --task src/attestextract/examples/procurement.task.json --output ..\research\attestextract_runs\paper-001-schema.json --log-dir ..\research\attestextract_runs\logs\paper-001-schema
+$runDir = "..\research\attestextract\runs\procurement\$(Get-Date -Format 'yyyyMMdd-HHmmss-fff')"
+New-Item -ItemType Directory -Force -Path $runDir | Out-Null
+attestextract extract --env-file .env --structured-output json_schema --input src/attestextract/examples/procurement.md --task src/attestextract/examples/procurement.task.json --output "$runDir\extraction.json" --report "$runDir\review.md" --log-dir "$runDir\diagnostics"
 ```
 
 `--log-dir` 开启文件日志，并在标准错误实时显示关键阶段进度。指定目录必须为空或尚不存在，不会覆盖已有运行；每次运行请使用新目录。不传该参数时，照常抽取且不生成这些跟踪文件。
@@ -129,28 +130,43 @@ attestextract extract --env-file .env --structured-output json_schema --input sr
 
 失败运行可能留下此前已处理分块的文件，供排查使用，不代表部分结果已成功。即使已去除凭据和后端敏感信息，日志仍可能包含**整篇论文、任务说明和模型输出**。请像上述示例一样放在仓库之外，不提交到 GitHub；对外分享前先检查内容。日志只对应当前已实现的抽取流程，尚未实现或模拟 Jev、Stage2.5／Stage3 决策模块。
 
-`extract` 将 JSON 写入必填的 `--output` 文件。开启日志后，关键阶段开始、完成和重试会实时显示在标准错误，写入提示和错误摘要也发往标准错误；字段级细节保存在 `events.jsonl`，模型响应和跟踪内容不逐条打印到标准输出。原有 `demo`、`d1` 在不传 `--output` 时仍将 JSON 写入标准输出；中间结果可查看各分块文件。
+`extract` 将 JSON 写入必填的 `--output` 文件。增加 `--report review.md` 可从同一次成功结果生成 Markdown 审阅报告，不额外调用模型。报告展示候选、字段值、逐字引文、原文位置、证据状态和复核原因，便于直接阅读；它不会接受候选或证明事实正确，JSON 仍是供程序处理的结果。报告会隐藏已配置的已知 API 密钥；抽取失败时不生成成功报告。结果和报告路径必须互不相同，也不能覆盖输入、任务或 `.env`，且都需位于 `--log-dir` 之外。
+
+开启日志后，关键阶段开始、完成和重试会实时显示在标准错误，写入提示和错误摘要也发往标准错误；字段级细节保存在 `events.jsonl`，模型响应和跟踪内容不逐条打印到标准输出。原有 `demo`、`d1` 在不传 `--output` 时仍将 JSON 写入标准输出；中间结果可查看各分块文件。
 
 排查 HTTP 错误时，先读 `error.json`，再沿 `http_details` 找到对应尝试，结合出错层、分块、尝试次数、HTTP 状态和可取得的请求 ID，查看服务商返回的 `error.code`、`type`、`message`、`status`、`param`。应用侧的兼容性提示是单独推测，不能当作服务商明确给出的原因。日志仅保留字段白名单，并做脱敏和限长，不保存完整 HTTP 错误体或响应头。没有可用原因时标为 `provider_detail_unavailable`；这些信息不能保证揭示服务商内部根因，也不能回补旧版 400 错误日志中未保存的内容。
 
 Dev5 加强格式提示和错误定位，并提供明确开启的格式重试。离线测试只能证明这些机制按约定工作，不能证明真实模型的格式合格率或抽取准确率。未接入 Jev 也不意味着可以接受不存在的证据。
 
-### 用真实文章或片段对照测试
+### 抽取完整文章，并集中保存每次结果
 
-可以使用仓库之外的 UTF-8 `.md`／`.txt` 文章及自己的任务 JSON。建议先选 1–3 个完整段落，保留主体、条件和相关表头，不改写原文。也可以把旧运行的 `prompts/chunk-0001.source.txt` 原样复制到新的输入文件。片段作为独立文档时有新的文档标识，证据位置从片段开头计数，不能直接当作全文偏移。
+将完整 UTF-8 `.md`／`.txt` 文章传给 `--input`，程序自动分块，不需要手动拆文献或逐段提交。PDF 需先由外部工具转换。建议在 Git 仓库之外，将可重复使用的论文、任务配置与运行产物分开：
 
-从工程根目录执行，将下列路径换成实际存在的文件。命令会使用 `.env` **调用真实模型并产生相应用量**，不是回放。先设置 `0`，再将其改成 `1` 重新执行，保持输入、任务、模型和结构化模式相同；每次自动使用新的结果和日志路径。
+```text
+../research/attestextract/
+  inputs/paper.md
+  tasks/paper.task.json
+  runs/paper/<timestamp>/
+    extraction.json
+    review.md
+    diagnostics/
+  RUN_HISTORY.md
+```
+
+先把已有论文和任务配置放到选定位置，再从工程根目录执行以下 PowerShell 命令。它会使用 `.env` **调用真实模型并产生相应用量**；`--format-retries 1` 明确允许前述额外生成。尚未验证端点兼容性时使用 `off`。每次按文章名和时间新建目录，结果文件统一命名。
 
 ```powershell
 python -m attestextract --version
-$paper = (Resolve-Path "..\research\attestextract_runs\inputs\paper-snippet.md").Path
-$task = (Resolve-Path "..\research\attestextract_runs\tasks\paper.task.json").Path
-$formatRetries = 0  # 对照运行时改成 1。
-$run = "format-$formatRetries-$(Get-Date -Format 'yyyyMMdd-HHmmss-fff')"
-$root = (New-Item -ItemType Directory -Force "..\research\attestextract_runs").FullName
-$output = Join-Path $root "$run.json"
-$logs = Join-Path $root "logs\$run"
-python -m attestextract extract --env-file .env --structured-output off --format-retries $formatRetries --input "$paper" --task "$task" --output "$output" --log-dir "$logs"
+$researchRoot = (Resolve-Path "..\research\attestextract" -ErrorAction Stop).Path
+$paper = (Resolve-Path (Join-Path $researchRoot "inputs\paper.md") -ErrorAction Stop).Path
+$task = (Resolve-Path (Join-Path $researchRoot "tasks\paper.task.json") -ErrorAction Stop).Path
+$paperStem = [IO.Path]::GetFileNameWithoutExtension($paper)
+$runDir = Join-Path $researchRoot "runs\$paperStem\$(Get-Date -Format 'yyyyMMdd-HHmmss-fff')"
+New-Item -ItemType Directory -Force -Path $runDir | Out-Null
+$output = Join-Path $runDir "extraction.json"
+$report = Join-Path $runDir "review.md"
+$logs = Join-Path $runDir "diagnostics"
+python -m attestextract extract --env-file .env --structured-output off --format-retries 1 --input "$paper" --task "$task" --output "$output" --report "$report" --log-dir "$logs"
 $extractExitCode = $LASTEXITCODE
 Get-Content "$logs\manifest.json" -Raw -Encoding UTF8
 $events = @(Get-Content "$logs\events.jsonl" -Encoding UTF8 | ForEach-Object { $_ | ConvertFrom-Json })
@@ -158,11 +174,15 @@ $events | Where-Object { $_.stage -eq "format_retry" -or ($_.stage -eq "validati
 if ($extractExitCode -eq 0) {
     $result = Get-Content "$output" -Raw -Encoding UTF8 | ConvertFrom-Json
     $result.run | Format-List
-    $result.candidates | Select-Object candidate_id,needs_review
+    Write-Output "请打开候选审阅报告：$report"
 }
 ```
 
-结合 `validation/*.errors.json` 和对应的 `responses/*.txt` 定位错误。首次错误保留、随后出现 `format_retry/succeeded`，表示新响应通过格式校验，不表示原始 JSON 被修改。整轮成功需同时满足退出码 `0`、清单状态 `succeeded`、生成最终文件。分别比较首次格式失败、重试恢复分块、用量，以及字段值和引文质量；空结果成功也不能证明没有漏抽。失败运行会提前结束，比较失败率时分母只能计算实际尝试的分块。可在预算内对固定的小组片段重复测试，一对运行不能证明稳定提升。dev5 内的 `0` 对比 `1` 用来观察重试效果，不能单独衡量相对 dev4 的提示词改进。
+使用 Markdown 预览打开 `review.md` 查看易读结果；程序处理用 `extraction.json`，排查问题用 `diagnostics/`。在诊断目录内结合 `validation/*.errors.json` 和对应的 `responses/*.txt` 定位错误。首次错误保留、随后出现 `format_retry/succeeded`，表示新响应通过格式校验，不表示原始 JSON 被修改。整轮成功需同时满足退出码 `0`、清单状态 `succeeded`、生成最终文件。空结果成功不能证明没有漏抽，包含复核项的报告也不是已接受的事实清单。
+
+如需先降低试验用量，可以用保留完整主体、条件和表头的原文片段。片段有新的文档标识，证据位置从片段开头计数，不能当作全文偏移。观察重试效果时，用相同输入、任务和模型分别设置 `--format-retries 0`、`1`，每次新建运行目录。分别比较首次格式失败、重试恢复分块、用量及字段值／引文质量；失败运行只统计实际尝试的分块。可在预算内对固定的小组片段重复测试，一对运行不能证明稳定提升，也不能单独衡量跨版本的提示词改进。
+
+`RUN_HISTORY.md` 是建议手工维护的本地试验摘要，不是 CLI 自动维护的文件。删除旧运行目录前，先记录各次版本、输入／任务标识、模型、结果状态、失败或恢复原因及保留结果的位置，并把仍需使用的论文和任务配置独立保存。后续审计仍需要的原始证据应保留，摘要无法重建已删除的响应。清理旧产物属于明确执行的本地整理步骤，`extract` 不会自动删除历史运行。
 
 ## 任务、证据和扩展接口
 

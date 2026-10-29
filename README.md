@@ -2,7 +2,7 @@
 
 Schema-driven extraction from text and tables, with source-linked evidence and pluggable decision backends.
 
-**Early prototype · `0.1.0.dev5` · Python 3.11+**
+**Early prototype · `0.1.0.dev6` · Python 3.11+**
 
 AttestExtract is an independent, domain-configurable extraction core. It grew out of work on a CCUS extraction workflow, but its task schema and runtime contain no CCUS-specific rules and do not depend on LangExtract. It produces typed candidates, exact source references, and a review queue. An optional archive preserves the exact document, explicit review decisions, and accepted records. **Jev integration is planned and is not implemented.**
 
@@ -102,8 +102,9 @@ The file accepts `KEY=value` assignments, an optional `export` prefix, and quote
 From the repository root, this PowerShell example writes research outputs and detailed logs outside the Git project:
 
 ```powershell
-New-Item -ItemType Directory -Force ..\research\attestextract_runs | Out-Null
-attestextract extract --env-file .env --structured-output json_schema --input src/attestextract/examples/procurement.md --task src/attestextract/examples/procurement.task.json --output ..\research\attestextract_runs\paper-001-schema.json --log-dir ..\research\attestextract_runs\logs\paper-001-schema
+$runDir = "..\research\attestextract\runs\procurement\$(Get-Date -Format 'yyyyMMdd-HHmmss-fff')"
+New-Item -ItemType Directory -Force -Path $runDir | Out-Null
+attestextract extract --env-file .env --structured-output json_schema --input src/attestextract/examples/procurement.md --task src/attestextract/examples/procurement.task.json --output "$runDir\extraction.json" --report "$runDir\review.md" --log-dir "$runDir\diagnostics"
 ```
 
 `--log-dir` enables file-based tracing and key stage progress on stderr. Its directory must be empty or not yet exist; an existing run is never overwritten. Choose a new directory for each run. Omit it for ordinary extraction without these trace files.
@@ -133,28 +134,43 @@ New traces use `trace_schema_version: "0.3"`; existing log directories are not r
 
 A failed run can leave earlier chunk files for diagnosis; they are not a successful partial result. Trace files can contain **the full paper text, task instructions, and model output**, even when credentials and backend details are sanitized. Store them outside this repository, as above, and do not commit or publicly share them without reviewing their contents. These are logs of the implemented extraction pipeline; Jev and Stage2.5/Stage3 decision modules are not implemented or simulated by tracing.
 
-`extract` writes JSON to its required `--output` file. With tracing enabled, key stages, completions, and retries appear on stderr in real time, alongside file-written notices and error summaries. Field-level details remain in `events.jsonl`; model responses and trace contents are not streamed to stdout. `demo` and `d1` still print JSON to stdout when `--output` is omitted. Inspect the per-chunk files for intermediate results.
+`extract` writes JSON to its required `--output` file. Add `--report review.md` for a Markdown review report generated from the same successful result, with no additional model call. It shows candidates, field values, verbatim quotations, source positions, evidence status, and review reasons. The report does not accept candidates or establish factual correctness; JSON remains the machine-readable result. Known configured API keys are redacted from the report. A failed extraction produces no success report. Output and report paths must differ from each other and from input, task, and `.env` files, and both must be outside `--log-dir`.
+
+With tracing enabled, key stages, completions, and retries appear on stderr in real time, alongside file-written notices and error summaries. Field-level details remain in `events.jsonl`; model responses and trace contents are not streamed to stdout. `demo` and `d1` still print JSON to stdout when `--output` is omitted. Inspect the per-chunk files for intermediate results.
 
 To investigate an HTTP failure, start with `error.json`, then follow `http_details` to the failed attempt. Read the failure layer, chunk, attempt number, HTTP status, and available request IDs alongside provider-reported `error.code`, `type`, `message`, `status`, and `param`. Application compatibility hints are separate inferences; they are not the provider's stated reason. Only allowlisted, redacted, length-bounded fields are retained, rather than complete HTTP error bodies or headers. When no usable provider reason is available, diagnostics mark `provider_detail_unavailable`; they cannot reveal the provider's internal root cause or recover information absent from an older 400-error log.
 
 Dev5 strengthens format prompts and diagnostics and adds the explicitly enabled format retry. Its offline tests establish the retry and validation behavior, not a real model's format success rate or extraction accuracy. Jev's absence does not make unsupported evidence acceptable.
 
-### Test your own paper or excerpt
+### Run a complete paper and keep its outputs together
 
-Use a UTF-8 `.md` or `.txt` paper and your own task JSON outside this repository. Start with 1–3 complete paragraphs, keeping the subject, conditions, and any table header together. Preserve the source text verbatim; you can also copy an earlier run's `prompts/chunk-0001.source.txt` to a new input file without editing it. A standalone excerpt has its own document identity and offsets starting at zero; those offsets do not refer to the full paper.
+Pass the complete UTF-8 `.md` or `.txt` paper to `--input`; the framework chunks it automatically. There is no need to split the paper manually or submit excerpts one at a time. Convert PDFs externally first. Keep reusable papers and tasks separate from disposable run outputs, outside this Git repository:
 
-From the repository root, set the paths below to existing files. This makes a **real model call** using your `.env`; it is not a replay. First use `0`, then rerun the block with `1`, keeping input, task, model, and structured-output mode unchanged. Each run gets fresh output and logs.
+```text
+../research/attestextract/
+  inputs/paper.md
+  tasks/paper.task.json
+  runs/paper/<timestamp>/
+    extraction.json
+    review.md
+    diagnostics/
+  RUN_HISTORY.md
+```
+
+Place your existing paper and task at the chosen paths, then run this PowerShell block from the repository root. It makes **real model calls** using `.env`; `--format-retries 1` explicitly allows the extra generation described above. Use `off` unless structured-output compatibility has been verified for your endpoint. Every run uses a new timestamp directory and fixed filenames.
 
 ```powershell
 python -m attestextract --version
-$paper = (Resolve-Path "..\research\attestextract_runs\inputs\paper-snippet.md").Path
-$task = (Resolve-Path "..\research\attestextract_runs\tasks\paper.task.json").Path
-$formatRetries = 0  # Change to 1 for the comparison run.
-$run = "format-$formatRetries-$(Get-Date -Format 'yyyyMMdd-HHmmss-fff')"
-$root = (New-Item -ItemType Directory -Force "..\research\attestextract_runs").FullName
-$output = Join-Path $root "$run.json"
-$logs = Join-Path $root "logs\$run"
-python -m attestextract extract --env-file .env --structured-output off --format-retries $formatRetries --input "$paper" --task "$task" --output "$output" --log-dir "$logs"
+$researchRoot = (Resolve-Path "..\research\attestextract" -ErrorAction Stop).Path
+$paper = (Resolve-Path (Join-Path $researchRoot "inputs\paper.md") -ErrorAction Stop).Path
+$task = (Resolve-Path (Join-Path $researchRoot "tasks\paper.task.json") -ErrorAction Stop).Path
+$paperStem = [IO.Path]::GetFileNameWithoutExtension($paper)
+$runDir = Join-Path $researchRoot "runs\$paperStem\$(Get-Date -Format 'yyyyMMdd-HHmmss-fff')"
+New-Item -ItemType Directory -Force -Path $runDir | Out-Null
+$output = Join-Path $runDir "extraction.json"
+$report = Join-Path $runDir "review.md"
+$logs = Join-Path $runDir "diagnostics"
+python -m attestextract extract --env-file .env --structured-output off --format-retries 1 --input "$paper" --task "$task" --output "$output" --report "$report" --log-dir "$logs"
 $extractExitCode = $LASTEXITCODE
 Get-Content "$logs\manifest.json" -Raw -Encoding UTF8
 $events = @(Get-Content "$logs\events.jsonl" -Encoding UTF8 | ForEach-Object { $_ | ConvertFrom-Json })
@@ -162,11 +178,15 @@ $events | Where-Object { $_.stage -eq "format_retry" -or ($_.stage -eq "validati
 if ($extractExitCode -eq 0) {
     $result = Get-Content "$output" -Raw -Encoding UTF8 | ConvertFrom-Json
     $result.run | Format-List
-    $result.candidates | Select-Object candidate_id,needs_review
+    Write-Output "Read the candidate review report: $report"
 }
 ```
 
-Read `validation/*.errors.json` alongside the matching `responses/*.txt`. A preserved first error followed by `format_retry/succeeded` means the new response passed format validation; it does not mean the original JSON was modified. A successful whole run requires exit code `0`, manifest status `succeeded`, and the final output. Compare first-attempt format failures, recovered chunks, usage, and the actual values/quotations separately. A successful empty result is not proof of completeness. Failed runs stop early, so count only attempted chunks when comparing failure rates. Repeat a small fixed set of excerpts within your budget; one pair of runs cannot establish a reliable improvement. Comparing `0` versus `1` in dev5 measures retry behavior, not the prompt change versus dev4.
+Open `review.md` in a Markdown preview for the readable result; use `extraction.json` for programmatic processing and `diagnostics/` for investigation. Read `validation/*.errors.json` alongside the matching `responses/*.txt` inside diagnostics. A preserved first error followed by `format_retry/succeeded` means the new response passed format validation; it does not mean the original JSON was modified. A successful whole run requires exit code `0`, manifest status `succeeded`, and the final output. A successful empty result is not proof of completeness, and a report containing review items is not a set of accepted facts.
+
+For a smaller paid experiment, use a verbatim excerpt containing complete subject/condition context and any table header. An excerpt has a new document identity and offsets starting at zero, rather than full-paper offsets. To assess retry behavior, run the same input/task/model with `--format-retries 0` and then `1`, using a fresh run directory each time. Compare first-attempt format failures, recovered chunks, usage, and values/quotations separately; count only attempted chunks in failed runs. Repeat a fixed small set within your budget. One pair of runs cannot establish reliable improvement, and this comparison does not isolate prompt changes between versions.
+
+`RUN_HISTORY.md` is a suggested local experiment ledger, not a file automatically maintained by the CLI. Before removing old run directories, record each run's version, input/task identity, model, outcome, failure cause or recovery, and retained result locations; secure reusable inputs and task files in their separate directories first. Keep any raw evidence needed for later audits, because a summary cannot reconstruct deleted responses. Cleaning old outputs is an explicit local housekeeping step; `extract` does not automatically delete previous runs.
 
 ## Python API and task format
 
