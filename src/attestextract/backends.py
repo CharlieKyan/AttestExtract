@@ -13,6 +13,7 @@ import httpx
 
 from .errors import BackendError, ConfigurationError, InvalidResponseError
 from .diagnostics import RunTrace
+from .http_diagnostics import describe_http_error
 from .models import BackendResponse, ExtractionRequest
 
 _RETRYABLE_STATUS_CODES = frozenset({408, 409, 429, 500, 502, 503, 504})
@@ -24,8 +25,8 @@ class OpenAICompatibleBackend:
     ``base_url`` includes the API prefix, such as ``https://host.example/v1``.
     A request makes at most ``max_attempts`` attempts, each with an HTTPX
     timeout of at most 60 seconds. Only transport failures and designated
-    transient HTTP statuses are retried. Response bodies and endpoint URLs
-    are deliberately omitted from exception messages.
+    transient HTTP statuses are retried. Raw bodies and endpoint URLs are
+    omitted; bounded, redacted server error fields are available separately.
     """
 
     name = "openai-compatible"
@@ -184,6 +185,25 @@ class OpenAICompatibleBackend:
                     self._trace.event("http", "completed", chunk_id=request.chunk_id,
                                       attempt=attempt, status_code=response.status_code)
                 if not 200 <= response.status_code < 300:
+                    compatibility_hint = None
+                    if self.structured_output == "json_schema" and response.status_code in {400, 422}:
+                        compatibility_hint = (
+                            "The endpoint may not support response_format/json_schema or the supplied schema;"
+                            " no fallback was attempted."
+                        )
+                    diagnostic = describe_http_error(
+                        response, chunk_id=request.chunk_id, attempt=attempt,
+                        secrets=[self._api_key] if self._api_key else [],
+                        compatibility_hint=compatibility_hint,
+                    )
+                    artifact = None
+                    if self._trace is not None:
+                        artifact = f"http/{request.chunk_id}.attempt-{attempt}.error.json"
+                        self._trace.write_json(artifact, diagnostic)
+                        self._trace.describe_artifact(artifact, "http_error_details")
+                        self._trace.event("http", "error_reported", chunk_id=request.chunk_id,
+                                          attempt=attempt, status_code=response.status_code,
+                                          diagnostic_status=diagnostic["diagnostic_status"], artifact=artifact)
                     if (
                         response.status_code in _RETRYABLE_STATUS_CODES
                         and attempt < self.max_attempts
@@ -193,17 +213,12 @@ class OpenAICompatibleBackend:
                                               attempt=attempt, status_code=response.status_code)
                         self._pause(attempt)
                         continue
-                    compatibility_hint = ""
-                    if self.structured_output == "json_schema" and response.status_code in {400, 422}:
-                        compatibility_hint = (
-                            " The endpoint may not support response_format/json_schema or the supplied schema;"
-                            " no fallback was attempted."
-                        )
                     raise BackendError(
                         f"The model endpoint returned HTTP {response.status_code} "
-                        f"after {attempt} attempt(s).{compatibility_hint}",
+                        f"after {attempt} attempt(s)." + (" " + compatibility_hint if compatibility_hint else ""),
                         status_code=response.status_code,
                         attempts=attempt,
+                        http_diagnostics=diagnostic, http_details=artifact,
                     )
                 if self._trace is not None:
                     self._trace.event("model_response", "started", chunk_id=request.chunk_id)

@@ -250,7 +250,9 @@ def test_cli_auth_failure_logs_phase_and_status_without_credentials_or_http_body
     def endpoint(request):
         received.append(request)
         assert request.headers["Authorization"] == f"Bearer {secret}"
-        return httpx.Response(401, json={"error": {"message": f"{response_body_marker}: {secret}"}})
+        return httpx.Response(401, json={"error": {
+            "message": f"Invalid credentials: {secret}", "debug": response_body_marker,
+        }})
 
     def mocked_backend(**kwargs):
         return OpenAICompatibleBackend(**kwargs, transport=httpx.MockTransport(endpoint), sleep_fn=lambda _: None)
@@ -269,6 +271,7 @@ def test_cli_auth_failure_logs_phase_and_status_without_credentials_or_http_body
     assert error["error_type"] == "BackendError"
     assert error["status_code"] == 401
     assert error["attempts"] == 1
+    assert error["http_diagnostics"]["provider_error"]["message"] == "Invalid credentials: [REDACTED]"
     assert error["stage"] not in {"configuration", "output", "complete"}
     assert read_json(directory / "manifest.json")["status"] == "failed"
     captured = capsys.readouterr()
@@ -288,7 +291,7 @@ def test_http_trace_records_rate_limit_retry_without_recording_error_body(tmp_pa
     def endpoint(request):
         received.append(request)
         if len(received) == 1:
-            return httpx.Response(429, json={"error": {"message": private_body}})
+            return httpx.Response(429, json={"error": {"message": "Synthetic rate limit.", "debug": private_body}})
         return httpx.Response(200, json={
             "choices": [{"message": {"content": json.dumps({"records": [RECORD]})}, "finish_reason": "stop"}],
         })
@@ -316,6 +319,8 @@ def test_http_trace_records_rate_limit_retry_without_recording_error_body(tmp_pa
     assert payload["response_format"]["type"] == "json_schema"
     manifest = read_json(directory / "manifest.json")
     assert manifest["artifact_roles"][f"requests/{request_files[0].name}"] == "http_json_body"
+    failure = read_json(next((directory / "http").glob("*.error.json")))
+    assert failure["provider_error"]["message"] == "Synthetic rate limit."
     diagnostic_text = all_artifact_text(directory)
     assert private_body not in diagnostic_text
     assert "synthetic-retry-token" not in diagnostic_text

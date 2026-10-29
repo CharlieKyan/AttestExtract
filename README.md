@@ -2,7 +2,7 @@
 
 Schema-driven extraction from text and tables, with source-linked evidence and pluggable decision backends.
 
-**Early prototype · `0.1.0.dev3` · Python 3.11+**
+**Early prototype · `0.1.0.dev4` · Python 3.11+**
 
 AttestExtract is an independent, domain-configurable extraction core. It grew out of work on a CCUS extraction workflow, but its task schema and runtime contain no CCUS-specific rules and do not depend on LangExtract. It produces typed candidates, exact source references, and a review queue. An optional archive preserves the exact document, explicit review decisions, and accepted records. **Jev integration is planned and is not implemented.**
 
@@ -115,16 +115,21 @@ attestextract extract --env-file .env --structured-output json_schema --input sr
 | `prompts/{chunk_id}.source.txt` | The source text supplied in this chunk's prompt. |
 | `responses/{chunk_id}.txt` | Raw model response text for diagnosing parsing and extraction. |
 | `responses/{chunk_id}.meta.json` | Response metadata only: model, usage, attempts, and elapsed time. |
+| `http/{chunk_id}.attempt-{n}.error.json` | Safe HTTP failure details for one attempt, including failure layer, chunk, attempt, HTTP status, request IDs, and allowed provider error fields when available. |
 | `validation/{chunk_id}.errors.json` | Validation phase, total error count, and up to 50 safe details with field paths, codes, expected types, actual types, and messages; no rejected input values. |
 | `candidates/{chunk_id}.json` | Candidates and structural/evidence checks for the chunk. |
 | `result.json` | Final extraction result after a successful run. |
-| `error.json` | Safe failure summary, linking validation detail paths and total counts when applicable. |
+| `error.json` | Safe failure summary; `http_diagnostics` summarizes HTTP failures and `http_details` links their relative artifact paths. Validation failures retain their detail links and total counts. |
 
 New traces use `trace_schema_version: "0.2"`. Existing `0.1` log directories are not rewritten; new runs use the explicit `.request.json` and `.meta.json` names rather than the earlier ambiguous JSON names. The `.txt` response contains model text, while `.meta.json` contains its metadata.
 
 A failed run can leave earlier chunk files for diagnosis; they are not a successful partial result. Trace files can contain **the full paper text, task instructions, and model output**, even when credentials and backend details are sanitized. Store them outside this repository, as above, and do not commit or publicly share them without reviewing their contents. These are logs of the implemented extraction pipeline; Jev and Stage2.5/Stage3 decision modules are not implemented or simulated by tracing.
 
 `extract` writes JSON to its required `--output` file. With tracing enabled, key stages, completions, and retries appear on stderr in real time, alongside file-written notices and error summaries. Field-level details remain in `events.jsonl`; model responses and trace contents are not streamed to stdout. `demo` and `d1` still print JSON to stdout when `--output` is omitted. Inspect the per-chunk files for intermediate results.
+
+To investigate an HTTP failure, start with `error.json`, then follow `http_details` to the failed attempt. Read the failure layer, chunk, attempt number, HTTP status, and available request IDs alongside provider-reported `error.code`, `type`, `message`, `status`, and `param`. Application compatibility hints are separate inferences; they are not the provider's stated reason. Only allowlisted, redacted, length-bounded fields are retained, rather than complete HTTP error bodies or headers. When no usable provider reason is available, diagnostics mark `provider_detail_unavailable`; they cannot reveal the provider's internal root cause or recover information absent from an older 400-error log.
+
+Dev4 adds diagnosis only: it does not change fail-fast behavior, introduce fallback, or make extra model calls. Invalid response formats fail the run; missing, unmatched, or ambiguous field quotations continue to require review. Jev's absence does not make unsupported evidence acceptable. Real endpoints have not been tested for this update.
 
 ## Python API and task format
 

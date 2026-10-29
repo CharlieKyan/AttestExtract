@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.0.dev4
+
+- Improve HTTP failure diagnostics with allowlisted provider error fields,
+  failure layer, chunk, attempt, HTTP status, and available request IDs. Keep
+  application compatibility inferences separate from provider-reported reasons.
+- Save redacted, length-bounded details in `http/*.attempt-*.error.json` and link
+  them from `error.json` through `http_diagnostics` and `http_details`. Do not
+  retain complete HTTP error bodies or headers; mark unavailable provider
+  reasons as `provider_detail_unavailable`. Older missing details cannot be
+  recovered, and provider-internal root causes are not guaranteed to be known.
+- Preserve fail-fast parsing, evidence-review rules, and existing retry limits;
+  add no fallback or extra model calls. This update has no real-endpoint test.
+
 ## 0.1.0.dev3
 
 - Build task-aware complete synthetic prompt examples, clarify scalar constraints

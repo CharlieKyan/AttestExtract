@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "attestextract"
-version = "0.1.0.dev3"
+version = "0.1.0.dev4"
 description = "Schema-driven extraction from text and tables, with source-linked evidence and pluggable decision backends."
 readme = "README.md"
 requires-python = ">=3.11"

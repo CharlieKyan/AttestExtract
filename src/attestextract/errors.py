@@ -20,10 +20,14 @@ class BackendError(AttestExtractError):
         *,
         status_code: int | None = None,
         attempts: int = 1,
+        http_diagnostics: dict[str, Any] | None = None,
+        http_details: str | None = None,
     ) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.attempts = attempts
+        self.http_diagnostics = http_diagnostics
+        self.http_details = http_details
 
 
 class InvalidResponseError(BackendError):

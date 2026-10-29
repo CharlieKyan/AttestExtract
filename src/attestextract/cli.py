@@ -158,4 +158,6 @@ def main(argv: list[str] | None = None) -> int:
             trace.fail(exc)
         message = redact_text(str(exc), [api_key] if api_key else [])
         print(f"attestextract: {message}", file=sys.stderr)
+        if trace is not None and getattr(exc, "http_details", None):
+            print(f"HTTP diagnostics: {trace.directory / exc.http_details}", file=sys.stderr)
         return 1
