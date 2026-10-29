@@ -2,7 +2,7 @@
 
 Schema-driven extraction from text and tables, with source-linked evidence and pluggable decision backends.
 
-**Early prototype · `0.1.0.dev4` · Python 3.11+**
+**Early prototype · `0.1.0.dev5` · Python 3.11+**
 
 AttestExtract is an independent, domain-configurable extraction core. It grew out of work on a CCUS extraction workflow, but its task schema and runtime contain no CCUS-specific rules and do not depend on LangExtract. It produces typed candidates, exact source references, and a review queue. An optional archive preserves the exact document, explicit review decisions, and accepted records. **Jev integration is planned and is not implemented.**
 
@@ -69,7 +69,7 @@ attestextract extract --input src/attestextract/examples/procurement.md --task s
 
 On Bash, use `export ATTESTEXTRACT_BASE_URL=...`, `export ATTESTEXTRACT_MODEL=...`, and `export ATTESTEXTRACT_API_KEY=...`. Alternatively, load a configuration file explicitly with `--env-file`, as below. Configuration precedence is **CLI arguments → existing process environment → the explicit `.env` file**. No `.env` file is loaded automatically. `--api-key-env OTHER_VARIABLE` selects the variable containing the key; no command-line key value is accepted. A key may be omitted for a local endpoint that does not require authentication. `--timeout` accepts seconds greater than zero and at most 60, defaulting to 60 per attempt.
 
-Live extraction sends document chunks to your configured endpoint. There is no automatic fallback to demo responses. Authentication failures, invalid configuration, invalid responses, and exhausted retries fail with a nonzero exit status. Transport failures and transient HTTP statuses are retried at most three times by default; schema/response errors and authentication failures are not retried. A failed chunk fails the run rather than returning a successful partial result.
+Live extraction sends document chunks to your configured endpoint. There is no automatic fallback to demo responses. Transport failures and transient HTTP statuses are retried at most three times by default. Authentication and configuration failures stop immediately; response format errors stop by default, with an optional single format retry described below. An unrecovered chunk fails the run with a nonzero exit status; there is no partial-success or resume mode.
 
 ### Optional structured output
 
@@ -77,7 +77,15 @@ Live extraction sends document chunks to your configured endpoint. There is no a
 
 In strict mode, every declared field has a required `{ "value": ..., "quote": ... }` wrapper. The task's scalar type constrains the **inner `value`**, and `quote` remains a string. For an unreported field, return `value: null` and `quote: ""`; the existing review rules apply, and this does not create an accepted record. With structured output off, optional unreported fields may still be omitted.
 
-The provider/model must support this schema format. HTTP 400/422 failures stop the run; AttestExtract does not silently fall back to unstructured output or issue a repair retry. Normal transient-network retry rules still apply. [Wenwen's structured-output documentation](https://wenwen-ai.apifox.cn/305807074e0) shows this request format; the actual Gemini route has not been tested, so provider documentation is not a compatibility guarantee.
+The provider/model must support this schema format. HTTP 400/422 failures stop the run; AttestExtract does not silently fall back to unstructured output or issue a format retry for HTTP errors. Normal transient-network retry rules still apply. [Wenwen's structured-output documentation](https://wenwen-ai.apifox.cn/305807074e0) shows this request format; support must be checked on the actual provider/model route. Local validation remains mandatory even when the endpoint accepts the parameter.
+
+### Optional format retry
+
+Prompts require unique keys in each JSON object, the declared scalar types, and exactly one `value` and one `quote` per supplied field wrapper. A nested `fields.value.value` is valid; two `value` keys in the same object are rejected, even when their values agree. The parser also rejects non-finite numbers. Diagnostics identify `duplicate_key` and `non_finite_number` paths, masking undeclared key names; ordinary JSON syntax errors retain line and column information. Nothing is silently repaired or overwritten.
+
+`extract --format-retries 0|1` defaults to `0`. With `1`, a local JSON, record-contract, or task-schema failure allows **one new generation for that chunk** using the same source, task, and schema plus bounded validation feedback. The new response must pass structural validation and undergo the usual evidence checks. Earlier successful chunks are not rerun. The Python equivalent is `extract(text, task, backend=backend, format_retries=1)`.
+
+Enabling this option can add a paid generation per failing chunk; each generation retains the usual bounded HTTP retries. It does not retry HTTP 400/401, malformed API response envelopes, refusals, or truncated completions. Missing, unmatched, or ambiguous quotations continue to require review without a format retry. If the second format attempt fails, the run fails explicitly. This is candidate generation, not acceptance or factual verification.
 
 ### Explicit `.env` configuration and run logs
 
@@ -121,7 +129,7 @@ attestextract extract --env-file .env --structured-output json_schema --input sr
 | `result.json` | Final extraction result after a successful run. |
 | `error.json` | Safe failure summary; `http_diagnostics` summarizes HTTP failures and `http_details` links their relative artifact paths. Validation failures retain their detail links and total counts. |
 
-New traces use `trace_schema_version: "0.2"`. Existing `0.1` log directories are not rewritten; new runs use the explicit `.request.json` and `.meta.json` names rather than the earlier ambiguous JSON names. The `.txt` response contains model text, while `.meta.json` contains its metadata.
+New traces use `trace_schema_version: "0.3"`; existing log directories are not rewritten. First-attempt paths above remain unchanged. A format retry uses the stem `{chunk_id}.format-2`, for example `requests/chunk-0001.format-2.request.json`, `responses/chunk-0001.format-2.txt`, and, if rejected, `validation/chunk-0001.format-2.errors.json`. Its HTTP errors use `http/chunk-0001.format-2.attempt-{n}.error.json`. Both requests and raw responses are preserved; `.meta.json` contains metadata, not model text. Candidate chunk IDs remain unchanged. `format_retry` events record `retry`, `succeeded`, or `failed`; `format_attempt` distinguishes generation from the HTTP `attempt`. Successful run counts and usage include both rejected and recovered responses.
 
 A failed run can leave earlier chunk files for diagnosis; they are not a successful partial result. Trace files can contain **the full paper text, task instructions, and model output**, even when credentials and backend details are sanitized. Store them outside this repository, as above, and do not commit or publicly share them without reviewing their contents. These are logs of the implemented extraction pipeline; Jev and Stage2.5/Stage3 decision modules are not implemented or simulated by tracing.
 
@@ -129,7 +137,36 @@ A failed run can leave earlier chunk files for diagnosis; they are not a success
 
 To investigate an HTTP failure, start with `error.json`, then follow `http_details` to the failed attempt. Read the failure layer, chunk, attempt number, HTTP status, and available request IDs alongside provider-reported `error.code`, `type`, `message`, `status`, and `param`. Application compatibility hints are separate inferences; they are not the provider's stated reason. Only allowlisted, redacted, length-bounded fields are retained, rather than complete HTTP error bodies or headers. When no usable provider reason is available, diagnostics mark `provider_detail_unavailable`; they cannot reveal the provider's internal root cause or recover information absent from an older 400-error log.
 
-Dev4 adds diagnosis only: it does not change fail-fast behavior, introduce fallback, or make extra model calls. Invalid response formats fail the run; missing, unmatched, or ambiguous field quotations continue to require review. Jev's absence does not make unsupported evidence acceptable. Real endpoints have not been tested for this update.
+Dev5 strengthens format prompts and diagnostics and adds the explicitly enabled format retry. Its offline tests establish the retry and validation behavior, not a real model's format success rate or extraction accuracy. Jev's absence does not make unsupported evidence acceptable.
+
+### Test your own paper or excerpt
+
+Use a UTF-8 `.md` or `.txt` paper and your own task JSON outside this repository. Start with 1–3 complete paragraphs, keeping the subject, conditions, and any table header together. Preserve the source text verbatim; you can also copy an earlier run's `prompts/chunk-0001.source.txt` to a new input file without editing it. A standalone excerpt has its own document identity and offsets starting at zero; those offsets do not refer to the full paper.
+
+From the repository root, set the paths below to existing files. This makes a **real model call** using your `.env`; it is not a replay. First use `0`, then rerun the block with `1`, keeping input, task, model, and structured-output mode unchanged. Each run gets fresh output and logs.
+
+```powershell
+python -m attestextract --version
+$paper = (Resolve-Path "..\research\attestextract_runs\inputs\paper-snippet.md").Path
+$task = (Resolve-Path "..\research\attestextract_runs\tasks\paper.task.json").Path
+$formatRetries = 0  # Change to 1 for the comparison run.
+$run = "format-$formatRetries-$(Get-Date -Format 'yyyyMMdd-HHmmss-fff')"
+$root = (New-Item -ItemType Directory -Force "..\research\attestextract_runs").FullName
+$output = Join-Path $root "$run.json"
+$logs = Join-Path $root "logs\$run"
+python -m attestextract extract --env-file .env --structured-output off --format-retries $formatRetries --input "$paper" --task "$task" --output "$output" --log-dir "$logs"
+$extractExitCode = $LASTEXITCODE
+Get-Content "$logs\manifest.json" -Raw -Encoding UTF8
+$events = @(Get-Content "$logs\events.jsonl" -Encoding UTF8 | ForEach-Object { $_ | ConvertFrom-Json })
+$events | Where-Object { $_.stage -eq "format_retry" -or ($_.stage -eq "validation" -and $_.event -eq "rejected") } | Format-Table stage,event,chunk_id,format_attempt,path
+if ($extractExitCode -eq 0) {
+    $result = Get-Content "$output" -Raw -Encoding UTF8 | ConvertFrom-Json
+    $result.run | Format-List
+    $result.candidates | Select-Object candidate_id,needs_review
+}
+```
+
+Read `validation/*.errors.json` alongside the matching `responses/*.txt`. A preserved first error followed by `format_retry/succeeded` means the new response passed format validation; it does not mean the original JSON was modified. A successful whole run requires exit code `0`, manifest status `succeeded`, and the final output. Compare first-attempt format failures, recovered chunks, usage, and the actual values/quotations separately. A successful empty result is not proof of completeness. Failed runs stop early, so count only attempted chunks when comparing failure rates. Repeat a small fixed set of excerpts within your budget; one pair of runs cannot establish a reliable improvement. Comparing `0` versus `1` in dev5 measures retry behavior, not the prompt change versus dev4.
 
 ## Python API and task format
 
@@ -244,7 +281,7 @@ python -m pytest
 python -m build
 ```
 
-CI runs on Windows and Ubuntu with Python 3.11 and 3.13. Public tests use synthetic fixed responses and mocked HTTP, never paid model requests. They compare all three D1 cases to hand-written expected semantic output and check archive persistence and invalid references. CI also installs the wheel in a clean environment outside the checkout and runs both original demos and all three D1 archives. The dev3 changes were evaluated offline; any existing real run logs were replayed locally without automatically calling the model again. End-to-end model quality and provider compatibility require separate evaluation against your chosen endpoint and corpus.
+CI runs on Windows and Ubuntu with Python 3.11 and 3.13. Public tests use synthetic fixed responses and mocked HTTP, never paid model requests. They compare all three D1 cases to hand-written expected semantic output and check archive persistence and invalid references. CI also installs the wheel in a clean environment outside the checkout and runs both original demos and all three D1 archives. Format regression tests cover rejected output, bounded regeneration, preserved attempts, and subsequent evidence checks. End-to-end model quality and provider compatibility require separate evaluation against your chosen endpoint and corpus.
 
 Next steps are a Jev-style bounded decision adapter, conflict handling and support verification, and compatibility outputs for the earlier CCUS workflow. These are plans, not implemented features or performance claims. The public prototype contains only new framework code and synthetic examples; it does not include research documents, annotations, patents, original workflow outputs, or credentials.
 

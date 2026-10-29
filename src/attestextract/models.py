@@ -76,6 +76,12 @@ class ExtractionRequest(ContractModel):
     messages: list[dict[str, str]]
     chunk_id: str
     output_schema: dict[str, Any] | None = None
+    format_attempt: int = Field(default=1, ge=1, le=2)
+
+    @property
+    def artifact_stem(self) -> str:
+        """Keep the first response's paths stable and preserve regeneration logs."""
+        return self.chunk_id if self.format_attempt == 1 else f"{self.chunk_id}.format-{self.format_attempt}"
 
 
 class BackendResponse(ContractModel):
@@ -148,7 +154,7 @@ class RunInfo(ContractModel):
 
 class ExtractionResult(ContractModel):
     schema_version: Literal["0.1"] = "0.1"
-    package_version: str = "0.1.0.dev4"
+    package_version: str = "0.1.0.dev5"
     task: TaskSpec
     source: SourceInfo
     candidates: list[Candidate]

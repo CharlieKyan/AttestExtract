@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.1.0.dev5
+
+- Explicitly instruct unique object keys and standard JSON in extraction prompts.
+  Report duplicate-key paths and occurrence counts, non-finite numbers (including
+  overflow), and excessive nesting without silently discarding repeated values.
+- Add opt-in `extract(..., format_retries=1)` / `--format-retries 1`: regenerate
+  only a locally invalid chunk once, with unchanged source/task/schema and bounded
+  structural feedback. The default remains zero; enabling this can add paid calls.
+  HTTP errors, refusals, truncation and evidence-review items do not trigger it.
+- Introduce trace schema `0.3` and request `format_attempt` (default 1). First
+  artifact paths remain unchanged; regeneration uses `.format-2` paths and retry
+  events, preserving both raw responses. Successful-run usage and request counts
+  include rejected and regenerated completions. Result schema remains `0.1`.
+- Preserve strict task JSON, evidence checks and whole-run failure on exhausted
+  format retries. No automatic value selection, partial success or fact acceptance
+  is introduced. Verification uses synthetic replay and mock HTTP, not a live model.
+
 ## 0.1.0.dev4
 
 - Improve HTTP failure diagnostics with allowlisted provider error fields,

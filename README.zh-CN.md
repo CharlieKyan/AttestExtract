@@ -2,7 +2,7 @@
 
 按任务模式从正文和表格抽取候选数据，保留原文证据，并预留可替换的决策后端。
 
-**早期原型 · `0.1.0.dev4` · Python 3.11+**
+**早期原型 · `0.1.0.dev5` · Python 3.11+**
 
 本项目从 CCUS 抽取工作流的经验出发，独立实现通用小内核，不依赖 LangExtract，也不导入原有 CCUS 工程。当前实现字段验证、候选保留、原文位置回溯和复核清单；可另行保存包含精确原文、显式审阅决定和接受记录的档案。**Jev 尚未接入**；当前检查不能证明抽取结果在语义上得到原文支持或事实正确。
 
@@ -65,7 +65,7 @@ attestextract extract --input src/attestextract/examples/procurement.md --task s
 
 也可以使用下面的 `--env-file` 显式加载配置文件。配置优先级为 **命令行参数 → 当前进程已有环境变量 → 显式指定的 `.env` 文件**，程序不会自动搜索或加载 `.env`。`--api-key-env` 可指定保存密钥的变量名，不接受命令行密钥值。无需认证的本地端点可以不设置密钥。`--timeout` 为每次请求超时，默认 60 秒，范围为大于 0 且不超过 60 秒。
 
-网络传输失败和暂时性 HTTP 错误默认最多尝试三次；鉴权、配置及格式错误明确失败，不伪装成“未抽到数据”，也不自动退回演示。任一分块失败会使整个运行失败，避免把部分输出当作完整成功结果。
+网络传输失败和暂时性 HTTP 错误默认最多尝试三次；鉴权和配置错误直接失败。响应格式错误默认失败，也可明确开启下面的一次格式重试。程序不伪装成“未抽到数据”，也不自动退回演示。任一分块最终未恢复会使整个运行以非零退出码失败；尚无部分成功或断点续跑模式。
 
 ### 可选的结构化输出
 
@@ -73,7 +73,15 @@ attestextract extract --input src/attestextract/examples/procurement.md --task s
 
 严格模式要求每个已声明字段都带 `{ "value": ..., "quote": ... }` 包装；任务中的标量类型限制的是内部 **`value`**，`quote` 始终是字符串。未报告的字段返回 `value: null`、`quote: ""`，按既有规则进入复核，不会自动接受。关闭结构化输出时，可继续省略未报告的可选字段。
 
-模型服务需支持相应格式。HTTP 400／422 会明确失败，不自动降级为非结构化请求，也不发起修复重试；网络及暂时性 HTTP 错误仍使用原有有限重试。[Wenwen 官方结构化说明](https://wenwen-ai.apifox.cn/305807074e0) 给出了这类请求格式，但实际 Gemini 渠道尚未实测，不能据此保证兼容。
+模型服务需支持相应格式。HTTP 400／422 会明确失败，不自动降级为非结构化请求，也不触发格式重试；网络及暂时性 HTTP 错误仍使用原有有限重试。[Wenwen 官方结构化说明](https://wenwen-ai.apifox.cn/305807074e0) 给出了这类请求格式，但需针对实际模型渠道确认兼容性。即使端点接受参数，仍保留全部本地校验。
+
+### 可选的一次格式重试
+
+提示明确要求每个 JSON 对象的键名唯一、标量类型符合任务，以及每个已提供字段只包含一次 `value` 和一次 `quote`。`fields.value.value` 是合法的不同层级嵌套；同一对象内写两次 `value` 会被拒绝，即使值相同。解析器也拒绝非有限数值。日志分别用 `duplicate_key`、`non_finite_number` 标明错误路径，未声明的键名会隐藏；普通 JSON 语法错误保留行列位置。程序不会静默清理重复键或覆盖值。
+
+`extract --format-retries 0|1` 默认 `0`。设为 `1` 后，本地 JSON、记录结构或任务字段类型校验失败时，允许**只对失败分块重新生成一次**：原文、任务和输出模式不变，追加有长度限制的错误反馈。新响应仍要经过完整结构和证据检查；此前成功分块不重跑。Python 写法为 `extract(text, task, backend=backend, format_retries=1)`。
+
+开启后每个失败分块可能增加一次付费生成，每次生成仍沿用原有有限 HTTP 重试。HTTP 400／401、接口响应外层结构错误、拒答及被截断的输出不触发格式重试。引文缺失、找不到或多义仍进入复核，也不触发格式重试。第二次格式尝试仍失败就明确终止；生成候选不等于接受结果或事实核验。
 
 ### 显式加载 `.env` 并保存运行日志
 
@@ -117,7 +125,7 @@ attestextract extract --env-file .env --structured-output json_schema --input sr
 | `result.json` | 运行成功后的完整抽取结果。 |
 | `error.json` | 运行失败后的安全摘要；`http_diagnostics` 汇总 HTTP 失败，`http_details` 关联其相对路径。格式验证失败继续关联验证详情及错误总数。 |
 
-新版日志使用 `trace_schema_version: "0.2"`，不修改已有 `0.1` 日志。新运行改用明确的 `.request.json`、`.meta.json` 文件名，不再生成旧版含义模糊的同名 JSON；模型原文在 `.txt`，元信息在 `.meta.json`。
+新版日志使用 `trace_schema_version: "0.3"`，不修改已有日志。首次尝试保留上表文件名；格式重试使用 `{chunk_id}.format-2`，例如 `requests/chunk-0001.format-2.request.json`、`responses/chunk-0001.format-2.txt`，以及被拒绝时的 `validation/chunk-0001.format-2.errors.json`。其 HTTP 错误路径为 `http/chunk-0001.format-2.attempt-{n}.error.json`。两次请求和原始响应分别保存，`.meta.json` 只包含元信息；候选的分块 ID 不变。`format_retry` 事件记录 `retry`、`succeeded` 或 `failed`，`format_attempt` 表示生成次数，与 HTTP `attempt` 区分。成功结果的响应数、请求尝试数和用量包含被拒绝及恢复后的响应。
 
 失败运行可能留下此前已处理分块的文件，供排查使用，不代表部分结果已成功。即使已去除凭据和后端敏感信息，日志仍可能包含**整篇论文、任务说明和模型输出**。请像上述示例一样放在仓库之外，不提交到 GitHub；对外分享前先检查内容。日志只对应当前已实现的抽取流程，尚未实现或模拟 Jev、Stage2.5／Stage3 决策模块。
 
@@ -125,7 +133,36 @@ attestextract extract --env-file .env --structured-output json_schema --input sr
 
 排查 HTTP 错误时，先读 `error.json`，再沿 `http_details` 找到对应尝试，结合出错层、分块、尝试次数、HTTP 状态和可取得的请求 ID，查看服务商返回的 `error.code`、`type`、`message`、`status`、`param`。应用侧的兼容性提示是单独推测，不能当作服务商明确给出的原因。日志仅保留字段白名单，并做脱敏和限长，不保存完整 HTTP 错误体或响应头。没有可用原因时标为 `provider_detail_unavailable`；这些信息不能保证揭示服务商内部根因，也不能回补旧版 400 错误日志中未保存的内容。
 
-Dev4 只增强诊断，保留默认遇错即失败的行为，不自动降级或增加模型调用。响应格式错误使整轮失败；字段引文缺失、找不到或多义仍进入复核，未接入 Jev 也不意味着可以接受不存在的证据。本次未实测真实端点。
+Dev5 加强格式提示和错误定位，并提供明确开启的格式重试。离线测试只能证明这些机制按约定工作，不能证明真实模型的格式合格率或抽取准确率。未接入 Jev 也不意味着可以接受不存在的证据。
+
+### 用真实文章或片段对照测试
+
+可以使用仓库之外的 UTF-8 `.md`／`.txt` 文章及自己的任务 JSON。建议先选 1–3 个完整段落，保留主体、条件和相关表头，不改写原文。也可以把旧运行的 `prompts/chunk-0001.source.txt` 原样复制到新的输入文件。片段作为独立文档时有新的文档标识，证据位置从片段开头计数，不能直接当作全文偏移。
+
+从工程根目录执行，将下列路径换成实际存在的文件。命令会使用 `.env` **调用真实模型并产生相应用量**，不是回放。先设置 `0`，再将其改成 `1` 重新执行，保持输入、任务、模型和结构化模式相同；每次自动使用新的结果和日志路径。
+
+```powershell
+python -m attestextract --version
+$paper = (Resolve-Path "..\research\attestextract_runs\inputs\paper-snippet.md").Path
+$task = (Resolve-Path "..\research\attestextract_runs\tasks\paper.task.json").Path
+$formatRetries = 0  # 对照运行时改成 1。
+$run = "format-$formatRetries-$(Get-Date -Format 'yyyyMMdd-HHmmss-fff')"
+$root = (New-Item -ItemType Directory -Force "..\research\attestextract_runs").FullName
+$output = Join-Path $root "$run.json"
+$logs = Join-Path $root "logs\$run"
+python -m attestextract extract --env-file .env --structured-output off --format-retries $formatRetries --input "$paper" --task "$task" --output "$output" --log-dir "$logs"
+$extractExitCode = $LASTEXITCODE
+Get-Content "$logs\manifest.json" -Raw -Encoding UTF8
+$events = @(Get-Content "$logs\events.jsonl" -Encoding UTF8 | ForEach-Object { $_ | ConvertFrom-Json })
+$events | Where-Object { $_.stage -eq "format_retry" -or ($_.stage -eq "validation" -and $_.event -eq "rejected") } | Format-Table stage,event,chunk_id,format_attempt,path
+if ($extractExitCode -eq 0) {
+    $result = Get-Content "$output" -Raw -Encoding UTF8 | ConvertFrom-Json
+    $result.run | Format-List
+    $result.candidates | Select-Object candidate_id,needs_review
+}
+```
+
+结合 `validation/*.errors.json` 和对应的 `responses/*.txt` 定位错误。首次错误保留、随后出现 `format_retry/succeeded`，表示新响应通过格式校验，不表示原始 JSON 被修改。整轮成功需同时满足退出码 `0`、清单状态 `succeeded`、生成最终文件。分别比较首次格式失败、重试恢复分块、用量，以及字段值和引文质量；空结果成功也不能证明没有漏抽。失败运行会提前结束，比较失败率时分母只能计算实际尝试的分块。可在预算内对固定的小组片段重复测试，一对运行不能证明稳定提升。dev5 内的 `0` 对比 `1` 用来观察重试效果，不能单独衡量相对 dev4 的提示词改进。
 
 ## 任务、证据和扩展接口
 
@@ -189,7 +226,7 @@ python -m pytest
 python -m build
 ```
 
-CI 在 Windows／Ubuntu、Python 3.11／3.13 下运行，公共测试仅使用合成固定响应和模拟 HTTP，不调用付费模型；测试逐字段对比三类手工预期答案，并验证档案保存、重读和错误引用。另外在源码目录外的新环境安装 wheel，运行两个原有示例和三类 D1 档案。本次 dev3 先进行离线验收，已有真实日志只在本地回放，不自动再次调用真实模型。真实端点兼容性与抽取效果需针对所用模型和数据单独评估。
+CI 在 Windows／Ubuntu、Python 3.11／3.13 下运行，公共测试仅使用合成固定响应和模拟 HTTP，不调用付费模型；测试逐字段对比三类手工预期答案，并验证档案保存、重读和错误引用。另外在源码目录外的新环境安装 wheel，运行两个原有示例和三类 D1 档案。格式回归测试覆盖非法输出、有限重新生成、保留各次尝试和后续证据检查。真实端点兼容性与抽取效果需针对所用模型和数据单独评估。
 
 后续优先接入 Jev 类决策模型，再增加冲突判别、支持性核验和旧 CCUS 格式兼容。首版尚不替代旧工作流完整的 Stage2.5／Stage3，也不承诺零幻觉或模型效果。
 

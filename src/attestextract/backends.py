@@ -135,8 +135,9 @@ class OpenAICompatibleBackend:
 
     def generate(self, request: ExtractionRequest) -> BackendResponse:
         payload = self.prepare_payload(request)
+        context = {"chunk_id": request.chunk_id, "format_attempt": request.format_attempt}
         if self._trace is not None:
-            self._trace.write_json(f"requests/{request.chunk_id}.request.json", payload)
+            self._trace.write_json(f"requests/{request.artifact_stem}.request.json", payload)
         headers = {"Accept": "application/json"}
         if self._api_key is not None:
             headers["Authorization"] = f"Bearer {self._api_key}"
@@ -148,7 +149,7 @@ class OpenAICompatibleBackend:
         ) as client:
             for attempt in range(1, self.max_attempts + 1):
                 if self._trace is not None:
-                    self._trace.event("http", "started", chunk_id=request.chunk_id, attempt=attempt)
+                    self._trace.event("http", "started", **context, attempt=attempt)
                 try:
                     response = client.post(
                         self.base_url + "/chat/completions",
@@ -162,7 +163,7 @@ class OpenAICompatibleBackend:
                             attempts=attempt,
                         ) from None
                     if self._trace is not None:
-                        self._trace.event("http", "retry", chunk_id=request.chunk_id, attempt=attempt, reason="timeout")
+                        self._trace.event("http", "retry", **context, attempt=attempt, reason="timeout")
                     self._pause(attempt)
                     continue
                 except httpx.TransportError:
@@ -172,7 +173,7 @@ class OpenAICompatibleBackend:
                             attempts=attempt,
                         ) from None
                     if self._trace is not None:
-                        self._trace.event("http", "retry", chunk_id=request.chunk_id, attempt=attempt, reason="transport")
+                        self._trace.event("http", "retry", **context, attempt=attempt, reason="transport")
                     self._pause(attempt)
                     continue
                 except httpx.DecodingError:
@@ -182,7 +183,7 @@ class OpenAICompatibleBackend:
                     ) from None
 
                 if self._trace is not None:
-                    self._trace.event("http", "completed", chunk_id=request.chunk_id,
+                    self._trace.event("http", "completed", **context,
                                       attempt=attempt, status_code=response.status_code)
                 if not 200 <= response.status_code < 300:
                     compatibility_hint = None
@@ -196,12 +197,13 @@ class OpenAICompatibleBackend:
                         secrets=[self._api_key] if self._api_key else [],
                         compatibility_hint=compatibility_hint,
                     )
+                    diagnostic["format_attempt"] = request.format_attempt
                     artifact = None
                     if self._trace is not None:
-                        artifact = f"http/{request.chunk_id}.attempt-{attempt}.error.json"
+                        artifact = f"http/{request.artifact_stem}.attempt-{attempt}.error.json"
                         self._trace.write_json(artifact, diagnostic)
                         self._trace.describe_artifact(artifact, "http_error_details")
-                        self._trace.event("http", "error_reported", chunk_id=request.chunk_id,
+                        self._trace.event("http", "error_reported", **context,
                                           attempt=attempt, status_code=response.status_code,
                                           diagnostic_status=diagnostic["diagnostic_status"], artifact=artifact)
                     if (
@@ -209,7 +211,7 @@ class OpenAICompatibleBackend:
                         and attempt < self.max_attempts
                     ):
                         if self._trace is not None:
-                            self._trace.event("http", "retry", chunk_id=request.chunk_id,
+                            self._trace.event("http", "retry", **context,
                                               attempt=attempt, status_code=response.status_code)
                         self._pause(attempt)
                         continue
@@ -221,8 +223,9 @@ class OpenAICompatibleBackend:
                         http_diagnostics=diagnostic, http_details=artifact,
                     )
                 if self._trace is not None:
-                    self._trace.event("model_response", "started", chunk_id=request.chunk_id)
-                return self._parse_response(response, attempt, started, chunk_id=request.chunk_id)
+                    self._trace.event("model_response", "started", **context)
+                return self._parse_response(response, attempt, started, **context,
+                                            artifact_stem=request.artifact_stem)
 
         raise BackendError("The model request did not complete.")  # pragma: no cover
 
@@ -231,7 +234,8 @@ class OpenAICompatibleBackend:
 
     def _parse_response(
         self, response: httpx.Response, attempt: int, started: float,
-        *, chunk_id: str | None = None,
+        *, chunk_id: str | None = None, format_attempt: int = 1,
+        artifact_stem: str | None = None,
     ) -> BackendResponse:
         try:
             payload = response.json()
@@ -260,11 +264,12 @@ class OpenAICompatibleBackend:
         if self._trace is not None and chunk_id is not None and isinstance(diagnostic_message, dict):
             diagnostic_content = diagnostic_message.get("content")
             if isinstance(diagnostic_content, str):
-                self._trace.write_text(f"responses/{chunk_id}.txt", diagnostic_content)
+                self._trace.write_text(f"responses/{artifact_stem or chunk_id}.txt", diagnostic_content)
         finish_reason = choice.get("finish_reason")
         if self._trace is not None:
             self._trace.event(
                 "model_response", "completion_status", chunk_id=chunk_id,
+                format_attempt=format_attempt,
                 finish_reason=finish_reason if isinstance(finish_reason, str) else None,
             )
         if finish_reason is not None and finish_reason != "stop":

@@ -95,7 +95,10 @@ def build_messages(task: TaskSpec, chunk: DocumentChunk) -> list[dict[str, str]]
         "one key, records, whose value is a list. Each record has record_type and fields. "
         "Use only declared record types and fields. Every supplied field must be an object "
         "with exactly two keys: value and quote. The field's declared scalar type applies to "
-        "the inner value, never to the wrapper object. A field named value still requires "
+        "the inner value. Each key may occur only once within the same object, even when "
+        "the repeated values would be identical. Reusing a key in a different object is allowed. "
+        "Use standard JSON: no comments, trailing commas, NaN, or Infinity; numbers must be finite. "
+        "The scalar type never applies to the wrapper object. A field named value still requires "
         "fields.value.value for its scalar and fields.value.quote for its evidence. "
         'For example, a numeric field named value is {"fields":{"value":{"value":12.5,"quote":"12.5"}}}. '
         "Never return a bare scalar, bare string, or bare null in place of a field wrapper. "

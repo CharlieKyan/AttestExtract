@@ -48,7 +48,7 @@ class RunTrace:
         self._progress = progress
         self.stage = "configuration"
         self._manifest: dict[str, Any] = {
-            "trace_schema_version": "0.2", "status": "running",
+            "trace_schema_version": "0.3", "status": "running",
             "package_version": __version__,
             "started_at": _now(), "artifacts": [], "artifact_roles": {},
             "notice": "Contains source text and model output; not fact verification.",
@@ -110,7 +110,7 @@ class RunTrace:
             stream.write(json.dumps(payload, ensure_ascii=False, allow_nan=False) + "\n")
         if self._progress is not None and event in {"started", "completed", "failed", "retry", "succeeded", "rejected"}:
             suffix = " ".join(
-                f"{key}={payload[key]}" for key in ("chunk_id", "attempt", "status_code", "candidate_count", "review_count", "error_count", "path")
+                f"{key}={payload[key]}" for key in ("chunk_id", "format_attempt", "attempt", "status_code", "candidate_count", "review_count", "error_count", "path")
                 if key in payload
             )
             self._progress(f"[{stage}] {event}" + (f" {suffix}" if suffix else ""))

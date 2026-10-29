@@ -50,6 +50,10 @@ def _parser() -> argparse.ArgumentParser:
         "--structured-output", choices=("off", "json_schema"), default="off",
         help="Opt in to a provider's strict JSON Schema response format (default: off)",
     )
+    live.add_argument(
+        "--format-retries", type=int, choices=(0, 1), default=0,
+        help="Regenerate a chunk once after a local output-format failure; adds model calls (default: 0)",
+    )
     return parser
 
 
@@ -142,9 +146,11 @@ def main(argv: list[str] | None = None) -> int:
                 "max_attempts": 3, "api_key_configured": bool(api_key),
                 "env_file_used": args.env_file is not None,
                 "structured_output": args.structured_output,
+                "format_retries": args.format_retries,
             })
             trace.event("configuration", "completed")
-        result = extract(text, task, backend=backend, source_name=args.input.name, trace=trace)
+        result = extract(text, task, backend=backend, source_name=args.input.name, trace=trace,
+                         format_retries=args.format_retries)
         if trace is not None:
             trace.event("output", "started")
         payload = result.model_dump(mode="json")

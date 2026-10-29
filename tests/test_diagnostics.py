@@ -52,7 +52,7 @@ def test_offline_trace_keeps_all_pipeline_artifacts_and_original_unicode_offsets
     assert result.source.sha256 == hashlib.sha256(TEXT.encode("utf-8")).hexdigest()
 
     manifest = read_json(directory / "manifest.json")
-    assert manifest["trace_schema_version"] == "0.2"
+    assert manifest["trace_schema_version"] == "0.3"
     assert manifest["status"] == "succeeded"
     assert read_json(directory / "result.json") == result.model_dump(mode="json")
     assert read_json(directory / "document.json")["text"] == TEXT
@@ -68,7 +68,7 @@ def test_offline_trace_keeps_all_pipeline_artifacts_and_original_unicode_offsets
     assert chunk["text"] == TEXT
     request = read_json(directory / "requests" / f"{chunk_id}.request.json")
     assert json.loads(request["messages"][-1]["content"])["source"] == TEXT
-    assert set(request) == {"messages", "chunk_id", "output_schema"}
+    assert set(request) == {"messages", "chunk_id", "output_schema", "format_attempt"}
     assert manifest["artifact_roles"][f"requests/{chunk_id}.request.json"] == "extraction_request"
     assert any(item.get("kind") == "extraction_request" for item in events(directory))
     assert read_json(directory / "responses" / f"{chunk_id}.meta.json")["attempts"] == 1

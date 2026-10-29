@@ -130,6 +130,10 @@ def test_messages_keep_actual_ocr_latex_text_separate_from_synthetic_guidance(ta
     assert '{"value":null,"quote":""}' in instructions
     assert "bare null" in instructions
     assert "OCR" in instructions and "LaTeX" in instructions and "all spaces" in instructions
+    assert "Each key may occur only once within the same object" in instructions
+    assert "even when the repeated values would be identical" in instructions
+    assert "Reusing a key in a different object is allowed" in instructions
+    assert "no comments, trailing commas, NaN, or Infinity" in instructions
 
 
 def test_examples_and_schemas_do_not_share_mutable_state(task):
