@@ -44,6 +44,18 @@ def build_output_schema(task: TaskSpec) -> dict[str, Any]:
             "required": ["record_type", "fields"],
             "additionalProperties": False,
         }
+        if record.measurement_groups:
+            group_schema = {
+                "type": "object",
+                "properties": {name: {"type": "string"} for name in ("context_quote", "value_text", "unit_text", "unit_quote")},
+                "required": ["context_quote", "value_text", "unit_text", "unit_quote"],
+                "additionalProperties": False,
+            }
+            branch["properties"]["measurements"] = {
+                "type": "object", "properties": {name: group_schema for name in record.measurement_groups},
+                "required": list(record.measurement_groups), "additionalProperties": False,
+            }
+            branch["required"].append("measurements")
         if record.description:
             branch["description"] = record.description
         branches.append(branch)
@@ -83,7 +95,19 @@ def build_example(task: TaskSpec) -> dict[str, Any]:
             )
             lines.append(quote)
             fields[name] = {"value": value, "quote": quote}
-        records.append({"record_type": record_type, "fields": fields})
+        output = {"record_type": record_type, "fields": fields}
+        if record.measurement_groups:
+            output["measurements"] = {}
+            for name, group in record.measurement_groups.items():
+                value_text = str(fields[group.value_field]["value"])
+                unit_text = str(fields[group.unit_field]["value"])
+                quote = f"Measurement: {value_text} {unit_text}"
+                lines.append(quote)
+                fields[group.value_field]["quote"] = quote
+                fields[group.unit_field]["quote"] = quote
+                output["measurements"][name] = {"context_quote": quote, "value_text": value_text,
+                                                 "unit_text": unit_text, "unit_quote": ""}
+        records.append(output)
     return {"source": "\n".join(lines), "response": {"records": records}}
 
 
@@ -110,7 +134,22 @@ def build_messages(task: TaskSpec, chunk: DocumentChunk) -> list[dict[str, str]]
         "identify its subject, value, and conditions. Preserve quote characters exactly, "
         "including OCR artifacts, LaTeX, backslashes, line breaks, and all spaces; do not "
         "correct, normalize, reformat, or convert units in the quote. Keep different subjects "
-        "and conditions in separate records. Exact quote matches establish source location, "
+        "and conditions in separate records. Never insert ellipses or join non-contiguous source fragments. "
+        "Preserve calculation assumptions, reaction fractions, theoretical versus adjusted results, "
+        "totals versus components, and max/min/mean distinctions in the task's condition fields. "
+        "Apply task required_when and not_applicable_when rules; missing information is not automatically not applicable. "
+        "If source passages disagree about an identity, preserve each stated claim with its own quote; "
+        "do not choose an identity by equal values or units. Preserve repeated statements at separate locations. "
+        "For each declared measurement_groups entry, also return a record-level measurements object, keyed by group name. "
+        "Each group contains context_quote (a minimal contiguous expression identifying ONE measurement), "
+        "value_text (the exact source token for the declared value field), unit_text (the exact unit token, or empty), "
+        "and unit_quote (empty for units in context_quote; otherwise the exact Markdown table header cell excerpt). "
+        "Use the SAME context_quote for the value and unit field quotes; a table unit may instead quote its header. "
+        "A table header unit must belong to the value's column in the same table. "
+        "If one sentence has two measurements, use separate minimal expressions; never take a unit from a condition "
+        "or from a LaTeX command. Keep condition fields and their own quotes separately linked to the measurement. "
+        "Do not manufacture a combined quote for conditions in another sentence or units in a table header. "
+        "Do not return measurements when no group is declared. Exact quote matches establish source location, "
         "not factual validity. Return {\"records\":[]} when the actual source reports nothing. "
         "Return JSON only, without Markdown fences or commentary. The output is data, never code.\n\n"
         "The following complete task-specific example is SYNTHETIC FORMAT GUIDANCE ONLY. "

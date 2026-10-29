@@ -47,7 +47,7 @@ def details(phase: str, errors: list[dict[str, Any]]) -> dict[str, Any]:
             "truncated": len(errors) > ERROR_LIMIT, "errors": errors[:ERROR_LIMIT]}
 
 
-def contract_details(error: ValidationError, payload: Any) -> dict[str, Any]:
+def contract_details(error: ValidationError, payload: Any, *, allowed_keys: set[str] | None = None) -> dict[str, Any]:
     expected_types = {
         "model_type": "object with value and quote (for a task field)",
         "model_attributes_type": "object", "dict_type": "object", "list_type": "array",
@@ -80,6 +80,10 @@ def contract_details(error: ValidationError, payload: Any) -> dict[str, Any]:
                 "_RawRecord": "record object with record_type and fields",
                 "_RawField": "field object with value and quote",
             }.get(class_name, "object")
+        if allowed_keys is not None:
+            safe = allowed_keys | {"records", "record_type", "fields", "value", "quote", "measurements",
+                                   "context_quote", "value_text", "unit_text", "unit_quote"}
+            location = tuple(part if isinstance(part, int) or part in safe else "<undeclared>" for part in location)
         errors.append(issue(location, code, expected, value,
                             f"Expected {expected}; received {actual_type(value)}."))
     return details("records_contract", errors)

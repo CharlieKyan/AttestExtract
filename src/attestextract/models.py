@@ -21,6 +21,14 @@ class FieldSpec(ContractModel):
     type: Literal["string", "integer", "number", "boolean"]
     description: str = ""
     required: bool = False
+    required_when: dict[str, list[Scalar]] = Field(default_factory=dict)
+    not_applicable_when: dict[str, list[Scalar]] = Field(default_factory=dict)
+
+
+class MeasurementSpec(ContractModel):
+    value_field: str
+    unit_field: str
+    condition_fields: list[str] = Field(default_factory=list)
 
 
 class RecordSpec(ContractModel):
@@ -28,16 +36,33 @@ class RecordSpec(ContractModel):
     fields: dict[str, FieldSpec] = Field(min_length=1)
     identity_fields: list[str] = Field(default_factory=list)
     condition_fields: list[str] = Field(default_factory=list)
+    measurement_groups: dict[str, MeasurementSpec] = Field(default_factory=dict)
+    comparison_fields: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def check_field_names(self) -> RecordSpec:
         if any(not name.strip() for name in self.fields):
             raise ValueError("Field names must not be blank")
-        for names in (self.identity_fields, self.condition_fields):
+        for names in (self.identity_fields, self.condition_fields, self.comparison_fields):
             if len(names) != len(set(names)):
                 raise ValueError("Identity and condition fields must not contain duplicates")
             if set(names) - self.fields.keys():
                 raise ValueError("Identity and condition fields must reference declared fields")
+        for name, field in self.fields.items():
+            for rule in (field.required_when, field.not_applicable_when):
+                if set(rule) - self.fields.keys() or name in rule or any(not values for values in rule.values()):
+                    raise ValueError("Field applicability rules need other declared fields and nonempty value lists")
+                for reference, values in rule.items():
+                    types = {"string": (str,), "integer": (int,), "number": (int, float), "boolean": (bool,)}
+                    if any(type(value) not in types[self.fields[reference].type]
+                           or (isinstance(value, str) and not value.strip()) for value in values):
+                        raise ValueError("Applicability predicates must be nonempty values of the referenced field type")
+        if self.comparison_fields and not self.identity_fields:
+            raise ValueError("Candidate associations require declared identity fields")
+        for name, group in self.measurement_groups.items():
+            references = [group.value_field, group.unit_field, *group.condition_fields]
+            if not name.strip() or len(references) != len(set(references)) or set(references) - self.fields.keys():
+                raise ValueError("Measurement groups need distinct declared value, unit and condition fields")
         return self
 
 
@@ -111,6 +136,24 @@ class FieldValue(ContractModel):
     evidence: EvidenceRef
 
 
+class MeasurementInput(ContractModel):
+    context_quote: str
+    value_text: str
+    unit_text: str = ""
+    unit_quote: str = ""
+
+
+class MeasurementEvidence(ContractModel):
+    context: EvidenceRef
+    value: EvidenceRef
+    unit: EvidenceRef
+    unit_context: EvidenceRef | None = None
+    unit_source: Literal["context", "table_header"]
+    condition_fields: list[str]
+    issues: list[str] = Field(default_factory=list)
+    semantic_status: Literal["not_verified"] = "not_verified"
+
+
 class CheckResult(ContractModel):
     code: str
     passed: bool
@@ -124,6 +167,8 @@ class Candidate(ContractModel):
     chunk_ids: list[str]
     checks: list[CheckResult]
     needs_review: bool
+    field_status: dict[str, Literal["reported", "not_reported", "not_applicable", "required_missing"]] = Field(default_factory=dict)
+    measurements: dict[str, MeasurementEvidence] = Field(default_factory=dict)
 
 
 class ReviewItem(ContractModel):
@@ -131,6 +176,15 @@ class ReviewItem(ContractModel):
     code: str
     field: str | None = None
     message: str
+    severity: Literal["review", "info"] = "review"
+
+
+class CandidateLink(ContractModel):
+    kind: Literal["possible_repeat", "possible_conflict", "insufficient_context"]
+    candidate_ids: list[str]
+    compared_fields: list[str]
+    differing_fields: list[str] = Field(default_factory=list)
+    unresolved_fields: list[str] = Field(default_factory=list)
 
 
 class SourceInfo(ContractModel):
@@ -153,10 +207,11 @@ class RunInfo(ContractModel):
 
 
 class ExtractionResult(ContractModel):
-    schema_version: Literal["0.1"] = "0.1"
-    package_version: str = "0.1.0.dev6"
+    schema_version: Literal["0.1", "0.2"] = "0.2"
+    package_version: str = "0.1.0.dev7"
     task: TaskSpec
     source: SourceInfo
     candidates: list[Candidate]
     review: list[ReviewItem]
+    links: list[CandidateLink] = Field(default_factory=list)
     run: RunInfo

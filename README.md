@@ -2,7 +2,12 @@
 
 Schema-driven extraction from text and tables, with source-linked evidence and pluggable decision backends.
 
-**Early prototype · `0.1.0.dev6` · Python 3.11+**
+**Early prototype · `0.1.0.dev7` · Python 3.11+**
+
+dev7 adds task-declared measurement evidence groups, conditional missingness rules,
+possible candidate associations, literal math evidence in review reports, and separate
+observed JSON Schema diagnostics. See [measurement review and evaluation](docs/MEASUREMENT_REVIEW.md)
+and [JSON Schema troubleshooting](docs/SCHEMA_DIAGNOSTICS.md). Jev and semantic adjudication remain unimplemented.
 
 AttestExtract is an independent, domain-configurable extraction core. It grew out of work on a CCUS extraction workflow, but its task schema and runtime contain no CCUS-specific rules and do not depend on LangExtract. It produces typed candidates, exact source references, and a review queue. An optional archive preserves the exact document, explicit review decisions, and accepted records. **Jev integration is planned and is not implemented.**
 
@@ -231,7 +236,7 @@ Types are `string`, `integer`, `number`, and `boolean`; booleans do not count as
 {"records": [{"record_type": "measurement", "fields": {"subject": {"value": "Sample A", "quote": "Sample A measured 12 bar at 20 °C."}, "value": {"value": 12, "quote": "Sample A measured 12 bar at 20 °C."}, "condition": {"value": "20 °C", "quote": "Sample A measured 12 bar at 20 °C."}}}]}
 ```
 
-Only declared record types and fields are accepted. Invalid JSON, unknown fields, and wrong scalar types fail explicitly. Missing/null required, identity, or condition fields enter the review queue. Optional null values and empty records also require review. Outside strict structured mode, omitting an optional field is allowed.
+Only declared record types and fields are accepted. Invalid JSON, unknown fields, and wrong scalar types fail explicitly. Missing/null/blank required, identity, or condition fields enter the review queue. Optional missing values produce informational items; empty records still require review. Outside strict structured mode, omitting an optional field is allowed. `not_applicable_when` classifies missing values only; an explicitly reported unit such as `%` remains reported even for a dimensionless parameter.
 
 Evidence quotes must preserve the input **verbatim**, including OCR errors, spaces, Unicode symbols, and LaTeX notation. Do not replace a source expression such as `$10^{-3}$` with `0.001` inside `quote`, or silently fix OCR text. A typed field value can represent the reported scalar, but its quotation must remain the exact source substring. JSON string escaping is still required, for example `\\` for a literal LaTeX backslash.
 
@@ -287,8 +292,8 @@ If no explicit review is supplied, candidates become `unreviewed`, or `needs_rev
 
 - Input is a UTF-8 `.txt` or `.md` document. Paragraphs and simple pipe tables are chunked, preserving original source segments; later table batches repeat their original headers. The default target is 6,000 characters and at most 12 rows per table batch. A header or row is atomic and may exceed the character target. Convert PDFs externally with a tool such as MinerU before extraction.
 - Each candidate retains field values, quoted evidence, a stable ID, chunk IDs, and structural/evidence checks. Conditions remain ordinary schema fields. Half-open `start`/`end` offsets count Unicode characters in the decoded input string, not UTF-8 bytes or UTF-16 code units: `text[start:end] == quote` for uniquely matched evidence.
-- Evidence must match exactly within the current chunk's original source segments. Missing, absent, or ambiguous quotes enter `review`; ambiguous matches have no guessed `start`/`end`. Only identical candidates grounded at the same source locations are deduplicated. Equal values from different locations or conditions remain separate.
-- Result JSON has `schema_version: "0.1"`, `package_version`, `task`, `source`, `candidates`, `review`, and `run`. Run information includes backend, `live`/`replay` mode, model, counts, attempts, usage if reported, and elapsed time. A successful empty extraction has no candidates; failures raise exceptions instead.
+- Evidence for reported values must match exactly within the current chunk's original source segments. Missing, absent, or ambiguous quotes require review; ambiguous matches have no guessed `start`/`end`. Optional null/blank/omitted fields produce one `info` item rather than two review failures. Task-declared critical conditions remain blocking. Only identical candidates grounded at the same source locations are deduplicated. Equal values from different locations or conditions remain separate.
+- New result JSON uses `schema_version: "0.2"`, with `package_version`, `task`, `source`, `candidates`, `review`, `links`, and `run`. The reader still accepts `0.1`; older readers need upgrading for `0.2`. Review items have `severity: "review" | "info"`. Candidate `field_status` distinguishes reported, not reported by the model, task-declared not applicable, and required missing. Configured `measurements` keep shared context and exact token spans; their `semantic_status` remains `not_verified`. New identity rules for optional missing values and measurement metadata can change candidate IDs; do not reuse earlier review decisions without checking provenance. Run information includes backend, `live`/`replay` mode, model, counts, attempts, usage if reported, and elapsed time. A successful empty extraction has no candidates; failures raise exceptions instead.
 - A matched quote proves that text occurs at a location. It **does not prove that the extracted value is supported or factually correct**. This version has no semantic support verification, factual adjudication, entity resolution, full PDF parsing, or complete replacement for the original CCUS workflow's Stage2.5/Stage3.
 
 `ExtractionBackend` defines the generation boundary. `ReplayBackend` is available for explicit offline replay and tests. `DecisionBackend`, `DecisionTask`, and `DecisionResult` reserve a separate decision boundary: `validate_decision` allows selecting only a supplied candidate, rejecting, or requesting review. Decisions cannot invent a replacement candidate. The extraction pipeline does not yet call a decision backend.

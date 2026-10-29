@@ -1,0 +1,18 @@
+{
+  "name": "synthetic-measurement-review",
+  "description": "Extract each explicitly reported measurement and its calculation scenario. Preserve separate statements and conflicting identities. Use exact source text for values, units and quotes; do not infer missing conditions or select one conflicting identity.",
+  "record_types": {
+    "observation": {
+      "fields": {
+        "subject": {"type": "string", "required": true, "description": "Explicit sample or well identity."},
+        "parameter": {"type": "string", "required": true, "description": "The reported parameter, preserving component versus total distinctions."},
+        "value": {"type": "string", "required": true, "description": "Exact original value token, identical to reading.value_text."},
+        "unit": {"type": "string", "not_applicable_when": {"parameter": ["correction factor"]}},
+        "conditions": {"type": "string", "description": "Original scenario or reaction assumption for this measurement, with its own exact quote.", "required_when": {"parameter": ["mineral capacity", "total capacity"]}}
+      },
+      "identity_fields": ["subject", "parameter"],
+      "measurement_groups": {"reading": {"value_field": "value", "unit_field": "unit", "condition_fields": ["conditions"]}},
+      "comparison_fields": ["parameter", "value", "unit"]
+    }
+  }
+}

@@ -128,7 +128,7 @@ def test_duplicate_keys_and_nonfinite_numbers_have_safe_json_summaries(tmp_path,
 
 @pytest.mark.parametrize("record,path", [
     ({"record_type": "undeclared", "fields": {}}, "records[0].record_type"),
-    ({"record_type": "entry", "fields": {"undeclared": {"value": "A", "quote": "A"}}}, "records[0].fields.undeclared"),
+    ({"record_type": "entry", "fields": {"undeclared": {"value": "A", "quote": "A"}}}, 'records[0].fields["<undeclared>"]'),
     ({"record_type": "entry", "fields": {"value": {"value": "12", "quote": "12"}}}, "records[0].fields.value.value"),
 ])
 def test_task_schema_failures_identify_unknown_types_fields_and_wrong_scalar_types(tmp_path, record, path):
@@ -241,7 +241,7 @@ def test_cli_masks_raw_and_json_escaped_secrets_in_error_paths_and_every_trace_a
     assert status == 1
     assert not output.exists()
     captured = capsys.readouterr()
-    assert "[REDACTED]" in captured.err
+    assert '<undeclared>' in captured.err  # Unknown keys are now withheld before secret redaction.
     artifact_text = "\n".join(path.read_text(encoding="utf-8") for path in directory.rglob("*") if path.is_file())
     combined = captured.err + captured.out + artifact_text
     assert secret not in combined

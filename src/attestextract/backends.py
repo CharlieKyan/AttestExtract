@@ -15,6 +15,7 @@ from .errors import BackendError, ConfigurationError, InvalidResponseError
 from .diagnostics import RunTrace
 from .http_diagnostics import describe_http_error
 from .models import BackendResponse, ExtractionRequest
+from .schema_diagnostics import assess_schema_compliance, schema_request_info
 
 _RETRYABLE_STATUS_CODES = frozenset({408, 409, 429, 500, 502, 503, 504})
 
@@ -136,8 +137,12 @@ class OpenAICompatibleBackend:
     def generate(self, request: ExtractionRequest) -> BackendResponse:
         payload = self.prepare_payload(request)
         context = {"chunk_id": request.chunk_id, "format_attempt": request.format_attempt}
+        schema_info = schema_request_info(request.output_schema, self.structured_output)
         if self._trace is not None:
             self._trace.write_json(f"requests/{request.artifact_stem}.request.json", payload)
+            schema_path = f"schema/{request.artifact_stem}.request.json"
+            self._trace.write_json(schema_path, schema_info)
+            self._trace.describe_artifact(schema_path, "schema_request_metadata")
         headers = {"Accept": "application/json"}
         if self._api_key is not None:
             headers["Authorization"] = f"Bearer {self._api_key}"
@@ -198,6 +203,7 @@ class OpenAICompatibleBackend:
                         compatibility_hint=compatibility_hint,
                     )
                     diagnostic["format_attempt"] = request.format_attempt
+                    diagnostic["schema_request"] = schema_info
                     artifact = None
                     if self._trace is not None:
                         artifact = f"http/{request.artifact_stem}.attempt-{attempt}.error.json"
@@ -225,7 +231,8 @@ class OpenAICompatibleBackend:
                 if self._trace is not None:
                     self._trace.event("model_response", "started", **context)
                 return self._parse_response(response, attempt, started, **context,
-                                            artifact_stem=request.artifact_stem)
+                                            artifact_stem=request.artifact_stem,
+                                            output_schema=request.output_schema)
 
         raise BackendError("The model request did not complete.")  # pragma: no cover
 
@@ -236,6 +243,7 @@ class OpenAICompatibleBackend:
         self, response: httpx.Response, attempt: int, started: float,
         *, chunk_id: str | None = None, format_attempt: int = 1,
         artifact_stem: str | None = None,
+        output_schema: dict[str, Any] | None = None,
     ) -> BackendResponse:
         try:
             payload = response.json()
@@ -265,6 +273,13 @@ class OpenAICompatibleBackend:
             diagnostic_content = diagnostic_message.get("content")
             if isinstance(diagnostic_content, str):
                 self._trace.write_text(f"responses/{artifact_stem or chunk_id}.txt", diagnostic_content)
+                compliance = assess_schema_compliance(diagnostic_content, output_schema, self.structured_output)
+                compliance.update(http_attempt=attempt, format_attempt=format_attempt)
+                artifact = f"schema/{artifact_stem or chunk_id}.compliance.json"
+                self._trace.write_json(artifact, compliance)
+                self._trace.describe_artifact(artifact, "observed_schema_compliance")
+                self._trace.event("schema_compliance", "checked", chunk_id=chunk_id,
+                                  format_attempt=format_attempt, status=compliance["status"], artifact=artifact)
         finish_reason = choice.get("finish_reason")
         if self._trace is not None:
             self._trace.event(

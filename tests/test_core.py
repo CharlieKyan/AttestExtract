@@ -66,7 +66,7 @@ def test_unicode_offsets_round_trip_to_the_original_source(task):
     assert candidate.fields["subject"].evidence.start == len("前置🙂\n\n")
     assert result.source.character_count == len(text)
     assert result.source.name == "中文.md"
-    assert result.schema_version == "0.1"
+    assert result.schema_version == "0.2"
     assert result.run.mode == "replay"
     assert result.run.candidate_count == 1
 

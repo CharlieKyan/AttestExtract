@@ -114,7 +114,8 @@ def test_one_regeneration_preserves_source_task_schema_and_counts_all_replies(ba
     assert first.messages[0]["content"] in second.messages[0]["content"]
     assert "invalid-private-output" not in second.messages[0]["content"]
     assert bad not in second.messages[0]["content"]
-    assert len(result.candidates) == 1 and not result.review
+    assert len(result.candidates) == 1 and not result.candidates[0].needs_review
+    assert [(item.field, item.severity) for item in result.review] == [("condition", "info")]
     assert result.candidates[0].chunk_ids == ["chunk-0001"]
     assert result.run.chunk_count == 1
     assert result.run.response_count == 2
@@ -152,7 +153,7 @@ def test_unknown_output_keys_and_values_are_not_recycled_into_retry_instructions
     assert len(result.candidates) == 1
     assert set(result.candidates[0].fields) == {"subject", "amount"}
     assert result.candidates[0].fields["amount"].value == 12
-    assert result.review == []
+    assert [(item.field, item.severity) for item in result.review] == [("condition", "info")]
 
 
 def test_task_loader_still_rejects_duplicate_configuration_keys(tmp_path):

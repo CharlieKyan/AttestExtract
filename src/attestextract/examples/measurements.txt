@@ -1,0 +1,12 @@
+SYNTHETIC DATA ONLY; these statements do not describe a real study.
+
+For Sample A at complete reaction, mineral capacity 240 t.
+For Sample A at 25% reaction, mineral capacity 60 t.
+For Sample A at 25% reaction, storage capacity 15 t and total capacity 75 t.
+Sample A has correction factor 0.8.
+
+The Chinese caption identifies Well R7: depth 3210 m.
+The English caption identifies Well R9: depth 3210 m.
+These two captions refer to the same panel and disagree about the well identity.
+
+Conclusion: For Sample A at 25% reaction, mineral capacity 60 t.

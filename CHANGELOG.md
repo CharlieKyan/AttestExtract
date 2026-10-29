@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.0.dev7
+
+- Add opt-in task-declared measurement groups with shared source context, exact value/unit spans, linked condition fields, same-column Markdown header checks, token boundaries and explicit unresolved binding issues. Matching remains mechanical; no semantic verification or Jev integration.
+- Add exact task-value applicability/required rules. Optional missing fields become one informational item; critical missing conditions remain review failures. Blank strings count as missing without modifying their stored values.
+- Preserve source observations and add opt-in possible-repeat/conflict/insufficient-context links. Equal values never resolve identity conflicts or erase repeated evidence.
+- Render math-like report text literally and abbreviate displayed ambiguous positions while retaining every position in JSON.
+- Record requested Schema mode/hash and observed raw-output compliance separately from local candidate retention. Preserve safe provider errors; no automatic fallback or compatibility claims based on HTTP 200.
+- Emit result schema 0.2, read existing 0.1 results, and preserve archive review/identity validation for both versions. New measurement data and optional missing-value identity rules can change candidate IDs.
+- Add synthetic regression tests and measurement/Schema evaluation guides. No live provider quality or compatibility claim is made by offline tests.
+
 ## 0.1.0.dev6
 
 - Add optional CLI `--report PATH` to render a readable Markdown review report

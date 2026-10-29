@@ -11,7 +11,7 @@ from .archive import CandidateReview, ExtractionArchive, FinalRecord, create_arc
 from .storage import load_archive, load_document, save_archive, save_document
 from .diagnostics import RunTrace
 
-__version__ = "0.1.0.dev6"
+__version__ = "0.1.0.dev7"
 
 __all__ = [
     "__version__", "extract", "load_task", "TaskSpec", "RecordSpec", "FieldSpec",

@@ -15,14 +15,15 @@ from .chunking import chunk_document
 from .errors import BackendError, ConfigurationError, InvalidResponseError, TaskValidationError
 from .diagnostics import RunTrace
 from .documents import Document
-from .identity import grounded_candidate_id
+from .identity import can_ground_fields, grounded_candidate_id
+from .evidence import ground_quote as _ground_quote, check_measurement, is_missing, link_candidates, rule_matches
 from .json_validation import JSONValidationError, load_json as _load_json
 from .prompting import build_messages, build_output_schema
 from .validation import contract_details, details, error_path, issue
 from .models import (
     BackendResponse, Candidate, CheckResult, ContractModel, DocumentChunk, EvidenceRef,
     ExtractionBackend, ExtractionRequest, ExtractionResult, FieldValue,
-    ReviewItem, RunInfo, Scalar, SourceInfo, SourceSpan, TaskSpec,
+    MeasurementInput, ReviewItem, RunInfo, Scalar, SourceInfo, TaskSpec,
 )
 
 
@@ -34,6 +35,7 @@ class _RawField(ContractModel):
 class _RawRecord(ContractModel):
     record_type: StrictStr
     fields: dict[str, _RawField]
+    measurements: dict[str, MeasurementInput] = Field(default_factory=dict)
 
 
 class _RawResponse(ContractModel):
@@ -99,31 +101,8 @@ def _parse_response(
     try:
         return _RawResponse.model_validate(payload)
     except ValidationError as exc:
-        raise _response_error(message, contract_details(exc, payload), trace=trace, chunk_id=chunk_id,
+        raise _response_error(message, contract_details(exc, payload, allowed_keys=allowed_keys), trace=trace, chunk_id=chunk_id,
                               format_attempt=format_attempt) from None
-
-
-def _ground_quote(text: str, chunk: DocumentChunk, quote: str) -> EvidenceRef:
-    if not quote.strip():
-        return EvidenceRef(quote=quote, status="missing")
-    found: set[tuple[int, int]] = set()
-    for segment in chunk.segments:
-        start = segment.start
-        while True:
-            index = text.find(quote, start, segment.end)
-            if index < 0:
-                break
-            found.add((index, index + len(quote)))
-            start = index + 1
-    spans = [SourceSpan(start=start, end=end) for start, end in sorted(found)]
-    if len(spans) == 1:
-        return EvidenceRef(
-            quote=quote, status="matched", start=spans[0].start,
-            end=spans[0].end, matches=spans,
-        )
-    return EvidenceRef(
-        quote=quote, status="ambiguous" if spans else "unmatched", matches=spans,
-    )
 
 
 def _request(task: TaskSpec, chunk: DocumentChunk) -> ExtractionRequest:
@@ -140,10 +119,15 @@ def _check_task_records(raw: _RawResponse, task: TaskSpec, *, trace: RunTrace | 
                                 "declared record type", record.record_type, "Model returned an undeclared record type."))
             continue
         spec = task.record_types[record.record_type]
+        if (record.measurements.keys() - spec.measurement_groups.keys()
+                or ("measurements" in record.model_fields_set and not spec.measurement_groups)):
+            errors.append(issue(("records", index, "measurements"), "undeclared_measurement",
+                                "declared measurement groups", record.measurements,
+                                "Model returned an undeclared measurement group."))
         for name, field in record.fields.items():
             location = ("records", index, "fields", name)
             if name not in spec.fields:
-                errors.append(issue(location, "undeclared_field", "declared field", field.model_dump(),
+                errors.append(issue(("records", index, "fields", "<undeclared>"), "undeclared_field", "declared field", field.model_dump(),
                                     "Model returned an undeclared field."))
             elif not _value_has_type(field.value, spec.fields[name].type):
                 errors.append(issue((*location, "value"), "incorrect_field_type",
@@ -168,11 +152,14 @@ def _value_has_type(value: Scalar, field_type: str) -> bool:
 
 def _format_feedback(diagnostic: dict[str, Any], task: TaskSpec) -> list[dict[str, str]]:
     """Send bounded structural hints without reflecting undeclared property names."""
-    known_paths = {"$", "records", "records[0]", "records[0].record_type", "records[0].fields"}
+    known_paths = {"$", "records", "records[0]", "records[0].record_type", "records[0].fields", "records[0].measurements"}
     for record in task.record_types.values():
         for name in record.fields:
             for suffix in ((), ("value",), ("quote",)):
                 known_paths.add(error_path(("records", 0, "fields", name, *suffix)))
+        for name in record.measurement_groups:
+            for suffix in ((), ("context_quote",), ("value_text",), ("unit_text",), ("unit_quote",)):
+                known_paths.add(error_path(("records", 0, "measurements", name, *suffix)))
     feedback = []
     for error in diagnostic["errors"][:5]:
         path = error["path"]
@@ -191,7 +178,8 @@ def _validated_response(
     """Regenerate only locally rejected output, keeping each attempt auditable."""
     request = _request(task, chunk)
     responses = []
-    allowed_keys = {name for record in task.record_types.values() for name in record.fields}
+    allowed_keys = {name for record in task.record_types.values() for name in (*record.fields, *record.measurement_groups)}
+    allowed_keys.update({"measurements", "context_quote", "value_text", "unit_text", "unit_quote"})
     for format_attempt in range(1, format_retries + 2):
         stem = request.artifact_stem
         if trace is not None:
@@ -356,7 +344,7 @@ def _extract(
     source_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
     candidates: list[Candidate] = []
     review: list[ReviewItem] = []
-    # Deduplicate only when *all* supplied fields have an exact original span.
+    # Deduplicate only when all reported values have an exact original span.
     # Unlocated/ambiguous candidates retain their chunk and occurrence identity.
     dedup: dict[str, Candidate] = {}
     response_count = 0
@@ -379,7 +367,7 @@ def _extract(
             record_spec = spec.record_types[record.record_type]
             fields: dict[str, FieldValue] = {}
             checks = [CheckResult(code="schema_passed", passed=True)]
-            pending: list[tuple[str, str | None, str]] = []
+            pending: list[tuple[str, str | None, str, str]] = []
             for name, raw_field in record.fields.items():
                 if trace is not None:
                     trace.event("validation", "field_started", chunk_id=chunk.chunk_id, ordinal=ordinal, field=name)
@@ -388,38 +376,58 @@ def _extract(
                     trace.event("grounding", "field_checked", chunk_id=chunk.chunk_id, ordinal=ordinal,
                                 field=name, status=evidence.status, matches=len(evidence.matches))
                 fields[name] = FieldValue(value=raw_field.value, evidence=evidence)
-                checks.append(CheckResult(
-                    code="evidence_matched", passed=evidence.status == "matched", field=name,
-                ))
-                if evidence.status != "matched":
+                if not is_missing(raw_field.value):
+                    checks.append(CheckResult(code="evidence_matched", passed=evidence.status == "matched", field=name))
+                if not is_missing(raw_field.value) and evidence.status != "matched":
                     pending.append((
                         f"evidence_{evidence.status}", name,
-                        "Evidence could not be located uniquely in this chunk's original source segments.",
+                        "Evidence could not be located uniquely in this chunk's original source segments.", "review",
                     ))
-                if raw_field.value is None:
-                    pending.append(("missing_value", name, "The field has no reported value."))
             expected = {
                 name for name, field in record_spec.fields.items() if field.required
             } | set(record_spec.identity_fields) | set(record_spec.condition_fields)
-            for name in sorted(expected):
-                if name not in fields or fields[name].value is None:
+            expected.update(name for name, field in record_spec.fields.items() if rule_matches(field.required_when, fields))
+            field_status = {}
+            for name, field_spec in record_spec.fields.items():
+                empty = name not in fields or is_missing(fields[name].value)
+                inapplicable = rule_matches(field_spec.not_applicable_when, fields)
+                if not empty:
+                    field_status[name] = "reported"
+                elif name in expected:
+                    field_status[name] = "required_missing"
                     checks.append(CheckResult(code="required_field_present", passed=False, field=name))
-                    pending.append(("missing_required_field", name, "A required identity, condition, or task field is missing."))
-            if not fields:
-                pending.append(("empty_record", None, "The record contains no extracted fields."))
+                    pending.append(("missing_required_field", name, "A required identity, condition, or task field is missing.", "review"))
+                elif inapplicable:
+                    field_status[name] = "not_applicable"
+                else:
+                    field_status[name] = "not_reported"
+                    pending.append(("missing_value", name, "The model did not report this optional field; this does not establish absence in the source.", "info"))
+            measurements = {}
+            for name, measurement_spec in record_spec.measurement_groups.items():
+                if name not in record.measurements:
+                    pending.append(("measurement_missing", measurement_spec.value_field,
+                                    "The configured measurement group was not supplied; no token positions were inferred.", "review"))
+                    continue
+                measurement = check_measurement(text, chunk, record.measurements[name], measurement_spec, fields)
+                measurements[name] = measurement
+                for code in measurement.issues:
+                    pending.append((code, measurement_spec.value_field,
+                                    f"Measurement group {name} failed a mechanical check; inspect its context and token evidence.", "review"))
+            if not any(not is_missing(field.value) for field in fields.values()):
+                pending.append(("empty_record", None, "The record contains no extracted fields.", "review"))
             stable_fields = {
                 name: value.model_dump() for name, value in sorted(fields.items())
             }
             identity: dict[str, Any] = {
                 "source": source_hash, "record_type": record.record_type, "fields": stable_fields,
             }
-            can_dedup = bool(fields) and all(
-                field.evidence.status == "matched" for field in fields.values()
-            )
+            if measurements:
+                identity["measurements"] = {name: group.model_dump() for name, group in sorted(measurements.items())}
+            can_dedup = can_ground_fields(fields)
             if not can_dedup:
                 identity.update(chunk_id=chunk.chunk_id, ordinal=ordinal)
             if can_dedup:
-                identifier = grounded_candidate_id(source_hash, record.record_type, fields)
+                identifier = grounded_candidate_id(source_hash, record.record_type, fields, measurements)
             else:
                 encoded = json.dumps(identity, sort_keys=True, ensure_ascii=False, allow_nan=False)
                 identifier = "candidate-" + hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:24]
@@ -432,16 +440,17 @@ def _extract(
                 continue
             candidate = Candidate(
                 candidate_id=identifier, record_type=record.record_type, fields=fields,
-                chunk_ids=[chunk.chunk_id], checks=checks, needs_review=bool(pending),
+                chunk_ids=[chunk.chunk_id], checks=checks, needs_review=any(item[3] == "review" for item in pending),
+                field_status=field_status, measurements=measurements,
             )
             candidates.append(candidate)
             if can_dedup:
                 dedup[identifier] = candidate
-            review.extend(ReviewItem(candidate_id=identifier, code=code, field=field, message=message)
-                          for code, field, message in pending)
+            review.extend(ReviewItem(candidate_id=identifier, code=code, field=field, message=message, severity=severity)
+                          for code, field, message, severity in pending)
             if trace is not None:
                 trace.event("deduplication", "retained", chunk_id=chunk.chunk_id,
-                            candidate_id=identifier, needs_review=bool(pending), review_count=len(pending))
+                            candidate_id=identifier, needs_review=candidate.needs_review, review_count=sum(item[3] == "review" for item in pending))
         if trace is not None:
             chunk_candidates = [candidate for candidate in candidates if chunk.chunk_id in candidate.chunk_ids]
             chunk_ids = {candidate.candidate_id for candidate in chunk_candidates}
@@ -451,13 +460,16 @@ def _extract(
                 "review": [item.model_dump(mode="json") for item in chunk_reviews],
             })
             trace.event("chunk", "completed", chunk_id=chunk.chunk_id,
-                        candidate_count=len(chunk_candidates), review_count=len(chunk_reviews))
+                        candidate_count=len(chunk_candidates), review_count=sum(item.severity == "review" for item in chunk_reviews),
+                        info_count=sum(item.severity == "info" for item in chunk_reviews))
     if trace is not None:
-        trace.event("extraction", "completed", candidate_count=len(candidates), review_count=len(review))
+        trace.event("extraction", "completed", candidate_count=len(candidates),
+                    review_count=sum(item.severity == "review" for item in review),
+                    info_count=sum(item.severity == "info" for item in review))
     return ExtractionResult(
         task=spec,
         source=SourceInfo(name=source_name, sha256=source_hash, character_count=len(text), document_id=document.document_id),
-        candidates=candidates, review=review,
+        candidates=candidates, review=review, links=link_candidates(candidates, spec),
         run=RunInfo(
             backend=backend.name, mode="replay" if backend.name == "replay" else "live",
             chunk_count=len(chunks), response_count=response_count,

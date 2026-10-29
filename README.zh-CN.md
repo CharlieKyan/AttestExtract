@@ -2,7 +2,9 @@
 
 按任务模式从正文和表格抽取候选数据，保留原文证据，并预留可替换的决策后端。
 
-**早期原型 · `0.1.0.dev6` · Python 3.11+**
+**早期原型 · `0.1.0.dev7` · Python 3.11+**
+
+dev7 增加测量上下文与数值／单位片段位置、任务声明的条件必填规则、可选空字段说明项，以及不合并候选的待确认关联。报告中的数学文本按原文显示。配置与效果评估见[测量证据和复核指南](docs/MEASUREMENT_REVIEW.md)，接口诊断见[json_schema 定位指南](docs/SCHEMA_DIAGNOSTICS.md)。
 
 本项目从 CCUS 抽取工作流的经验出发，独立实现通用小内核，不依赖 LangExtract，也不导入原有 CCUS 工程。当前实现字段验证、候选保留、原文位置回溯和复核清单；可另行保存包含精确原文、显式审阅决定和接受记录的档案。**Jev 尚未接入**；当前检查不能证明抽取结果在语义上得到原文支持或事实正确。
 
@@ -71,7 +73,7 @@ attestextract extract --input src/attestextract/examples/procurement.md --task s
 
 `extract --structured-output off|json_schema` 默认值为 `off`。选择 `json_schema` 时，框架根据任务自动生成 JSON Schema，发送 `response_format.type: "json_schema"` 和 `strict: true`。Python 对应参数为 `OpenAICompatibleBackend(..., structured_output="json_schema")`。
 
-严格模式要求每个已声明字段都带 `{ "value": ..., "quote": ... }` 包装；任务中的标量类型限制的是内部 **`value`**，`quote` 始终是字符串。未报告的字段返回 `value: null`、`quote: ""`，按既有规则进入复核，不会自动接受。关闭结构化输出时，可继续省略未报告的可选字段。
+严格模式要求每个已声明字段都带 `{ "value": ..., "quote": ... }` 包装；任务中的标量类型限制的是内部 **`value`**，`quote` 始终是字符串。未报告字段返回 `value: null`、`quote: ""`。可选空字段只产生一条信息项；任务要求的关键条件缺失仍进入复核。关闭结构化输出时，可继续省略未报告的可选字段。配置测量组后，严格 Schema 还要求返回该组的上下文及片段字段。
 
 模型服务需支持相应格式。HTTP 400／422 会明确失败，不自动降级为非结构化请求，也不触发格式重试；网络及暂时性 HTTP 错误仍使用原有有限重试。[Wenwen 官方结构化说明](https://wenwen-ai.apifox.cn/305807074e0) 给出了这类请求格式，但需针对实际模型渠道确认兼容性。即使端点接受参数，仍保留全部本地校验。
 
@@ -205,7 +207,7 @@ print(result.model_dump_json(indent=2))
 - 输入支持 UTF-8 TXT、Markdown 正文和简单管道表格；默认按 6,000 字符及每批最多 12 行表格分块。单个表头或表格行保持完整，可能超过字符目标。后续表格批次重复携带原表头并保留原文位置。PDF 需先用 MinerU 等外部工具转换。
 - 每个字段保留值、逐字引文、原文位置和检查结果。位置为 Python 解码字符串的 Unicode 字符偏移，采用左闭右开区间；不是 UTF-8 字节数或 UTF-16 单元数。唯一匹配时可用 `text[start:end]` 取回引文。
 - 缺失、找不到或多处匹配的引文进入复核，不猜测位置。只合并值和证据位置完全相同的候选；不同位置或条件下的同值观测继续保留。未知字段、未知记录类型、错误标量类型和无效 JSON 明确失败。
-- 输出为版本化 JSON，包含任务、源文档摘要、候选、复核项及运行信息。当前 `schema_version` 为 `0.1`。原文定位通过只说明引文存在，**不等于语义支持性核验或事实验证**。
+- 新输出的 `schema_version` 为 `0.2`，包含任务、源文档摘要、候选、复核项、待确认关联及运行信息。读取仍兼容旧 `0.1`；旧程序读取新格式需要升级。`review[].severity` 区分 `review` 与 `info`，统计复核错误时只计前者。新增测量证据和可选空字段身份规则可能改变候选 ID，不应盲目复用旧审阅决定。原文定位通过只说明引文存在，**不等于语义支持性核验或事实验证**。
 - `ExtractionBackend` 负责生成；`ReplayBackend` 仅显式回放。`DecisionBackend`、`DecisionTask`、`DecisionResult` 和 `validate_decision` 为后续决策预留边界，只允许选择已有候选、拒绝或转复核。当前抽取流程尚未调用决策后端。
 
 ## 文档、审阅与正式结果的保存约定
