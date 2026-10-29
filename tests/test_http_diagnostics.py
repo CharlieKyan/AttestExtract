@@ -255,20 +255,36 @@ def test_retry_success_keeps_each_failed_attempt_and_finishes_as_success(tmp_pat
     assert not (directory / "error.json").exists()
 
 
-def test_deeply_nested_error_json_does_not_replace_http_status_or_prevent_retry(tmp_path):
+@pytest.mark.parametrize("inject_recursion", [False, True], ids=["native-decoder", "injected-recursion-error"])
+def test_deeply_nested_error_json_does_not_replace_http_status_or_prevent_retry(tmp_path, monkeypatch, inject_recursion):
     directory = tmp_path / "deep-retry"
     trace = RunTrace(directory)
     nested = ("[" * 5000 + "]" * 5000).encode("ascii")
     assert len(nested) < 65536
+    error_response = httpx.Response(
+        429, content=nested, headers={"content-type": "application/json"},
+    )
+    success_response = httpx.Response(200, json={"choices": [{
+        "finish_reason": "stop", "message": {"content": '{"records":[]}'},
+    }]})
+    decoded = {"error": 0, "success": 0}
+    if inject_recursion:
+        original_json = httpx.Response.json
+
+        def response_json(response, *args, **kwargs):
+            if response is error_response:
+                decoded["error"] += 1
+                raise RecursionError("Synthetic decoder depth limit")
+            if response is success_response:
+                decoded["success"] += 1
+            return original_json(response, *args, **kwargs)
+
+        monkeypatch.setattr(httpx.Response, "json", response_json)
     received = []
 
     def endpoint(request):
         received.append(request)
-        if len(received) == 1:
-            return httpx.Response(429, content=nested, headers={"content-type": "application/json"})
-        return httpx.Response(200, json={"choices": [{
-            "finish_reason": "stop", "message": {"content": '{"records":[]}'},
-        }]})
+        return error_response if len(received) == 1 else success_response
 
     backend = OpenAICompatibleBackend(
         base_url="https://example.invalid/v1", model="synthetic-model",
@@ -282,10 +298,18 @@ def test_deeply_nested_error_json_does_not_replace_http_status_or_prevent_retry(
     assert len(failures) == 1
     failure = read_json(failures[0])
     assert failure["status_code"] == 429
-    assert failure["body_format"] == "invalid_json"
+    # This is valid JSON. Decoder depth limits vary by Python build/version,
+    # so either decoding it or declining it is acceptable. Inject the exception
+    # separately to cover the fallback deterministically on every runtime.
+    assert failure["body_format"] in {"json", "invalid_json"}
+    if inject_recursion:
+        assert decoded == {"error": 1, "success": 1}
+        assert failure["body_format"] == "invalid_json"
     assert failure["provider_error"] == {}
     assert failure["diagnostic_status"] == "provider_detail_unavailable"
+    assert nested.decode("ascii") not in artifact_text(directory)
     assert read_json(directory / "manifest.json")["status"] == "succeeded"
+    assert not (directory / "error.json").exists()
 
 
 def test_exhausted_rate_limit_keeps_all_attempt_diagnostics(tmp_path):
