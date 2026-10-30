@@ -88,7 +88,7 @@ def test_opt_in_without_schema_fails_before_any_http_attempt():
     assert calls == []
 
 
-@pytest.mark.parametrize("mode", ["auto", "json_object", "synthetic-private-value", None, []])
+@pytest.mark.parametrize("mode", ["auto", "synthetic-private-value", None, []])
 def test_unknown_modes_fail_without_echoing_configuration_values(mode):
     with pytest.raises(ConfigurationError) as caught:
         OpenAICompatibleBackend("https://models.example/v1", "model", structured_output=mode)
@@ -209,7 +209,7 @@ def test_cli_forwards_explicit_mode_and_logs_effective_mode(tmp_path, monkeypatc
         def generate(self, value):
             return BackendResponse(text='{"records": []}')
 
-    monkeypatch.setattr(cli, "OpenAICompatibleBackend", OfflineBackend)
+    monkeypatch.setattr("attestextract.backends.OpenAICompatibleBackend", OfflineBackend)
     monkeypatch.delenv("ATTESTEXTRACT_API_KEY", raising=False)
     args = [
         "extract", "--input", str(source), "--task", str(task), "--output", str(output),

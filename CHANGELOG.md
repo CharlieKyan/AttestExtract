@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.0.dev8
+
+- Add explicit backend registry/factory and named TOML profiles used by Python and CLI; preserve legacy environment configuration. Profile switching cannot inherit stale global endpoint/model settings, and outputs cannot overwrite TOML inputs.
+- Add portable generation controls, `json_object`, explicit output-token field mapping and provider options. Reject reserved-field overrides and retain explicit provider failures without fallback.
+- Add stable backend error codes/retryability and observed response metadata; preserve configured-model fallback, trace paths and result schema 0.2. Declare simulated backend mode explicitly.
+- Add a synthetic heterogeneous HTTP-envelope adapter and three-task CLI acceptance runner. Official endpoint acceptance is opt-in, bounded and recorded separately; synthetic tests do not establish provider accuracy.
+- Extend regression, credential-redaction, profile precedence and installed-wheel acceptance. No new runtime dependency or Jev integration.
+
 ## 0.1.0.dev7
 
 - Add opt-in task-declared measurement groups with shared source context, exact value/unit spans, linked condition fields, same-column Markdown header checks, token boundaries and explicit unresolved binding issues. Matching remains mechanical; no semantic verification or Jev integration.

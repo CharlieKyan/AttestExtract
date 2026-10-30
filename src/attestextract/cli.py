@@ -10,13 +10,15 @@ from importlib.resources import files
 from pathlib import Path
 
 from . import __version__, extract, load_task
-from .backends import OpenAICompatibleBackend, ReplayBackend
+from .backends import ReplayBackend
+from .config import resolve_backend_config
 from .d1_examples import d1_example_names, load_d1_example
 from .diagnostics import RunTrace, redact_text
 from .envconfig import load_env_file
 from .errors import AttestExtractError, ConfigurationError
 from .models import TaskSpec
 from .reporting import render_markdown_report
+from .registry import BackendRegistry, default_registry
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -44,16 +46,22 @@ def _parser() -> argparse.ArgumentParser:
     live.add_argument("--report", type=Path, help="Also write a readable Markdown review of candidates and evidence")
     live.add_argument("--base-url", help="OpenAI-compatible API base URL, or ATTESTEXTRACT_BASE_URL")
     live.add_argument("--model", help="Model name, or ATTESTEXTRACT_MODEL")
-    live.add_argument("--api-key-env", default="ATTESTEXTRACT_API_KEY", help="Environment variable containing the API key")
-    live.add_argument("--timeout", type=float, default=60.0, help="HTTP timeout in seconds (default: 60)")
+    live.add_argument("--config", type=Path, help="TOML file containing named backend profiles")
+    live.add_argument("--profile", help="Profile name in --config; explicit CLI values override it")
+    live.add_argument("--adapter", help="Registered backend name (default: openai-compatible)")
+    live.add_argument("--api-key-env", help="Environment variable containing the API key (default: ATTESTEXTRACT_API_KEY)")
+    live.add_argument("--timeout", type=float, help="HTTP timeout in seconds (default: 60)")
+    live.add_argument("--max-attempts", type=int, help="Maximum HTTP attempts per generation (default: 3)")
+    live.add_argument("--temperature", type=float, help="Explicit sampling temperature; omitted by default")
+    live.add_argument("--max-output-tokens", type=int, help="Explicit output token limit; omitted by default")
     live.add_argument("--env-file", type=Path, help="Explicit KEY=value configuration file; existing environment takes precedence")
     live.add_argument("--log-dir", type=Path, help="Empty directory for source, prompts, responses and diagnostic events")
     live.add_argument(
-        "--structured-output", choices=("off", "json_schema"), default="off",
-        help="Opt in to a provider's strict JSON Schema response format (default: off)",
+        "--structured-output", choices=("off", "json_object", "json_schema"),
+        help="Opt in to JSON or strict JSON Schema output (default: off; no automatic fallback)",
     )
     live.add_argument(
-        "--format-retries", type=int, choices=(0, 1), default=0,
+        "--format-retries", type=int, choices=(0, 1),
         help="Regenerate a chunk once after a local output-format failure; adds model calls (default: 0)",
     )
     return parser
@@ -89,9 +97,11 @@ def _check_output_paths(args: argparse.Namespace) -> None:
     protected = {args.input.resolve(), args.task.resolve()}
     if args.env_file is not None:
         protected.add(args.env_file.resolve())
+    if args.config is not None:
+        protected.add(args.config.resolve())
     for target in outputs:
         if target in protected:
-            raise ConfigurationError("Output files must differ from the input, task, and environment files.")
+            raise ConfigurationError("Output files must differ from the input, task, environment and configuration files.")
         if args.log_dir is not None and target.is_relative_to(args.log_dir.resolve()):
             label = "Output" if target == args.output.resolve() else "Report"
             raise ConfigurationError(f"{label} must be outside --log-dir; diagnostics writes its own result.json.")
@@ -101,7 +111,7 @@ def _check_output_paths(args: argparse.Namespace) -> None:
             raise ConfigurationError("Output files need an existing parent directory and cannot be directories.")
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = None) -> int:
     args = _parser().parse_args(argv)
     api_key = None
     trace = None
@@ -132,7 +142,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         _check_output_paths(args)
-        api_key = os.environ.get(args.api_key_env)
+        api_key = os.environ.get(args.api_key_env or "ATTESTEXTRACT_API_KEY")
         if args.log_dir is not None:
             trace = RunTrace(
                 args.log_dir, secrets=[api_key] if api_key else [],
@@ -140,15 +150,18 @@ def main(argv: list[str] | None = None) -> int:
             )
             trace.event("configuration", "started")
         environment = load_env_file(args.env_file) if args.env_file else os.environ
-        api_key = environment.get(args.api_key_env)
+        config = resolve_backend_config(
+            overrides={name: getattr(args, name) for name in (
+                "adapter", "base_url", "model", "api_key_env", "timeout", "max_attempts",
+                "structured_output", "format_retries", "temperature", "max_output_tokens",
+            )},
+            environment=environment, config_path=args.config, profile=args.profile,
+        )
+        api_key = environment.get(config.api_key_env)
         if trace is not None and api_key:
             trace.add_secrets(api_key)
         if args.input.suffix.lower() not in {".txt", ".md"}:
             raise ValueError("Input must be a UTF-8 .txt or .md file; convert PDFs externally first")
-        base_url = args.base_url or environment.get("ATTESTEXTRACT_BASE_URL")
-        model = args.model or environment.get("ATTESTEXTRACT_MODEL")
-        if not base_url or not model:
-            raise ValueError("Configure --base-url and --model, or ATTESTEXTRACT_BASE_URL and ATTESTEXTRACT_MODEL")
         if trace is not None:
             trace.event("configuration", "task_validation_started")
         task = load_task(args.task)
@@ -157,21 +170,23 @@ def main(argv: list[str] | None = None) -> int:
         text = args.input.read_bytes().decode("utf-8")
         if trace is not None:
             trace.event("configuration", "backend_validation_started")
-        backend = OpenAICompatibleBackend(
-            base_url=base_url, model=model, api_key=api_key, timeout=args.timeout, trace=trace,
-            structured_output=args.structured_output,
+        backend = (registry if registry is not None else default_registry()).create(
+            config.adapter, config=config, api_key=api_key, trace=trace,
         )
         if trace is not None:
             trace.write_json("backend.json", {
-                "backend": backend.name, "model": model, "timeout": args.timeout,
-                "max_attempts": 3, "api_key_configured": bool(api_key),
+                "backend": backend.name, "model": config.model, "timeout": config.timeout,
+                "max_attempts": config.max_attempts, "api_key_configured": bool(api_key),
                 "env_file_used": args.env_file is not None,
-                "structured_output": args.structured_output,
-                "format_retries": args.format_retries,
+                "profile": args.profile, "adapter": config.adapter,
+                "structured_output": config.structured_output,
+                "format_retries": config.format_retries,
+                "generation": config.generation.model_dump(mode="json"),
+                "output_token_parameter": config.output_token_parameter,
             })
             trace.event("configuration", "completed")
         result = extract(text, task, backend=backend, source_name=args.input.name, trace=trace,
-                         format_retries=args.format_retries)
+                         format_retries=config.format_retries, generation=config.generation)
         if trace is not None:
             trace.event("output", "started")
         payload = result.model_dump(mode="json")

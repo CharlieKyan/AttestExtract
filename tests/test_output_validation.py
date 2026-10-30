@@ -231,7 +231,7 @@ def test_cli_masks_raw_and_json_escaped_secrets_in_error_paths_and_every_trace_a
                 "record_type": "entry", "fields": {secret: "bare synthetic value"},
             }]}))
 
-    monkeypatch.setattr(cli, "OpenAICompatibleBackend", OfflineBackend)
+    monkeypatch.setattr("attestextract.backends.OpenAICompatibleBackend", OfflineBackend)
     status = cli.main([
         "extract", "--input", str(source), "--task", str(task), "--output", str(output),
         "--base-url", "https://example.invalid/v1", "--model", "synthetic-model",

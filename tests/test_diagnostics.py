@@ -68,7 +68,7 @@ def test_offline_trace_keeps_all_pipeline_artifacts_and_original_unicode_offsets
     assert chunk["text"] == TEXT
     request = read_json(directory / "requests" / f"{chunk_id}.request.json")
     assert json.loads(request["messages"][-1]["content"])["source"] == TEXT
-    assert set(request) == {"messages", "chunk_id", "output_schema", "format_attempt"}
+    assert set(request) == {"messages", "chunk_id", "output_schema", "format_attempt", "generation"}
     assert manifest["artifact_roles"][f"requests/{chunk_id}.request.json"] == "extraction_request"
     assert any(item.get("kind") == "extraction_request" for item in events(directory))
     assert read_json(directory / "responses" / f"{chunk_id}.meta.json")["attempts"] == 1
@@ -219,7 +219,7 @@ def test_cli_env_file_and_log_directory_produce_result_without_live_api(tmp_path
             assert json.loads(request.messages[-1]["content"])["source"] == TEXT
             return BackendResponse(text=json.dumps({"records": [RECORD]}))
 
-    monkeypatch.setattr(cli, "OpenAICompatibleBackend", OfflineBackend)
+    monkeypatch.setattr("attestextract.backends.OpenAICompatibleBackend", OfflineBackend)
     status = cli.main([
         "extract", "--input", str(source), "--task", str(task), "--output", str(output),
         "--env-file", str(env_file), "--log-dir", str(directory), "--api-key-env", api_key_env,
@@ -257,7 +257,7 @@ def test_cli_auth_failure_logs_phase_and_status_without_credentials_or_http_body
     def mocked_backend(**kwargs):
         return OpenAICompatibleBackend(**kwargs, transport=httpx.MockTransport(endpoint), sleep_fn=lambda _: None)
 
-    monkeypatch.setattr(cli, "OpenAICompatibleBackend", mocked_backend)
+    monkeypatch.setattr("attestextract.backends.OpenAICompatibleBackend", mocked_backend)
     status = cli.main([
         "extract", "--input", str(source), "--task", str(task), "--output", str(output),
         "--env-file", str(env_file), "--log-dir", str(directory),
@@ -342,7 +342,7 @@ def test_truncated_http_completion_is_preserved_and_redacted_before_failure(tmp_
     def mocked_backend(**kwargs):
         return OpenAICompatibleBackend(**kwargs, transport=httpx.MockTransport(endpoint), sleep_fn=lambda _: None)
 
-    monkeypatch.setattr(cli, "OpenAICompatibleBackend", mocked_backend)
+    monkeypatch.setattr("attestextract.backends.OpenAICompatibleBackend", mocked_backend)
     status = cli.main([
         "extract", "--input", str(source), "--task", str(task), "--output", str(output),
         "--env-file", str(env_file), "--log-dir", str(directory),
@@ -370,7 +370,7 @@ def test_cli_rejects_outputs_inside_log_directory_before_creating_backend(tmp_pa
         constructors.append(kwargs)
         raise AssertionError("Output conflict must be rejected before backend construction")
 
-    monkeypatch.setattr(cli, "OpenAICompatibleBackend", forbidden_backend)
+    monkeypatch.setattr("attestextract.backends.OpenAICompatibleBackend", forbidden_backend)
     status = cli.main([
         "extract", "--input", str(source), "--task", str(task), "--output", str(directory / relative),
         "--env-file", str(env_file), "--log-dir", str(directory),

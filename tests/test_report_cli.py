@@ -51,7 +51,7 @@ def configured_backend(monkeypatch, *, quote="12", failure=False):
                 "record_type": "entry", "fields": {"amount": {"value": 12, "quote": quote}},
             }]}))
 
-    monkeypatch.setattr(cli, "OpenAICompatibleBackend", OfflineBackend)
+    monkeypatch.setattr("attestextract.backends.OpenAICompatibleBackend", OfflineBackend)
     return calls
 
 

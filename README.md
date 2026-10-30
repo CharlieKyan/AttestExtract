@@ -2,7 +2,12 @@
 
 Schema-driven extraction from text and tables, with source-linked evidence and pluggable decision backends.
 
-**Early prototype · `0.1.0.dev7` · Python 3.11+**
+**Early prototype · `0.1.0.dev8` · Python 3.11+**
+
+Dev8 adds named model profiles, explicit backend registration for Python and CLI,
+portable generation controls and a second-protocol simulation. See the
+[D2 adapter and acceptance guide](docs/BACKENDS.md) for configuration, extension,
+error contracts and bounded live acceptance.
 
 dev7 adds task-declared measurement evidence groups, conditional missingness rules,
 possible candidate associations, literal math evidence in review reports, and separate

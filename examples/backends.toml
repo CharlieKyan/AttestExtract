@@ -1,0 +1,30 @@
+# Public examples contain no credentials. Put keys in process env or an explicit .env.
+# These are declared configurations, not a claim of endpoint acceptance.
+[profiles.deepseek]
+adapter = "openai-compatible"
+base_url = "https://api.deepseek.com"
+model = "deepseek-flash"
+api_key_env = "DEEPSEEK_API_KEY"
+timeout = 60.0
+max_attempts = 1
+structured_output = "json_object"
+format_retries = 0
+[profiles.deepseek.generation]
+max_output_tokens = 2048
+[profiles.deepseek.provider_options]
+thinking = { type = "disabled" }
+
+[profiles.qwen]
+adapter = "openai-compatible"
+# Beijing public endpoint remains supported. A workspace endpoint may replace it.
+base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+model = "qwen-plus"
+api_key_env = "DASHSCOPE_API_KEY"
+timeout = 60.0
+max_attempts = 1
+structured_output = "json_object"
+format_retries = 0
+[profiles.qwen.generation]
+max_output_tokens = 2048
+[profiles.qwen.provider_options]
+enable_thinking = false

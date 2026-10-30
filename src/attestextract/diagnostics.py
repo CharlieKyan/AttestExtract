@@ -136,7 +136,8 @@ class RunTrace:
         else:
             error["message"] = "Operation failed; inspect the error type and preceding diagnostic artifacts."
         if isinstance(exc, BackendError):
-            error.update(status_code=exc.status_code, attempts=exc.attempts)
+            error.update(status_code=exc.status_code, attempts=exc.attempts,
+                         code=exc.code, retryable=exc.retryable)
             if exc.http_diagnostics is not None:
                 error.update(http_diagnostics=exc.http_diagnostics, http_details=exc.http_details)
         diagnostic = getattr(exc, "validation_details", None)

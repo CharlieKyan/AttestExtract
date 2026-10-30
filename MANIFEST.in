@@ -1,0 +1,5 @@
+include README.zh-CN.md
+include CHANGELOG.md
+include examples/backends.toml
+include scripts/d2_acceptance.py
+recursive-include docs *.md

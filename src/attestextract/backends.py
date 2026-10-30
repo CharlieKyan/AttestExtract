@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import time
 from collections.abc import Callable, Sequence
 from copy import deepcopy
@@ -12,12 +13,52 @@ from typing import Any, Literal
 import httpx
 
 from .errors import BackendError, ConfigurationError, InvalidResponseError
-from .diagnostics import RunTrace
+from .diagnostics import RunTrace, redact_text
 from .http_diagnostics import describe_http_error
 from .models import BackendResponse, ExtractionRequest
 from .schema_diagnostics import assess_schema_compliance, schema_request_info
 
 _RETRYABLE_STATUS_CODES = frozenset({408, 409, 429, 500, 502, 503, 504})
+_RESERVED_OPTIONS = frozenset({
+    "model", "messages", "response_format", "stream", "stream_options", "n",
+    "tools", "tool_choice", "functions", "function_call", "max_tokens",
+    "max_completion_tokens", "temperature", "api_key", "authorization", "headers", "base_url",
+})
+
+
+def _validate_provider_options(options: dict[str, Any] | None) -> dict[str, Any]:
+    if options is None:
+        return {}
+    if not isinstance(options, dict) or any(
+        not isinstance(key, str) or not key.strip() or key.lower() in _RESERVED_OPTIONS
+        for key in options
+    ):
+        raise ConfigurationError("provider_options must use nonempty, non-reserved string keys.")
+    try:
+        # Round-tripping also rejects non-JSON data without printing private values.
+        encoded = json.dumps(options, allow_nan=False)
+        normalized = json.loads(encoded)
+    except (ValueError, TypeError, RecursionError):
+        raise ConfigurationError("provider_options must contain finite JSON values.") from None
+    if normalized != options:
+        raise ConfigurationError("provider_options must contain JSON objects with string keys and JSON values.")
+    return deepcopy(options)
+
+
+def _http_error_code(status: int) -> str:
+    if status in (400, 422):
+        return "invalid_request"
+    if status == 401:
+        return "authentication_error"
+    if status == 403:
+        return "permission_denied"
+    if status == 404:
+        return "not_found"
+    if status == 408:
+        return "timeout"
+    if status == 429:
+        return "rate_limited"
+    return "server_error" if status >= 500 else "http_error"
 
 
 class OpenAICompatibleBackend:
@@ -43,7 +84,9 @@ class OpenAICompatibleBackend:
         *,
         sleep_fn: Callable[[float], None] = time.sleep,
         trace: RunTrace | None = None,
-        structured_output: Literal["off", "json_schema"] = "off",
+        structured_output: Literal["off", "json_object", "json_schema"] = "off",
+        provider_options: dict[str, Any] | None = None,
+        output_token_parameter: Literal["max_tokens", "max_completion_tokens"] = "max_tokens",
     ) -> None:
         if not isinstance(base_url, str) or not base_url.strip():
             raise ConfigurationError("A nonempty HTTP(S) API base URL is required.")
@@ -87,20 +130,24 @@ class OpenAICompatibleBackend:
             raise ConfigurationError("max_attempts must be a positive integer.")
         if not callable(sleep_fn):
             raise ConfigurationError("sleep_fn must be callable.")
-        if structured_output not in ("off", "json_schema"):
-            raise ConfigurationError("structured_output must be 'off' or 'json_schema'.")
+        if structured_output not in ("off", "json_object", "json_schema"):
+            raise ConfigurationError("structured_output must be 'off', 'json_object', or 'json_schema'.")
+        if output_token_parameter not in ("max_tokens", "max_completion_tokens"):
+            raise ConfigurationError("output_token_parameter must be 'max_tokens' or 'max_completion_tokens'.")
 
         self.base_url = str(url).rstrip("/")
         self.model = model
         self.timeout = float(timeout)
         self.max_attempts = max_attempts
         self.structured_output = structured_output
+        self.provider_options = _validate_provider_options(provider_options)
+        self.output_token_parameter = output_token_parameter
         self._api_key = api_key
         self._transport = transport
         self._sleep = sleep_fn
         self._trace = trace
         if trace is not None and api_key:
-            trace.add_secrets(api_key)
+            trace.add_secrets(api_key, api_key.strip())
 
     def __repr__(self) -> str:
         return (
@@ -121,7 +168,15 @@ class OpenAICompatibleBackend:
             "model": self.model,
             "messages": [dict(message) for message in request.messages],
         }
-        if self.structured_output == "json_schema":
+        # Revalidate mutable options so later mutation cannot bypass reserved keys.
+        payload.update(_validate_provider_options(self.provider_options))
+        if request.generation.temperature is not None:
+            payload["temperature"] = request.generation.temperature
+        if request.generation.max_output_tokens is not None:
+            payload[self.output_token_parameter] = request.generation.max_output_tokens
+        if self.structured_output == "json_object":
+            payload["response_format"] = {"type": "json_object"}
+        elif self.structured_output == "json_schema":
             if request.output_schema is None:
                 raise ConfigurationError("json_schema structured output requires a request output_schema.")
             payload["response_format"] = {
@@ -166,6 +221,7 @@ class OpenAICompatibleBackend:
                         raise BackendError(
                             f"The model request timed out after {attempt} attempt(s).",
                             attempts=attempt,
+                            code="timeout", retryable=True,
                         ) from None
                     if self._trace is not None:
                         self._trace.event("http", "retry", **context, attempt=attempt, reason="timeout")
@@ -176,6 +232,7 @@ class OpenAICompatibleBackend:
                         raise BackendError(
                             f"The model request failed in transport after {attempt} attempt(s).",
                             attempts=attempt,
+                            code="transport_error", retryable=True,
                         ) from None
                     if self._trace is not None:
                         self._trace.event("http", "retry", **context, attempt=attempt, reason="transport")
@@ -192,9 +249,9 @@ class OpenAICompatibleBackend:
                                       attempt=attempt, status_code=response.status_code)
                 if not 200 <= response.status_code < 300:
                     compatibility_hint = None
-                    if self.structured_output == "json_schema" and response.status_code in {400, 422}:
+                    if self.structured_output != "off" and response.status_code in {400, 422}:
                         compatibility_hint = (
-                            "The endpoint may not support response_format/json_schema or the supplied schema;"
+                            f"The endpoint may not support response_format/{self.structured_output} or the supplied schema;"
                             " no fallback was attempted."
                         )
                     diagnostic = describe_http_error(
@@ -227,6 +284,8 @@ class OpenAICompatibleBackend:
                         status_code=response.status_code,
                         attempts=attempt,
                         http_diagnostics=diagnostic, http_details=artifact,
+                        code=_http_error_code(response.status_code),
+                        retryable=response.status_code in _RETRYABLE_STATUS_CODES,
                     )
                 if self._trace is not None:
                     self._trace.event("model_response", "started", **context)
@@ -247,7 +306,7 @@ class OpenAICompatibleBackend:
     ) -> BackendResponse:
         try:
             payload = response.json()
-        except (ValueError, UnicodeDecodeError):
+        except (ValueError, UnicodeError, RecursionError):
             raise InvalidResponseError(
                 "The model endpoint did not return valid JSON.", attempts=attempt
             ) from None
@@ -288,24 +347,35 @@ class OpenAICompatibleBackend:
                 finish_reason=finish_reason if isinstance(finish_reason, str) else None,
             )
         if finish_reason is not None and finish_reason != "stop":
+            code = "unsupported_response"
+            if finish_reason == "length":
+                code = "truncated_response"
+            elif finish_reason == "content_filter":
+                code = "refusal"
             raise InvalidResponseError(
                 "The model completion was truncated, refused, or did not finish normally.",
-                attempts=attempt,
+                attempts=attempt, code=code,
             )
         message = choice.get("message")
         if not isinstance(message, dict):
             raise InvalidResponseError(
                 "The model response has no valid assistant message.", attempts=attempt
             )
-        if message.get("refusal") or message.get("tool_calls") or message.get("function_call"):
+        if message.get("refusal"):
             raise InvalidResponseError(
                 "The model response contains a refusal or an unsupported tool call.",
-                attempts=attempt,
+                attempts=attempt, code="refusal",
+            )
+        if message.get("tool_calls") or message.get("function_call"):
+            raise InvalidResponseError(
+                "The model response contains a refusal or an unsupported tool call.",
+                attempts=attempt, code="unsupported_response",
             )
         content = message.get("content")
         if not isinstance(content, str) or not content.strip():
             raise InvalidResponseError(
-                "The model response has no nonempty text content.", attempts=attempt
+                "The model response has no nonempty text content.", attempts=attempt,
+                code="empty_response" if content is None or isinstance(content, str) else "unsupported_response",
             )
 
         usage = payload.get("usage")
@@ -322,12 +392,23 @@ class OpenAICompatibleBackend:
             else {}
         )
         response_model = payload.get("model")
+        reported_model = response_model if isinstance(response_model, str) and response_model.strip() else None
+        request_id = None
+        for header in ("x-request-id", "request-id", "x-correlation-id", "x-goog-request-id"):
+            identifier = response.headers.get(header)
+            if identifier and identifier.strip():
+                identifier = redact_text(identifier, [self._api_key, self._api_key.strip()] if self._api_key else [])
+                identifier = re.sub(r"https?://\S+", "[URL REDACTED]", identifier, flags=re.IGNORECASE)
+                identifier = re.sub(r"\bBearer\s+\S+", "Bearer [REDACTED]", identifier, flags=re.IGNORECASE)
+                request_id = " ".join("".join(ch if ch.isprintable() else " " for ch in identifier).split())[:256]
+                break
         return BackendResponse(
             text=content,
-            model=response_model if isinstance(response_model, str) and response_model else self.model,
+            model=reported_model or self.model,
             usage=safe_usage,
             attempts=attempt,
             elapsed_seconds=time.perf_counter() - started,
+            finish_reason=finish_reason, request_id=request_id, reported_model=reported_model,
         )
 
 
@@ -339,6 +420,7 @@ class ReplayBackend:
     """
 
     name = "replay"
+    mode = "replay"
 
     def __init__(self, responses: Sequence[str | dict[str, Any]]) -> None:
         if isinstance(responses, (str, bytes)) or not isinstance(responses, Sequence):

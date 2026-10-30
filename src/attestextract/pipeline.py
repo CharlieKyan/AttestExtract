@@ -23,7 +23,7 @@ from .validation import contract_details, details, error_path, issue
 from .models import (
     BackendResponse, Candidate, CheckResult, ContractModel, DocumentChunk, EvidenceRef,
     ExtractionBackend, ExtractionRequest, ExtractionResult, FieldValue,
-    MeasurementInput, ReviewItem, RunInfo, Scalar, SourceInfo, TaskSpec,
+    GenerationOptions, MeasurementInput, ReviewItem, RunInfo, Scalar, SourceInfo, TaskSpec,
 )
 
 
@@ -105,9 +105,9 @@ def _parse_response(
                               format_attempt=format_attempt) from None
 
 
-def _request(task: TaskSpec, chunk: DocumentChunk) -> ExtractionRequest:
+def _request(task: TaskSpec, chunk: DocumentChunk, generation: GenerationOptions) -> ExtractionRequest:
     return ExtractionRequest(chunk_id=chunk.chunk_id, messages=build_messages(task, chunk),
-                             output_schema=build_output_schema(task))
+                             output_schema=build_output_schema(task), generation=generation.model_copy(deep=True))
 
 
 def _check_task_records(raw: _RawResponse, task: TaskSpec, *, trace: RunTrace | None,
@@ -174,9 +174,10 @@ def _format_feedback(diagnostic: dict[str, Any], task: TaskSpec) -> list[dict[st
 def _validated_response(
     task: TaskSpec, chunk: DocumentChunk, backend: ExtractionBackend,
     trace: RunTrace | None, format_retries: int,
+    generation: GenerationOptions,
 ) -> tuple[_RawResponse, list[BackendResponse]]:
     """Regenerate only locally rejected output, keeping each attempt auditable."""
-    request = _request(task, chunk)
+    request = _request(task, chunk, generation)
     responses = []
     allowed_keys = {name for record in task.record_types.values() for name in (*record.fields, *record.measurement_groups)}
     allowed_keys.update({"measurements", "context_quote", "value_text", "unit_text", "unit_quote"})
@@ -215,6 +216,8 @@ def _validated_response(
                 "model": response.model, "attempts": response.attempts,
                 "usage": response.usage, "elapsed_seconds": response.elapsed_seconds,
                 "format_attempt": format_attempt,
+                "finish_reason": response.finish_reason, "request_id": response.request_id,
+                "reported_model": response.reported_model,
             })
             trace.describe_artifact(f"responses/{stem}.meta.json", "response_metadata")
             trace.describe_artifact(f"responses/{stem}.txt", "model_output_text")
@@ -269,6 +272,7 @@ def extract(
     table_rows_per_chunk: int = 12,
     trace: RunTrace | None = None,
     format_retries: int = 0,
+    generation: GenerationOptions | None = None,
 ) -> ExtractionResult:
     """Extract candidates. Matching evidence does not establish factual validity.
 
@@ -282,10 +286,16 @@ def extract(
     try:
         if type(format_retries) is not int or format_retries not in (0, 1):
             raise ConfigurationError("format_retries must be 0 or 1.")
+        if generation is not None and not isinstance(generation, GenerationOptions):
+            raise ConfigurationError("generation must be a GenerationOptions instance or None.")
+        try:
+            options = GenerationOptions.model_validate(generation.model_dump()) if generation is not None else GenerationOptions()
+        except ValidationError:
+            raise ConfigurationError("generation contains invalid controls.") from None
         return _extract(
             text, task, backend=backend, source_name=source_name,
             max_chunk_chars=max_chunk_chars, table_rows_per_chunk=table_rows_per_chunk,
-            trace=trace, format_retries=format_retries,
+            trace=trace, format_retries=format_retries, generation=options,
         )
     except Exception as exc:
         if trace is not None:
@@ -303,8 +313,12 @@ def _extract(
     table_rows_per_chunk: int,
     trace: RunTrace | None,
     format_retries: int,
+    generation: GenerationOptions,
 ) -> ExtractionResult:
     started = time.perf_counter()
+    mode = getattr(backend, "mode", "replay" if backend.name == "replay" else "live")
+    if mode not in ("live", "replay"):
+        raise ConfigurationError("Backend mode must be 'live' or 'replay'.")
     if trace is not None:
         trace.event("document", "started")
     if isinstance(text, Document):
@@ -354,7 +368,7 @@ def _extract(
     for chunk in chunks:
         if trace is not None:
             trace.write_json(f"chunks/{chunk.chunk_id}.json", chunk.model_dump(mode="json"))
-        raw, responses = _validated_response(spec, chunk, backend, trace, format_retries)
+        raw, responses = _validated_response(spec, chunk, backend, trace, format_retries, generation)
         response_count += len(responses)
         for response in responses:
             request_attempts += response.attempts
@@ -471,7 +485,7 @@ def _extract(
         source=SourceInfo(name=source_name, sha256=source_hash, character_count=len(text), document_id=document.document_id),
         candidates=candidates, review=review, links=link_candidates(candidates, spec),
         run=RunInfo(
-            backend=backend.name, mode="replay" if backend.name == "replay" else "live",
+            backend=backend.name, mode=mode,
             chunk_count=len(chunks), response_count=response_count,
             candidate_count=len(candidates), request_attempts=request_attempts,
             model=model, usage=usage, elapsed_seconds=time.perf_counter() - started,

@@ -337,7 +337,7 @@ def test_cli_error_links_to_http_diagnostics_without_echoing_provider_message(tm
     def backend(**kwargs):
         return OpenAICompatibleBackend(**kwargs, transport=httpx.MockTransport(endpoint), sleep_fn=lambda _: None)
 
-    monkeypatch.setattr(cli, "OpenAICompatibleBackend", backend)
+    monkeypatch.setattr("attestextract.backends.OpenAICompatibleBackend", backend)
     status = cli.main([
         "extract", "--input", str(source), "--task", str(task), "--output", str(output),
         "--base-url", "https://example.invalid/v1", "--model", "synthetic-model", "--log-dir", str(directory),

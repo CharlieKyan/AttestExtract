@@ -22,12 +22,17 @@ class BackendError(AttestExtractError):
         attempts: int = 1,
         http_diagnostics: dict[str, Any] | None = None,
         http_details: str | None = None,
+        code: str = "backend_error",
+        retryable: bool = False,
     ) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.attempts = attempts
         self.http_diagnostics = http_diagnostics
         self.http_details = http_details
+        self.code = code
+        # Describes the cause, not permission to make another paid request.
+        self.retryable = retryable
 
 
 class InvalidResponseError(BackendError):
@@ -37,8 +42,9 @@ class InvalidResponseError(BackendError):
         self, message: str, *, status_code: int | None = None, attempts: int = 1,
         validation_details: dict[str, Any] | None = None,
         validation_artifact: str | None = None,
+        code: str = "invalid_response",
     ) -> None:
-        super().__init__(message, status_code=status_code, attempts=attempts)
+        super().__init__(message, status_code=status_code, attempts=attempts, code=code)
         self.validation_details = validation_details
         self.validation_artifact = validation_artifact
 

@@ -97,11 +97,19 @@ class DocumentChunk(ContractModel):
     segments: list[SourceSpan]
 
 
+class GenerationOptions(ContractModel):
+    """Portable generation controls; omitted values leave service defaults intact."""
+
+    temperature: float | None = Field(default=None, ge=0, le=2)
+    max_output_tokens: int | None = Field(default=None, gt=0)
+
+
 class ExtractionRequest(ContractModel):
     messages: list[dict[str, str]]
     chunk_id: str
     output_schema: dict[str, Any] | None = None
     format_attempt: int = Field(default=1, ge=1, le=2)
+    generation: GenerationOptions = Field(default_factory=GenerationOptions)
 
     @property
     def artifact_stem(self) -> str:
@@ -115,6 +123,9 @@ class BackendResponse(ContractModel):
     usage: dict[str, int] = Field(default_factory=dict)
     attempts: int = Field(default=1, ge=1)
     elapsed_seconds: float = Field(default=0, ge=0)
+    finish_reason: str | None = None
+    request_id: str | None = None
+    reported_model: str | None = None
 
 
 class ExtractionBackend(Protocol):
@@ -208,7 +219,7 @@ class RunInfo(ContractModel):
 
 class ExtractionResult(ContractModel):
     schema_version: Literal["0.1", "0.2"] = "0.2"
-    package_version: str = "0.1.0.dev7"
+    package_version: str = "0.1.0.dev8"
     task: TaskSpec
     source: SourceInfo
     candidates: list[Candidate]

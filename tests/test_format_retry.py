@@ -379,7 +379,7 @@ def test_cli_controls_pipeline_regeneration_without_requiring_live_api(tmp_path,
         constructor_options.append(kwargs)
         return backend
 
-    monkeypatch.setattr(cli, "OpenAICompatibleBackend", configured_backend)
+    monkeypatch.setattr("attestextract.backends.OpenAICompatibleBackend", configured_backend)
     monkeypatch.delenv("ATTESTEXTRACT_API_KEY", raising=False)
     args = [
         "extract", "--input", str(source), "--task", str(task), "--output", str(output),

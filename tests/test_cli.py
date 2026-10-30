@@ -99,7 +99,7 @@ def test_extract_reads_utf8_and_uses_the_configured_backend(extension, newline, 
                 "records": [{"record_type": "purchase", "fields": {"amount": {"value": 120, "quote": "120"}}}]
             }))
 
-    monkeypatch.setattr(cli, "OpenAICompatibleBackend", FakeBackend)
+    monkeypatch.setattr("attestextract.backends.OpenAICompatibleBackend", FakeBackend)
     monkeypatch.setenv("ATTESTEXTRACT_BASE_URL", "https://example.invalid/v1")
     monkeypatch.setenv("ATTESTEXTRACT_MODEL", "synthetic-test-model")
     monkeypatch.delenv("ATTESTEXTRACT_API_KEY", raising=False)
@@ -137,7 +137,7 @@ def test_backend_failure_is_reported_and_does_not_create_success_output(monkeypa
         def generate(self, request):
             raise BackendError("Synthetic endpoint unavailable")
 
-    monkeypatch.setattr(cli, "OpenAICompatibleBackend", FailingBackend)
+    monkeypatch.setattr("attestextract.backends.OpenAICompatibleBackend", FailingBackend)
     status = cli.main([
         "extract", "--input", str(source), "--task", str(task), "--output", str(output),
         "--base-url", "https://example.invalid/v1", "--model", "synthetic-test-model",
