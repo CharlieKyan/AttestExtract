@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import time
@@ -262,11 +264,73 @@ def _validated_response(
     raise AssertionError("Unreachable format retry state")  # pragma: no cover
 
 
+def _selected_backend(
+    model: str, *, env_file: str | Path | None, api_key: str | None,
+    api_key_env: str | None, base_url: str | None, region: str | None,
+    model_options: Mapping[str, Any] | None, generation: GenerationOptions | None,
+    format_retries: int, trace: RunTrace | None,
+) -> tuple[ExtractionBackend, GenerationOptions]:
+    """Resolve the opt-in model shortcut without changing backend injection."""
+    # Import lazily: the public package imports this module before the registry.
+    from .envconfig import load_env_file
+    from .providers import resolve_model_config, resolve_model_credentials
+    from .registry import default_registry
+
+    if trace is not None and api_key is not None:
+        trace.add_secrets(api_key)
+    if model_options is not None and not isinstance(model_options, Mapping):
+        raise ConfigurationError("model_options must be a mapping of backend configuration overrides.")
+    overrides = dict(model_options or {})
+    allowed = {
+        "base_url", "api_key_env", "timeout", "max_attempts", "structured_output",
+        "generation", "provider_options", "output_token_parameter",
+    }
+    if set(overrides) - allowed:
+        raise ConfigurationError(
+            "Unsupported model_options field; select the model with model= and use format_retries= separately."
+        )
+    if generation is not None:
+        configured_generation = overrides.get("generation", {})
+        if not isinstance(configured_generation, Mapping):
+            raise ConfigurationError("model_options generation must be a mapping.")
+        overrides["generation"] = {
+            **configured_generation, **generation.model_dump(exclude_none=True),
+        }
+    for name, value in (("api_key_env", api_key_env), ("base_url", base_url)):
+        if value is not None:
+            overrides[name] = value
+    overrides["format_retries"] = format_retries
+    environment = load_env_file(env_file) if env_file is not None else dict(os.environ)
+    config = resolve_model_config(model, environment=environment, overrides=overrides, region=region)
+    key = resolve_model_credentials(config, environment, api_key=api_key)
+    if trace is not None:
+        trace.add_secrets(key)
+    backend = default_registry().create(config.adapter, config=config, api_key=key, trace=trace)
+    if trace is not None:
+        trace.write_json("backend.json", {
+            "backend": backend.name, "adapter": config.adapter, "model": config.model,
+            "model_id": model, "selection_mode": "preset", "timeout": config.timeout,
+            "max_attempts": config.max_attempts, "api_key_configured": bool(key),
+            "env_file_used": env_file is not None, "structured_output": config.structured_output,
+            "format_retries": config.format_retries,
+            "generation": config.generation.model_dump(mode="json"),
+            "output_token_parameter": config.output_token_parameter,
+        })
+    return backend, config.generation
+
+
 def extract(
     text: str | Document,
     task: TaskSpec | dict[str, Any],
     *,
-    backend: ExtractionBackend,
+    backend: ExtractionBackend | None = None,
+    model: str | None = None,
+    api_key: str | None = None,
+    api_key_env: str | None = None,
+    base_url: str | None = None,
+    env_file: str | Path | None = None,
+    region: str | None = None,
+    model_options: Mapping[str, Any] | None = None,
     source_name: str | None = None,
     max_chunk_chars: int = 6000,
     table_rows_per_chunk: int = 12,
@@ -282,6 +346,12 @@ def extract(
     successfully saving the result. Failures mark the trace failed immediately.
     ``format_retries=1`` permits one additional generation for a locally invalid
     response per chunk. It can incur extra model charges and defaults to zero.
+
+    Pass either an existing ``backend`` or ``model="provider:model-id"``. The
+    latter resolves service presets and credentials, optionally from an explicit
+    ``env_file``. ``model_options`` supplies advanced configuration overrides;
+    explicit ``generation`` controls override only their non-None values. The
+    backend path retains its existing defaults and does not read credentials.
     """
     try:
         if type(format_retries) is not int or format_retries not in (0, 1):
@@ -292,6 +362,19 @@ def extract(
             options = GenerationOptions.model_validate(generation.model_dump()) if generation is not None else GenerationOptions()
         except ValidationError:
             raise ConfigurationError("generation contains invalid controls.") from None
+        selection = (model, api_key, api_key_env, base_url, env_file, region, model_options)
+        if backend is not None:
+            if any(value is not None for value in selection):
+                raise ConfigurationError("Pass either backend= or model= with its configuration, not both.")
+        elif model is None:
+            raise ConfigurationError("Provide backend= or a provider:model identifier in model=.")
+        else:
+            backend, options = _selected_backend(
+                model, env_file=env_file, api_key=api_key, api_key_env=api_key_env,
+                base_url=base_url, region=region, model_options=model_options,
+                generation=options if generation is not None else None,
+                format_retries=format_retries, trace=trace,
+            )
         return _extract(
             text, task, backend=backend, source_name=source_name,
             max_chunk_chars=max_chunk_chars, table_rows_per_chunk=table_rows_per_chunk,

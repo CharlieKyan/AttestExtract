@@ -2,12 +2,13 @@
 
 Schema-driven extraction from text and tables, with source-linked evidence and pluggable decision backends.
 
-**Early prototype · `0.1.0.dev8` · Python 3.11+**
+**Early prototype · `0.1.0.dev9` · Python 3.11+**
 
-Dev8 adds named model profiles, explicit backend registration for Python and CLI,
-portable generation controls and a second-protocol simulation. See the
-[D2 adapter and acceptance guide](docs/BACKENDS.md) for configuration, extension,
-error contracts and bounded live acceptance.
+Dev9 adds a minimal model-selection entry point: configure a provider key once,
+then change `--model-id` in the CLI or `model=` in Python. Named profiles and
+injected backends remain supported. See the [model configuration guide](docs/BACKENDS.md)
+and the [D2 acceptance checklist](docs/D2_ACCEPTANCE.md) for the implemented scope
+and the distinction between offline checks, earlier live calls and content accuracy.
 
 dev7 adds task-declared measurement evidence groups, conditional missingness rules,
 possible candidate associations, literal math evidence in review reports, and separate
@@ -68,7 +69,54 @@ cd AttestExtract
 python -m pip install -e ".[dev]"
 ```
 
-Configure an OpenAI-compatible **chat completions** endpoint. The base URL includes the API prefix, such as `https://your-provider.example/v1`; the adapter appends `/chat/completions`. It sends non-streaming text requests. The endpoint must accept `model` and `messages` and return text in `choices[0].message.content`.
+For a supported preset, configure the keys for the providers you use once in a
+local `.env` file. No model address or TOML profile is needed for their default
+official endpoints:
+
+```dotenv
+DEEPSEEK_API_KEY=your-deepseek-key
+DASHSCOPE_API_KEY=your-qwen-beijing-key
+```
+
+List the local presets without network access, then select a model:
+
+```bash
+attestextract models
+attestextract extract --model-id deepseek:deepseek-flash --env-file .env --input src/attestextract/examples/procurement.md --task src/attestextract/examples/procurement.task.json --output extraction-results.json
+```
+
+For Qwen, change only `--model-id` to `qwen:qwen3.8-27b`. The same source and task
+apply. The Python equivalent is:
+
+```python
+from attestextract import extract, load_task
+
+result = extract(
+    "Purchase request: 5 desk lamps at USD 24.50 each, delivery within 10 days.",
+    load_task("src/attestextract/examples/procurement.task.json"),
+    model="deepseek:deepseek-flash",  # Or: qwen:qwen3.8-27b
+    env_file=".env",
+)
+```
+
+The three explicit presets are `deepseek:deepseek-flash`, `qwen:qwen3.8-27b`, and
+`qwen:qwen-plus`; Qwen presets support Beijing only. Defaults are JSON object
+output, thinking disabled, one HTTP attempt, no format regeneration and at most
+2,048 output tokens per generation. These are request defaults, not a guarantee
+of extraction accuracy or server-side parameter enforcement. Existing
+`VLM_API_KEY` / `VLM_BASE_URL` can be used for Qwen; credential and address
+precedence is documented in the [configuration guide](docs/BACKENDS.md).
+
+Unknown models, other regions and custom protocols use the advanced profile or
+backend interface. The existing CLI `--model` still means a provider's raw model
+name; it does not parse `provider:model`. `--model-id` cannot be combined with
+`--model`, `--adapter`, `--config` or `--profile`.
+
+For the existing advanced configuration, configure an OpenAI-compatible **chat
+completions** endpoint. The base URL includes the API prefix, such as
+`https://your-provider.example/v1`; the adapter appends `/chat/completions`. It
+sends non-streaming text requests. The endpoint must accept `model` and
+`messages` and return text in `choices[0].message.content`.
 
 ```powershell
 $env:ATTESTEXTRACT_BASE_URL = "https://your-provider.example/v1"
@@ -79,11 +127,17 @@ attestextract extract --input src/attestextract/examples/procurement.md --task s
 
 On Bash, use `export ATTESTEXTRACT_BASE_URL=...`, `export ATTESTEXTRACT_MODEL=...`, and `export ATTESTEXTRACT_API_KEY=...`. Alternatively, load a configuration file explicitly with `--env-file`, as below. Configuration precedence is **CLI arguments → existing process environment → the explicit `.env` file**. No `.env` file is loaded automatically. `--api-key-env OTHER_VARIABLE` selects the variable containing the key; no command-line key value is accepted. A key may be omitted for a local endpoint that does not require authentication. `--timeout` accepts seconds greater than zero and at most 60, defaulting to 60 per attempt.
 
-Live extraction sends document chunks to your configured endpoint. There is no automatic fallback to demo responses. Transport failures and transient HTTP statuses are retried at most three times by default. Authentication and configuration failures stop immediately; response format errors stop by default, with an optional single format retry described below. An unrecovered chunk fails the run with a nonzero exit status; there is no partial-success or resume mode.
+Live extraction sends document chunks to your configured endpoint. There is no automatic fallback to demo responses. In the advanced configuration, transport failures and transient HTTP statuses are retried at most three times by default; model presets default to one attempt. Authentication and configuration failures stop immediately; response format errors stop by default, with an optional single format retry described below. An unrecovered chunk fails the run with a nonzero exit status; there is no partial-success or resume mode.
 
 ### Optional structured output
 
-`extract --structured-output off|json_schema` defaults to `off`. With `json_schema`, AttestExtract generates the response schema from the task and sends `response_format` with `type: "json_schema"` and `strict: true`. The Python equivalent is `OpenAICompatibleBackend(..., structured_output="json_schema")`.
+`extract --structured-output off|json_object|json_schema` overrides the selected
+configuration. Advanced configuration defaults to `off`; model presets default
+to `json_object`, which requests valid JSON without promising task-Schema
+enforcement. With `json_schema`, AttestExtract generates the response schema
+from the task and sends `response_format` with `type: "json_schema"` and
+`strict: true`. The Python backend equivalent is
+`OpenAICompatibleBackend(..., structured_output="json_schema")`.
 
 In strict mode, every declared field has a required `{ "value": ..., "quote": ... }` wrapper. The task's scalar type constrains the **inner `value`**, and `quote` remains a string. For an unreported field, return `value: null` and `quote: ""`; the existing review rules apply, and this does not create an accepted record. With structured output off, optional unreported fields may still be omitted.
 
@@ -99,7 +153,9 @@ Enabling this option can add a paid generation per failing chunk; each generatio
 
 ### Explicit `.env` configuration and run logs
 
-Create a local `.env` from `.env.example`, or edit your existing file, with the provider values:
+For the legacy endpoint configuration, create a local `.env` from `.env.example`,
+or edit your existing file, with the provider values below. The model-selection
+shortcut above needs only its provider-specific key and any optional address:
 
 ```dotenv
 ATTESTEXTRACT_BASE_URL=https://your-provider.example/v1

@@ -17,6 +17,7 @@ from .diagnostics import RunTrace, redact_text
 from .envconfig import load_env_file
 from .errors import AttestExtractError, ConfigurationError
 from .models import TaskSpec
+from .providers import available_models, resolve_model_config, resolve_model_credentials
 from .reporting import render_markdown_report
 from .registry import BackendRegistry, default_registry
 
@@ -28,6 +29,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--version", action="version", version=__version__)
     commands = parser.add_subparsers(dest="command", required=True)
+    commands.add_parser("models", help="List built-in model selectors without network access or credentials")
 
     demo = commands.add_parser("demo", help="Replay bundled synthetic responses without a model or API key")
     demo.add_argument("--example", choices=("ccus", "procurement", "all"), default="all")
@@ -46,6 +48,8 @@ def _parser() -> argparse.ArgumentParser:
     live.add_argument("--report", type=Path, help="Also write a readable Markdown review of candidates and evidence")
     live.add_argument("--base-url", help="OpenAI-compatible API base URL, or ATTESTEXTRACT_BASE_URL")
     live.add_argument("--model", help="Model name, or ATTESTEXTRACT_MODEL")
+    live.add_argument("--model-id", help="Select a built-in provider:model preset; see 'attestextract models'")
+    live.add_argument("--region", help="Region for --model-id (Qwen: beijing; other regions use a profile)")
     live.add_argument("--config", type=Path, help="TOML file containing named backend profiles")
     live.add_argument("--profile", help="Profile name in --config; explicit CLI values override it")
     live.add_argument("--adapter", help="Registered backend name (default: openai-compatible)")
@@ -116,6 +120,12 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
     api_key = None
     trace = None
     try:
+        if args.command == "models":
+            print("Built-in model presets (offline list; not a live availability check):")
+            for selector in available_models():
+                print(selector)
+            return 0
+
         if args.command == "d1":
             print(
                 "Synthetic manual expected examples: fixed replay and explicit fixture labels; "
@@ -150,14 +160,22 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
             )
             trace.event("configuration", "started")
         environment = load_env_file(args.env_file) if args.env_file else os.environ
-        config = resolve_backend_config(
-            overrides={name: getattr(args, name) for name in (
-                "adapter", "base_url", "model", "api_key_env", "timeout", "max_attempts",
-                "structured_output", "format_retries", "temperature", "max_output_tokens",
-            )},
-            environment=environment, config_path=args.config, profile=args.profile,
-        )
-        api_key = environment.get(config.api_key_env)
+        overrides = {name: getattr(args, name) for name in (
+            "adapter", "base_url", "model", "api_key_env", "timeout", "max_attempts",
+            "structured_output", "format_retries", "temperature", "max_output_tokens",
+        ) if getattr(args, name) is not None}
+        if args.model_id is not None:
+            if any(value is not None for value in (args.config, args.profile, args.model, args.adapter)):
+                raise ConfigurationError("--model-id cannot be combined with --config, --profile, --model or --adapter.")
+            config = resolve_model_config(args.model_id, environment=environment,
+                                          overrides=overrides, region=args.region)
+            api_key = resolve_model_credentials(config, environment)
+        else:
+            if args.region is not None:
+                raise ConfigurationError("--region requires --model-id; advanced profiles declare their full endpoint.")
+            config = resolve_backend_config(overrides=overrides, environment=environment,
+                                            config_path=args.config, profile=args.profile)
+            api_key = environment.get(config.api_key_env)
         if trace is not None and api_key:
             trace.add_secrets(api_key)
         if args.input.suffix.lower() not in {".txt", ".md"}:
@@ -179,6 +197,8 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
                 "max_attempts": config.max_attempts, "api_key_configured": bool(api_key),
                 "env_file_used": args.env_file is not None,
                 "profile": args.profile, "adapter": config.adapter,
+                "model_id": args.model_id,
+                "selection_mode": "preset" if args.model_id is not None else "profile" if args.profile else "legacy",
                 "structured_output": config.structured_output,
                 "format_retries": config.format_retries,
                 "generation": config.generation.model_dump(mode="json"),

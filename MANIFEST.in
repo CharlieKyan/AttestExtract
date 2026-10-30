@@ -2,4 +2,5 @@ include README.zh-CN.md
 include CHANGELOG.md
 include examples/backends.toml
 include scripts/d2_acceptance.py
+include scripts/model_selection_smoke.py
 recursive-include docs *.md

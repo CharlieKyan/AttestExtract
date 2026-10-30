@@ -1,11 +1,120 @@
 # D2: model adapters and acceptance
 
-Dev8 adds named TOML profiles and an explicit registry shared by Python and CLI.
+Dev9 adds provider/model selection on top of the dev8 profiles and registry.
+Configure credentials once, then change one model identifier in Python or CLI.
 No provider SDK or LangExtract dependency is needed. Existing backend injection,
-legacy CLI environment configuration, result schema 0.2 (including reading 0.1),
-evidence rules, and opt-in format regeneration remain available.
+profiles, legacy CLI environment configuration, result schema 0.2 (including
+reading 0.1), evidence rules, and opt-in format regeneration remain available.
+The [D2 acceptance checklist](D2_ACCEPTANCE.md) records the verification scope.
 
-## Configuration and calls
+## Select a model with minimal configuration
+
+Set the keys for the providers you use in the process environment or an explicit
+`.env` file:
+
+```dotenv
+DEEPSEEK_API_KEY=your-deepseek-key
+DASHSCOPE_API_KEY=your-qwen-beijing-key
+```
+
+```powershell
+attestextract models
+attestextract extract --model-id deepseek:deepseek-flash --env-file .env --input source.txt --task task.json --output result.json
+```
+
+Change `--model-id` to `qwen:qwen3.8-27b` to use Qwen with the same task and input.
+`models` lists local presets without loading credentials or contacting services;
+it is not a live model-discovery command. In Python:
+
+```python
+from attestextract import extract, load_task
+
+result = extract(
+    "Lamp A uses 8 W.", load_task("task.json"),
+    model="deepseek:deepseek-flash", env_file=".env",
+)
+# For Qwen, use model="qwen:qwen3.8-27b" with the same task and source.
+```
+
+| Model identifier | Default endpoint | Default provider option |
+| --- | --- | --- |
+| `deepseek:deepseek-flash` | DeepSeek official | `thinking = { type = "disabled" }` |
+| `qwen:qwen3.8-27b` | Qwen Beijing public endpoint | `enable_thinking = false` |
+| `qwen:qwen-plus` | Qwen Beijing public endpoint | `enable_thinking = false` |
+
+All three presets default to `json_object`, `max_tokens: 2048`, timeout 60 seconds,
+one HTTP attempt and zero format regeneration. The token cap applies per chunk
+generation, not to the whole document. Explicit options override these defaults.
+Unknown provider/model identifiers fail before a model request; use a complete
+profile to specify another model's endpoint and parameters. No model-family
+guessing or automatic output-format downgrade is performed.
+
+`--region beijing` is optional for Qwen. Other Qwen regions need a complete
+profile with the appropriate endpoint and credential. DeepSeek presets do not
+accept a region setting. The existing `--model` option remains a raw model name,
+including any literal colon; the new shortcut is `--model-id`. It cannot be
+combined with `--model`, `--adapter`, `--config` or `--profile`.
+
+### Credential and address selection
+
+The merged environment follows process environment > explicitly loaded `.env`.
+Loading a file never changes the process environment. The model selector always
+determines the model: legacy `ATTESTEXTRACT_*` values and dedicated `*_MODEL`
+variables do not influence the shortcut.
+
+| Provider/key selection | Associated address variable |
+| --- | --- |
+| DeepSeek: `DEEPSEEK_API_KEY` | `DEEPSEEK_BASE_URL` |
+| Qwen first choice: `QWEN_API_KEY` | `QWEN_BASE_URL` |
+| Qwen second choice: `DASHSCOPE_API_KEY` | `QWEN_BASE_URL` |
+| Qwen third choice: `VLM_API_KEY` | `VLM_BASE_URL` |
+
+Qwen selects the first **present** variable in that order. An empty selected key
+fails explicitly; it does not fall back to another account. A selected VLM key
+uses only its VLM address variable, so stale VLM settings cannot redirect a Qwen
+or DashScope credential. Missing address variables use the official default;
+an explicitly empty address fails. Automatic addresses must be the selected
+provider's official endpoint, with Qwen restricted to Beijing. These routes
+include a Beijing workspace URL in `QWEN_BASE_URL` or `VLM_BASE_URL`.
+
+Use `--api-key-env NAME` to choose another credential variable. Python also
+accepts `api_key_env="NAME"` or an explicit `api_key=...`; explicit key values
+take precedence and empty values fail. The CLI accepts a variable name, never a
+key value. Keep real credentials out of TOML and public commits.
+
+Explicit `base_url` / `--base-url` can select a custom compatible service, but
+must be paired with an explicit `api_key_env` / `--api-key-env`; default official
+credentials are not automatically sent to a custom address. An explicit region
+and a custom endpoint cannot be combined. Existing advanced profiles can express
+other authentication or endpoint arrangements, including unauthenticated local
+services.
+
+### Options and clear failures
+
+Python accepts `generation=GenerationOptions(...)` and
+`model_options={"structured_output": "off", "provider_options": {}}` for explicit
+changes. A supplied `provider_options` object replaces the preset object, rather
+than inheriting its old thinking settings. `model_options` cannot change
+`model`, `adapter` or contain `api_key`; use the selector, an injected backend or
+the dedicated credential argument. Supply `format_retries` directly to
+`extract`, not inside `model_options`. CLI generation controls and timeout remain
+available; provider options and token-field mapping use an advanced profile.
+
+Missing credentials fail before HTTP. Authentication, billing, unavailable-model
+and request-parameter failures retain the framework error code and bounded
+provider diagnostic. CLI hints describe the next configuration check; they do
+not silently change models, remove parameters or repeat a failed request.
+
+The retained dev8 live evidence covers `deepseek-flash` and `qwen3.8-27b`: six
+HTTP/format successes and 32 exact source spans, with strict content comparison
+passing four of six cases. Both observation cases had a sample-name
+category-prefix difference; expected values and raw outputs were not rewritten.
+Field-level response details remain in the local assessment. This is not a
+dev9 live run or live acceptance of `qwen-plus`. Dev9
+checks the new selection path offline; engineering acceptance and content
+agreement remain separate.
+
+## Advanced profile configuration and calls
 
 Use `examples/backends.toml` for two independent official-service profiles.
 Credentials belong in environment variables or an explicitly selected `.env`,
@@ -24,7 +133,7 @@ explicit CLI > process environment > explicitly loaded `.env` remains unchanged.
 Credentials use the selected `api_key_env`, with process environment > `.env`.
 An existing empty environment value does not fall back to the file.
 
-| Setting | Default / behavior |
+| Setting | Advanced profile default / behavior |
 | --- | --- |
 | `adapter` | `openai-compatible`; must be registered by application code |
 | `base_url`, `model` | Required; compatible adapter appends `/chat/completions` |
@@ -123,7 +232,7 @@ existing callers. Request IDs are not invented from response completion IDs.
 Usage retains nonnegative integer provider counts; absence is not zero usage.
 
 `BackendError` retains its original attributes and adds `code` and `retryable`.
-Codes include `timeout`, `transport_error`, `authentication_error`,
+Codes include `timeout`, `transport_error`, `authentication_error`, `billing_error`,
 `permission_denied`, `not_found`, `rate_limited`, `server_error`, `invalid_request`,
 `http_error`, and `backend_error`. `InvalidResponseError` uses `invalid_response`,
 `empty_response`, `truncated_response`, `refusal`, or `unsupported_response`.

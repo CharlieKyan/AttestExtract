@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.0.dev9
+
+- Add `extract(..., model="provider:model")`, CLI `--model-id` and an offline `models` list. Three explicit presets cover DeepSeek Flash, Qwen 3.8-27B and Qwen Plus; keep native CLI `--model`, profiles, registry and injected backends compatible.
+- Resolve provider credentials and endpoints separately from legacy global settings. Support existing `VLM_API_KEY`/`VLM_BASE_URL` for Beijing Qwen, explicit overrides and actionable preflight errors; reject unsupported presets/regions instead of guessing capabilities.
+- Presets use JSON object output, disabled thinking, 2,048 output tokens, one HTTP attempt and no format regeneration. Existing backend/profile defaults and result/trace schemas remain unchanged.
+- Classify HTTP 402 as `billing_error` (previously `http_error`) and add safe guidance for authentication, billing, permission, missing-model/route and unsupported-parameter errors. Retrying and fallback behavior are unchanged.
+- Add Python/CLI switching tests and a synthetic installed-wheel smoke check. Reuse separately recorded dev8 live endpoint evidence with an offline request-equivalence check; this release makes no new live model call or all-samples semantic-accuracy claim. No new dependency or Jev decision implementation.
+
 ## 0.1.0.dev8
 
 - Add explicit backend registry/factory and named TOML profiles used by Python and CLI; preserve legacy environment configuration. Profile switching cannot inherit stale global endpoint/model settings, and outputs cannot overwrite TOML inputs.

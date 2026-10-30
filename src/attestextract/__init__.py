@@ -12,8 +12,9 @@ from .storage import load_archive, load_document, save_archive, save_document
 from .diagnostics import RunTrace
 from .config import BackendConfig, resolve_backend_config
 from .registry import BackendRegistry, default_registry
+from .providers import available_models, resolve_model_config
 
-__version__ = "0.1.0.dev8"
+__version__ = "0.1.0.dev9"
 
 __all__ = [
     "__version__", "extract", "load_task", "TaskSpec", "RecordSpec", "FieldSpec",
@@ -24,4 +25,5 @@ __all__ = [
     "create_archive", "save_archive", "load_archive", "save_document", "load_document",
     "RunTrace",
     "GenerationOptions", "BackendConfig", "resolve_backend_config", "BackendRegistry", "default_registry",
+    "available_models", "resolve_model_config",
 ]

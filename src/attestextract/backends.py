@@ -50,6 +50,8 @@ def _http_error_code(status: int) -> str:
         return "invalid_request"
     if status == 401:
         return "authentication_error"
+    if status == 402:
+        return "billing_error"
     if status == 403:
         return "permission_denied"
     if status == 404:

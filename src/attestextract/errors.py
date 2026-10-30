@@ -3,6 +3,15 @@
 from typing import Any
 
 
+_BACKEND_HINTS = {
+    "authentication_error": "Check the selected provider's API key and endpoint.",
+    "billing_error": "Check the provider account balance, billing and quota.",
+    "permission_denied": "Check whether this key has access to the selected model and region.",
+    "not_found": "Check the model ID and API endpoint; the model or route was not found.",
+    "invalid_request": "Check the model's supported parameters and output mode; no parameter fallback was attempted.",
+}
+
+
 class AttestExtractError(Exception):
     """Base class for expected, user-facing failures."""
 
@@ -25,7 +34,8 @@ class BackendError(AttestExtractError):
         code: str = "backend_error",
         retryable: bool = False,
     ) -> None:
-        super().__init__(message)
+        self.hint = _BACKEND_HINTS.get(code)
+        super().__init__(message + (" " + self.hint if self.hint else ""))
         self.status_code = status_code
         self.attempts = attempts
         self.http_diagnostics = http_diagnostics

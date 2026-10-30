@@ -2,9 +2,9 @@
 
 按任务模式从正文和表格抽取候选数据，保留原文证据，并预留可替换的决策后端。
 
-**早期原型 · `0.1.0.dev8` · Python 3.11+**
+**早期原型 · `0.1.0.dev9` · Python 3.11+**
 
-dev8 补齐 D2 的命名 TOML 配置、Python／CLI 共用的适配器注册入口、统一生成参数和异构响应协议模拟。更换兼容模型只需选择另一份 profile；另一种协议可通过应用启动代码注册后使用同一 CLI。接口、错误分类与有次数上限的验收方法见 [D2 适配器指南](docs/BACKENDS.md)。模拟验收和真实端点验收分开报告。
+dev9 增加最少配置的模型选择入口：首次配置服务商密钥，之后只修改 CLI 的 `--model-id` 或 Python 的 `model=` 即可切换。已有 TOML profile 和后端注入继续可用。配置规则见 [D2 适配器指南](docs/BACKENDS.md)，完成范围和证据边界见 [D2 验收清单](docs/D2_ACCEPTANCE.md)。离线验证、既有真实调用和内容准确性分开报告。
 
 dev7 增加测量上下文与数值／单位片段位置、任务声明的条件必填规则、可选空字段说明项，以及不合并候选的待确认关联。报告中的数学文本按原文显示。配置与效果评估见[测量证据和复核指南](docs/MEASUREMENT_REVIEW.md)，接口诊断见[json_schema 定位指南](docs/SCHEMA_DIAGNOSTICS.md)。
 
@@ -56,7 +56,38 @@ cd AttestExtract
 python -m pip install -e ".[dev]"
 ```
 
-PowerShell 配置示例：
+使用预设模型时，在本地 `.env` 中配置需要使用的服务商密钥即可，默认官方端点不需要额外填写地址或 TOML：
+
+```dotenv
+DEEPSEEK_API_KEY=你的DeepSeek密钥
+DASHSCOPE_API_KEY=你的Qwen北京区密钥
+```
+
+先查看本地支持的预设；`models` 命令不联网。抽取时选择一个模型：
+
+```bash
+attestextract models
+attestextract extract --model-id deepseek:deepseek-flash --env-file .env --input src/attestextract/examples/procurement.md --task src/attestextract/examples/procurement.task.json --output extraction-results.json
+```
+
+切换 Qwen 时，只将 `--model-id` 改为 `qwen:qwen3.8-27b`，原文和任务保持不变。Python 写法：
+
+```python
+from attestextract import extract, load_task
+
+result = extract(
+    "Purchase request: 5 desk lamps at USD 24.50 each, delivery within 10 days.",
+    load_task("src/attestextract/examples/procurement.task.json"),
+    model="deepseek:deepseek-flash",  # 切换为 qwen:qwen3.8-27b
+    env_file=".env",
+)
+```
+
+首批明确支持 `deepseek:deepseek-flash`、`qwen:qwen3.8-27b`、`qwen:qwen-plus` 三个预设，Qwen 限北京区。默认请求 JSON object、关闭思考、每次生成仅一次 HTTP 尝试、零格式再生成、最多输出 2,048 token。它们是请求默认值，不代表抽取准确率或服务端执行保证。已有的 `VLM_API_KEY`／`VLM_BASE_URL` 可作为 Qwen 配置，具体优先级见 [配置指南](docs/BACKENDS.md)。`.env` 仍需显式传入，不会自动加载。
+
+未知模型、其他地域和特殊协议使用高级 profile 或适配器。原 CLI `--model` 保留“服务原生模型名”的语义，不解析 `provider:model`；新的 `--model-id` 不能与 `--model`、`--adapter`、`--config`、`--profile` 混用。
+
+原有高级配置方式继续支持，例如 PowerShell：
 
 ```powershell
 $env:ATTESTEXTRACT_BASE_URL = "https://your-provider.example/v1"
@@ -69,11 +100,11 @@ attestextract extract --input src/attestextract/examples/procurement.md --task s
 
 也可以使用下面的 `--env-file` 显式加载配置文件。配置优先级为 **命令行参数 → 当前进程已有环境变量 → 显式指定的 `.env` 文件**，程序不会自动搜索或加载 `.env`。`--api-key-env` 可指定保存密钥的变量名，不接受命令行密钥值。无需认证的本地端点可以不设置密钥。`--timeout` 为每次请求超时，默认 60 秒，范围为大于 0 且不超过 60 秒。
 
-网络传输失败和暂时性 HTTP 错误默认最多尝试三次；鉴权和配置错误直接失败。响应格式错误默认失败，也可明确开启下面的一次格式重试。程序不伪装成“未抽到数据”，也不自动退回演示。任一分块最终未恢复会使整个运行以非零退出码失败；尚无部分成功或断点续跑模式。
+高级配置下，网络传输失败和暂时性 HTTP 错误默认最多尝试三次；模型预设默认仅一次。鉴权和配置错误直接失败。响应格式错误默认失败，也可明确开启下面的一次格式重试。程序不伪装成“未抽到数据”，也不自动退回演示。任一分块最终未恢复会使整个运行以非零退出码失败；尚无部分成功或断点续跑模式。
 
 ### 可选的结构化输出
 
-`extract --structured-output off|json_schema` 默认值为 `off`。选择 `json_schema` 时，框架根据任务自动生成 JSON Schema，发送 `response_format.type: "json_schema"` 和 `strict: true`。Python 对应参数为 `OpenAICompatibleBackend(..., structured_output="json_schema")`。
+`extract --structured-output off|json_object|json_schema` 可覆盖当前配置。高级配置默认 `off`，模型预设默认 `json_object`；后者请求有效 JSON，不保证服务端执行任务 Schema。选择 `json_schema` 时，框架根据任务自动生成 JSON Schema，发送 `response_format.type: "json_schema"` 和 `strict: true`。Python 后端对应参数为 `OpenAICompatibleBackend(..., structured_output="json_schema")`。
 
 严格模式要求每个已声明字段都带 `{ "value": ..., "quote": ... }` 包装；任务中的标量类型限制的是内部 **`value`**，`quote` 始终是字符串。未报告字段返回 `value: null`、`quote: ""`。可选空字段只产生一条信息项；任务要求的关键条件缺失仍进入复核。关闭结构化输出时，可继续省略未报告的可选字段。配置测量组后，严格 Schema 还要求返回该组的上下文及片段字段。
 
@@ -89,7 +120,7 @@ attestextract extract --input src/attestextract/examples/procurement.md --task s
 
 ### 显式加载 `.env` 并保存运行日志
 
-参照 `.env.example` 创建本地 `.env`；已有文件时直接编辑，填入实际端点、模型和密钥：
+使用旧版端点配置时，参照 `.env.example` 创建本地 `.env`，填入以下地址、模型和密钥。前面的模型选择快捷入口只需要服务商专用密钥，以及可选的专用地址：
 
 ```dotenv
 ATTESTEXTRACT_BASE_URL=https://your-provider.example/v1
