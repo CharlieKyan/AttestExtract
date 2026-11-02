@@ -2,7 +2,7 @@
 
 Schema-driven extraction from text and tables, with source-linked evidence and pluggable decision backends.
 
-**Early prototype · `0.1.0.dev10` · Python 3.11+**
+**Early prototype · `0.1.0.dev11` · Python 3.11+**
 
 Dev9 adds a minimal model-selection entry point: configure a provider key once,
 then change `--model-id` in the CLI or `model=` in Python. Named profiles and
@@ -110,7 +110,7 @@ of extraction accuracy or server-side parameter enforcement. Existing
 precedence is documented in the [configuration guide](docs/BACKENDS.md).
 
 Unknown models, other regions and custom protocols use the advanced profile or
-backend interface. The existing CLI `--model` still means a provider's raw model
+backend interface. Use `--max-output-tokens provider` to omit the limit from the request; the service still applies its own default and maximum, so this is not unlimited output. The existing CLI `--model` still means a provider's raw model
 name; it does not parse `provider:model`. `--model-id` cannot be combined with
 `--model`, `--adapter`, `--config` or `--profile`.
 
@@ -175,7 +175,7 @@ New-Item -ItemType Directory -Force -Path $runDir | Out-Null
 attestextract extract --env-file .env --structured-output json_schema --input src/attestextract/examples/procurement.md --task src/attestextract/examples/procurement.task.json --output "$runDir\extraction.json" --report "$runDir\review.md" --log-dir "$runDir\diagnostics"
 ```
 
-`--log-dir` explicitly enables file tracing; its directory must be empty or not yet exist. Without `--output`, the CLI now creates a fresh `attestextract-runs/<timestamp-id>/` beside the input, containing `result.json`, `report.md`, and `diagnostics/`. With explicit `--output`, file tracing remains opt-in. Normal terminal progress works in either mode. See [CLI defaults and acceptance](docs/CLI_EXPERIENCE.md).
+`--log-dir` explicitly enables file tracing; its directory must be empty or not yet exist. Without `--output`, the CLI creates a fresh `outputs/<timestamp-id>/` beside the input; if the input is directly inside `inputs/` (case-insensitive), `outputs/` is its sibling. Each run directory contains `result.json`, `report.md`, and `diagnostics/`. With explicit `--output`, file tracing remains opt-in. Normal terminal progress works in either mode. See [CLI defaults and acceptance](docs/CLI_EXPERIENCE.md).
 
 | Trace file | What it records |
 | --- | --- |

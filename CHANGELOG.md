@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.0.dev11
+
+- Save default CLI runs in `outputs/<timestamp-id>/` beside the input. For files directly inside an `inputs/` directory (case-insensitive), use its sibling `outputs/`. Preserve explicit paths and previous run files.
+- Add `--max-output-tokens provider` to omit the request output-limit parameter, overriding preset/profile caps while retaining other generation controls. Provider defaults and hard limits still apply; omitted CLI options keep existing defaults. No automatic truncation retry, chunk splitting or extra live calls.
+- Add synthetic path/default/override tests and installed-wheel provider-default verification; preserve result and trace schemas.
+
 ## 0.1.0.dev10
 
 - Make CLI `--output` optional: create a unique run directory beside the input with result, report and diagnostics. Explicit output paths retain opt-in file tracing. Add local-only `--check` and normal/quiet/verbose terminal progress with waiting heartbeat, chunk counts, tokens and review counts.

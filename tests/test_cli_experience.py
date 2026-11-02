@@ -65,7 +65,7 @@ def test_minimal_cli_creates_unique_results_report_logs_and_progress(tmp_path, m
     args = arguments(tmp_path)
     for _ in range(2):
         assert cli.main(args) == 0
-    runs = list((tmp_path / "attestextract-runs").iterdir())
+    runs = list((tmp_path / "outputs").iterdir())
     assert len(runs) == len(calls) == 2
     for run in runs:
         result = json.loads((run / "result.json").read_text(encoding="utf-8"))
@@ -86,9 +86,80 @@ def test_check_is_network_free_and_marks_checked_not_extracted(tmp_path, monkeyp
     plan = json.loads(capsys.readouterr().out)
     assert plan["chunk_count"] == 1 and plan["network_calls"] == 0
     assert plan["max_attempts"] == 1 and plan["format_retries"] == 0
-    run = next((tmp_path / "attestextract-runs").iterdir())
+    run = next((tmp_path / "outputs").iterdir())
     assert not (run / "result.json").exists()
     assert json.loads((run / "diagnostics/manifest.json").read_text())["status"] == "checked"
+
+
+@pytest.mark.parametrize("folder", ["inputs", "Inputs"])
+def test_default_outputs_are_sibling_of_inputs_and_preserve_previous_runs(tmp_path, monkeypatch, folder):
+    source_dir = tmp_path / folder
+    source_dir.mkdir()
+    legacy = source_dir / "attestextract-runs" / "previous"
+    legacy.mkdir(parents=True)
+    original = legacy / "keep.txt"
+    original.write_text("synthetic previous evidence", encoding="utf-8")
+    intercept(monkeypatch, lambda _: response())
+    assert cli.main(arguments(source_dir)) == 0
+    results = list((tmp_path / "outputs").glob("*/result.json"))
+    assert len(results) == 1
+    assert not (source_dir / "outputs").exists()
+    assert original.read_text(encoding="utf-8") == "synthetic previous evidence"
+    assert (results[0].parent / "report.md").is_file()
+
+
+@pytest.mark.parametrize("selector", ["deepseek:deepseek-flash", "qwen:qwen3.8-27b"])
+def test_provider_token_limit_omits_both_wire_parameters_even_on_format_retry(tmp_path, monkeypatch, selector):
+    calls = []
+    def handler(request):
+        body = json.loads(request.content)
+        assert "max_tokens" not in body and "max_completion_tokens" not in body
+        assert body["temperature"] == 0
+        calls.append(body)
+        return response(INVALID if len(calls) == 1 else VALID)
+    intercept(monkeypatch, handler)
+    args = arguments(tmp_path)
+    args[-1] = selector
+    assert cli.main(args + ["--max-output-tokens", "provider", "--format-retries", "1"]) == 0
+    assert len(calls) == 2
+    run = next((tmp_path / "outputs").iterdir())
+    config = json.loads((run / "diagnostics/backend.json").read_text(encoding="utf-8"))
+    assert config["generation"]["max_output_tokens"] is None
+
+
+def test_provider_token_limit_clears_profile_limit_without_losing_other_controls(tmp_path, monkeypatch):
+    profile = tmp_path / "profiles.toml"
+    profile.write_text('[profiles.test]\nbase_url="https://synthetic.invalid/v1"\nmodel="synthetic"\n'
+                       'output_token_parameter="max_completion_tokens"\n'
+                       '[profiles.test.generation]\nmax_output_tokens=80\ntemperature=0.25\n', encoding="utf-8")
+    calls = []
+    def handler(request):
+        body = json.loads(request.content)
+        assert "max_tokens" not in body and "max_completion_tokens" not in body
+        assert body["temperature"] == 0.25
+        calls.append(body)
+        return response()
+    intercept(monkeypatch, handler)
+    args = arguments(tmp_path)[:-2]  # Advanced profile instead of model preset.
+    assert cli.main(args + ["--config", str(profile), "--profile", "test", "--max-output-tokens", "provider"]) == 0
+    assert len(calls) == 1
+
+
+def test_provider_limit_check_is_explicit_and_network_free(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(httpx.Client, "send", lambda *a, **k: pytest.fail("--check made a network call"))
+    assert cli.main(arguments(tmp_path) + ["--max-output-tokens", "provider", "--check"]) == 0
+    captured = capsys.readouterr()
+    assert json.loads(captured.out)["generation"]["max_output_tokens"] is None
+    assert "provider default" in captured.err
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "unlimited", "8.5"])
+def test_invalid_token_limit_rejected_before_any_network_or_output(tmp_path, monkeypatch, value):
+    monkeypatch.setattr(httpx.Client, "send", lambda *a, **k: pytest.fail("Invalid arguments must not call a model"))
+    with pytest.raises(SystemExit) as caught:
+        cli.main(arguments(tmp_path) + ["--max-output-tokens", value])
+    assert caught.value.code == 2
+    assert not (tmp_path / "outputs").exists()
 
 
 def test_explicit_output_needs_no_trace_for_progress_and_quiet_is_quiet(tmp_path, monkeypatch, capsys):
@@ -96,7 +167,7 @@ def test_explicit_output_needs_no_trace_for_progress_and_quiet_is_quiet(tmp_path
     args = arguments(tmp_path) + ["--output", str(tmp_path / "output.json")]
     assert cli.main(args) == 0
     assert "[1/1]" in capsys.readouterr().err
-    assert not (tmp_path / "attestextract-runs").exists()
+    assert not (tmp_path / "outputs").exists()
     assert cli.main(args + ["--progress", "quiet"]) == 0
     assert capsys.readouterr().err == ""
 
@@ -106,7 +177,7 @@ def test_invalid_json_is_preserved_located_and_not_retried_by_default(tmp_path, 
     intercept(monkeypatch, lambda request: (calls.append(request), response(INVALID))[1])
     assert cli.main(arguments(tmp_path)) == 1
     assert len(calls) == 1
-    run = next((tmp_path / "attestextract-runs").iterdir())
+    run = next((tmp_path / "outputs").iterdir())
     assert not (run / "result.json").exists()
     assert (run / "diagnostics/responses/chunk-0001.txt").read_text() == INVALID
     error = json.loads((run / "diagnostics/error.json").read_text())
@@ -132,7 +203,7 @@ def test_explicit_format_retry_uses_reason_and_retains_both_responses(tmp_path, 
     intercept(monkeypatch, handler)
     assert cli.main(arguments(tmp_path) + ["--format-retries", "1"]) == 0
     assert len(calls) == 2
-    run = next((tmp_path / "attestextract-runs").iterdir())
+    run = next((tmp_path / "outputs").iterdir())
     assert (run / "diagnostics/responses/chunk-0001.txt").read_text() == INVALID
     assert (run / "diagnostics/responses/chunk-0001.format-2.txt").read_text() == VALID
     result = json.loads((run / "result.json").read_text())
@@ -168,7 +239,7 @@ def test_report_write_failure_does_not_claim_result_was_never_written(tmp_path, 
         return original(path, content)
     monkeypatch.setattr(Path, "write_bytes", write)
     assert cli.main(arguments(tmp_path)) == 1
-    run = next((tmp_path / "attestextract-runs").iterdir())
+    run = next((tmp_path / "outputs").iterdir())
     assert (run / "result.json").is_file()
     terminal = capsys.readouterr().err
     assert "run did not complete" in terminal

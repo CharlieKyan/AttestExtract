@@ -30,13 +30,18 @@ def main():
     source.write_text(text, encoding="utf-8")
     task_path.write_text(json.dumps(task), encoding="utf-8")
     observed = []
+    provider_default = False
 
     def handler(request):
         body = json.loads(request.content)
         expected_key = "synthetic-deepseek-key" if body["model"] == "deepseek-flash" else "synthetic-qwen-key"
         assert request.headers["Authorization"] == "Bearer " + expected_key
         assert json.loads(body["messages"][-1]["content"])["source"] == text
-        assert body["max_tokens"] == 8192 and body["response_format"] == {"type": "json_object"}
+        if provider_default:
+            assert "max_tokens" not in body and "max_completion_tokens" not in body
+        else:
+            assert body["max_tokens"] == 8192
+        assert body["response_format"] == {"type": "json_object"}
         if body["model"] == "deepseek-flash":
             assert request.url.host == "api.deepseek.com" and body["thinking"] == {"type": "disabled"}
         else:
@@ -63,7 +68,7 @@ def main():
             assert cli.main(minimal + ["--check"]) == 0
             assert len(observed) == calls_before_check
             assert cli.main(minimal) == 0
-            completed = list((output / "attestextract-runs").glob("*/result.json"))
+            completed = list((output / "outputs").glob("*/result.json"))
             assert len(completed) == index + 1
             for path in completed:
                 minimal_result = json.loads(path.read_text(encoding="utf-8"))
@@ -77,9 +82,17 @@ def main():
             assert evidence.status == "matched" and text[evidence.start:evidence.end] == "8"
             results.append({"selector": selector, "python_passed": True, "cli_passed": True,
                             "value": 8, "exact_source_span": [evidence.start, evidence.end]})
+        provider_default = True
+        provider_args = ["extract", "--model-id", "deepseek:deepseek-flash", "--input", str(source),
+                         "--task", str(task_path), "--max-output-tokens", "provider"]
+        assert cli.main(provider_args + ["--check"]) == 0
+        assert len(observed) == 6
+        assert cli.main(provider_args) == 0
+        completed = list((output / "outputs").glob("*/result.json"))
+        assert len(completed) == 3
     finally:
         backends.OpenAICompatibleBackend = original
-    assert len(observed) == 6
+    assert len(observed) == 7
     summary = {"package_version": attestextract.__version__, "module_path": attestextract.__file__,
                "real_endpoint_calls": 0, "mock_http_calls": len(observed), "passed": True, "cases": results}
     (output / "summary.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")

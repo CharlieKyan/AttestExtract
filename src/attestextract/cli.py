@@ -26,6 +26,18 @@ from .reporting import render_markdown_report
 from .registry import BackendRegistry, default_registry
 
 
+def _output_token_limit(value: str) -> int | str:
+    if value == "provider":
+        return value
+    try:
+        limit = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError("Use a positive integer or 'provider' for the service default.") from None
+    if limit <= 0:
+        raise argparse.ArgumentTypeError("Use a positive integer or 'provider' for the service default.")
+    return limit
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="attestextract",
@@ -48,7 +60,7 @@ def _parser() -> argparse.ArgumentParser:
     live = commands.add_parser("extract", help="Extract UTF-8 text or Markdown using a configured model")
     live.add_argument("--input", type=Path, required=True, help="UTF-8 .txt or .md input")
     live.add_argument("--task", type=Path, required=True, help="JSON task specification")
-    live.add_argument("--output", type=Path, help="Destination JSON; omitted: new attestextract-runs directory beside input, with report and diagnostics")
+    live.add_argument("--output", type=Path, help="Destination JSON; omitted: new outputs/<run>/ beside input (a sibling of inputs/ when applicable), with report and diagnostics")
     live.add_argument("--report", type=Path, help="Also write a readable Markdown review of candidates and evidence")
     live.add_argument("--base-url", help="OpenAI-compatible API base URL, or ATTESTEXTRACT_BASE_URL")
     live.add_argument("--model", help="Model name, or ATTESTEXTRACT_MODEL")
@@ -61,7 +73,8 @@ def _parser() -> argparse.ArgumentParser:
     live.add_argument("--timeout", type=float, help="HTTP timeout in seconds (default: 60)")
     live.add_argument("--max-attempts", type=int, help="Maximum HTTP attempts per generation (presets: 1; profiles/legacy: 3)")
     live.add_argument("--temperature", type=float, help="Sampling temperature (presets: 0; profiles/legacy: provider default)")
-    live.add_argument("--max-output-tokens", type=int, help="Output token ceiling (presets: 8192; profiles/legacy: provider default)")
+    live.add_argument("--max-output-tokens", type=_output_token_limit, metavar="N|provider",
+                      help="Positive output token ceiling, or 'provider' to omit it from the request (not unlimited). Default: presets 8192; profiles/legacy provider default")
     live.add_argument("--env-file", type=Path, help="Explicit KEY=value configuration file; existing environment takes precedence")
     live.add_argument("--log-dir", type=Path, help="Empty directory for source, prompts, responses and diagnostic events")
     live.add_argument(
@@ -103,7 +116,9 @@ def _default_outputs(args: argparse.Namespace) -> None:
     if args.output is not None:
         return
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + uuid4().hex[:8]
-    directory = args.input.resolve().parent / "attestextract-runs" / stamp
+    source_directory = args.input.resolve().parent
+    root = source_directory.parent if source_directory.name.casefold() == "inputs" else source_directory
+    directory = root / "outputs" / stamp
     directory.mkdir(parents=True, exist_ok=False)
     args.output = directory / "result.json"
     if args.report is None:
@@ -184,6 +199,11 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
             "adapter", "base_url", "model", "api_key_env", "timeout", "max_attempts",
             "structured_output", "format_retries", "temperature", "max_output_tokens",
         ) if getattr(args, name) is not None}
+        if overrides.get("max_output_tokens") == "provider":
+            # A nested explicit null clears preset/profile limits. A top-level
+            # None would mean "no override" to the existing config resolver.
+            overrides.pop("max_output_tokens")
+            overrides["generation"] = {"max_output_tokens": None}
         if args.model_id is not None:
             if any(value is not None for value in (args.config, args.profile, args.model, args.adapter)):
                 raise ConfigurationError("--model-id cannot be combined with --config, --profile, --model or --adapter.")

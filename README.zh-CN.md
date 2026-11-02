@@ -2,7 +2,7 @@
 
 按任务模式从正文和表格抽取候选数据，保留原文证据，并预留可替换的决策后端。
 
-**早期原型 · `0.1.0.dev10` · Python 3.11+**
+**早期原型 · `0.1.0.dev11` · Python 3.11+**
 
 dev9 增加最少配置的模型选择入口：首次配置服务商密钥，之后只修改 CLI 的 `--model-id` 或 Python 的 `model=` 即可切换。已有 TOML profile 和后端注入继续可用。配置规则见 [D2 适配器指南](docs/BACKENDS.md)，完成范围和证据边界见 [D2 验收清单](docs/D2_ACCEPTANCE.md)。离线验证、既有真实调用和内容准确性分开报告。
 
@@ -87,6 +87,8 @@ result = extract(
 
 首批明确支持 `deepseek:deepseek-flash`、`qwen:qwen3.8-27b`、`qwen:qwen-plus` 三个预设，Qwen 限北京区。默认请求 JSON object、关闭思考、每次生成仅一次 HTTP 尝试、零格式再生成、temperature 为 0、最多输出 8,192 token。它们是请求默认值，不代表抽取准确率或服务端执行保证。已有的 `VLM_API_KEY`／`VLM_BASE_URL` 可作为 Qwen 配置，具体优先级见 [配置指南](docs/BACKENDS.md)。`.env` 仍需显式传入，不会自动加载。
 
+通过 `--max-output-tokens provider` 可让请求不发送输出上限，服务商仍使用自己的默认值和硬上限，不表示无限输出。省略该参数时，模型预设仍使用8192。
+
 未知模型、其他地域和特殊协议使用高级 profile 或适配器。原 CLI `--model` 保留“服务原生模型名”的语义，不解析 `provider:model`；新的 `--model-id` 不能与 `--model`、`--adapter`、`--config`、`--profile` 混用。
 
 原有高级配置方式继续支持，例如 PowerShell：
@@ -140,7 +142,7 @@ New-Item -ItemType Directory -Force -Path $runDir | Out-Null
 attestextract extract --env-file .env --structured-output json_schema --input src/attestextract/examples/procurement.md --task src/attestextract/examples/procurement.task.json --output "$runDir\extraction.json" --report "$runDir\review.md" --log-dir "$runDir\diagnostics"
 ```
 
-不填 `--output` 时，正式 CLI 在输入旁自动新建 `attestextract-runs/<时间-随机标识>/`，保存 `result.json`、`report.md` 和 `diagnostics/`。显式指定 `--output` 时，仍只有传入 `--log-dir` 才保存诊断文件；该目录必须为空或尚不存在。两种方式默认都显示简洁进度，可用 `--progress quiet` 静默。完整默认值、无模型调用的 `--check` 和验收方法见 [CLI 体验说明](docs/CLI_EXPERIENCE.md)。
+不填 `--output` 时，正式 CLI 在输入所在目录的 `outputs/<时间-随机标识>/` 保存；如果文件直接位于 `inputs/`（不区分大小写），则在与 `inputs/` 同级的 `outputs/` 中保存，保存 `result.json`、`report.md` 和 `diagnostics/`。显式指定 `--output` 时，仍只有传入 `--log-dir` 才保存诊断文件；该目录必须为空或尚不存在。两种方式默认都显示简洁进度，可用 `--progress quiet` 静默。完整默认值、无模型调用的 `--check` 和验收方法见 [CLI 体验说明](docs/CLI_EXPERIENCE.md)。
 
 | 日志文件 | 用途 |
 | --- | --- |

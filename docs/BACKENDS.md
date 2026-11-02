@@ -9,6 +9,8 @@ The [D2 acceptance checklist](D2_ACCEPTANCE.md) records the verification scope.
 
 Dev10 makes CLI output/report/diagnostic paths optional as a group and adds concise progress plus local-only `--check`. See [CLI experience](CLI_EXPERIENCE.md) for defaults, TLS compatibility and JSON error handling.
 
+Dev11 saves default CLI runs under `outputs/` (a sibling of `inputs/` for files directly in that folder). `--max-output-tokens provider` explicitly omits the output-limit parameter, retaining service-side defaults and limits; it is not unlimited generation.
+
 ## Select a model with minimal configuration
 
 Set the keys for the providers you use in the process environment or an explicit

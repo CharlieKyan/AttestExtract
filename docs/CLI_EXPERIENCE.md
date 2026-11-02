@@ -1,4 +1,4 @@
-# CLI 默认值与验收（dev10）
+# CLI 默认值与验收（dev11）
 
 这是正式包入口的行为，不依赖论文启动脚本。密钥配置一次；用户主要填写模型、输入和任务。`.env` 明确通过 `--env-file` 读取；已有进程环境变量仍优先。
 
@@ -18,16 +18,38 @@ attestextract extract --model-id deepseek:deepseek-flash --env-file .env --input
 | `max_attempts` | `1`；不自动重发可能已经在服务端生成的请求 |
 | `format_retries` | `0`；非法 JSON 直接失败。明确添加 `--format-retries 1` 才允许每块多生成一次 |
 | 分块 | 与此前一致：约 `6000` 字符、每批最多 `12` 行简单 Markdown 表格；原子表格行可能超出字符目标 |
-| 输出路径 | 不填 `--output` 时，在输入所在目录新建 `attestextract-runs/<时间-随机标识>/`，包含 `result.json`、`report.md`、`diagnostics/` |
+| 输出路径 | 不填 `--output` 时，在输入所在目录的 `outputs/<时间-随机标识>/` 保存；若文件直接位于 `inputs/`（不区分大小写），则使用与 `inputs/` 同级的 `outputs/`。包含 `result.json`、`report.md`、`diagnostics/` |
 | 终端 | 默认 `--progress normal`：模型和预算、总块数、当前块、等待提示、实际返回的 token 数、候选与复核项数量、完成路径 |
 
 显式提供 `--output` 仍兼容原有调用：输出父目录需存在，报告和文件诊断仍通过 `--report` / `--log-dir` 自行开启。正常终端进度不依赖文件日志；`quiet` 隐藏进度和成功路径，但错误仍显示；`verbose` 增加阶段名称，不打印原文、提示词和响应正文。等待时每 15 秒最多输出一行，不伪造生成百分比。复核项数量不等于需要复核的候选数量。
 
-自动诊断目录包含原文和模型原始输出，仅留在用户本地。公共仓库忽略 `attestextract-runs/`，分享结果前仍需选择适当文件。模型或校验失败不会生成成功结果；文件写入阶段失败可能已保存部分产物，需检查诊断。尚无断点续跑，重新启动会重新处理全文。没有日志目录的调用只接收事件，不落盘原文或提示词。
+自动诊断目录包含原文和模型原始输出，仅留在用户本地。公共仓库忽略 `outputs/` 和旧的 `attestextract-runs/`，分享结果前仍需选择适当文件。模型或校验失败不会生成成功结果；文件写入阶段失败可能已保存部分产物，需检查诊断。尚无断点续跑，重新启动会重新处理全文。没有日志目录的调用只接收事件，不落盘原文或提示词。
+
+## 输出目录与服务商默认上限
+
+目录以输入文件位置计算，不取决于启动终端所在目录。例如 `project/inputs/paper.md` 默认保存到 `project/outputs/<run>/`；`project/paper.md` 也保存到 `project/outputs/<run>/`。规则只识别文件的直接父目录，不向上搜索项目根目录。每次自动新建运行子目录，不移动或删除旧记录。显式 `--output`、`--report`、`--log-dir` 的路径选择规则不变。
+
+CLI 的三种输出上限语义：
+
+| 写法 | 请求行为 |
+| --- | --- |
+| 省略 `--max-output-tokens` | 使用当前预设或profile；模型预设仍发送8192 |
+| `--max-output-tokens 16384` | 明确发送16384 |
+| `--max-output-tokens provider` | 清除预设／profile的上限，HTTP请求不包含 `max_tokens` 或 `max_completion_tokens`；其余生成参数保留 |
+
+`provider` 意为交给服务商默认值，**不是无限输出**。`--check` 的 `generation.max_output_tokens` 会显示 `null`；实际请求文件中相应字段缺省。普通格式重试保持这一选择，不自行增加上限。Python现有写法 `model_options={"generation": {"max_output_tokens": None}}` 与此对应。
+
+```powershell
+attestextract extract --model-id deepseek:deepseek-flash --env-file .env --input paper.md --task task.json --max-output-tokens provider --check
+```
+
+DeepSeek当前文档说明：非思考模式不传 `max_tokens` 默认8K。因此本项目关闭思考的预设采用 `provider` 时，可能仍遭遇同样的截断；其他服务商默认值可能不同。[官方参数说明](https://api-docs.deepseek.com/api/create-chat-completion/)
+
+有限输出预算无法保证任意密度文档一次生成完整。持续提高上限或省略上限都不能代替分块策略；后续的自动分块／截断恢复应保持原文位置、限制额外调用预算，并保留失败证据。本版本不新增自动拆分、截断重试或断点续跑，也不把截断JSON中的前几条记录当成成功结果。
 
 ## TLS 兼容处理
 
-TLS 是 HTTPS 加密连接的协议，`1.2` 是协议版本，不是模型版本，也不改变 JSON 结构。本轮针对已观察到的 TLS 记录校验失败，把 DeepSeek 预设设为经过验证的 TLS 1.2 兼容路径；Qwen 和高级配置仍自动协商。证书和主机名验证始终保留，HTTPX 的系统代理及 `SSL_CERT_FILE` / `SSL_CERT_DIR` 证书配置继续生效。没有网络预探测、关闭验证或失败后自动换 TLS 再提交 POST 的行为。
+TLS 是 HTTPS 加密连接的协议，`1.2` 是协议版本，不是模型版本，也不改变 JSON 结构。dev10 针对已观察到的 TLS 记录校验失败，把 DeepSeek 预设设为经过验证的 TLS 1.2 兼容路径；Qwen 和高级配置仍自动协商。证书和主机名验证始终保留，HTTPX 的系统代理及 `SSL_CERT_FILE` / `SSL_CERT_DIR` 证书配置继续生效。没有网络预探测、关闭验证或失败后自动换 TLS 再提交 POST 的行为。
 
 普通用户不需要 TLS 参数。高级用户可在 profile 设置 `tls_mode = "auto"` 或 `"1.2"`；Python 的 `model_options={"tls_mode": "auto"}` 可覆盖预设。注入自定义 HTTP transport 时，其连接策略由注入者控制。该兼容默认值不是所有网络错误的通用解决办法，其他网络故障仍会明确失败。
 
