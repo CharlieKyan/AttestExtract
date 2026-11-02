@@ -3,7 +3,7 @@
 from .decisions import DecisionBackend, DecisionResult, DecisionTask, validate_decision
 from .models import (
     BackendResponse, Candidate, EvidenceRef, ExtractionBackend, ExtractionRequest, GenerationOptions,
-    ExtractionResult, FieldSpec, RecordSpec, TaskSpec,
+    ExecutionOptions, ExtractionResult, FieldSpec, RecordSpec, TaskSpec,
 )
 from .pipeline import extract, load_task
 from .documents import Document, DocumentMetadata
@@ -14,7 +14,7 @@ from .config import BackendConfig, resolve_backend_config
 from .registry import BackendRegistry, default_registry
 from .providers import available_models, resolve_model_config
 
-__version__ = "0.1.0.dev11"
+__version__ = "0.1.0.dev12"
 
 __all__ = [
     "__version__", "extract", "load_task", "TaskSpec", "RecordSpec", "FieldSpec",
@@ -26,4 +26,5 @@ __all__ = [
     "RunTrace",
     "GenerationOptions", "BackendConfig", "resolve_backend_config", "BackendRegistry", "default_registry",
     "available_models", "resolve_model_config",
+    "ExecutionOptions",
 ]

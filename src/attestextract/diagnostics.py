@@ -5,8 +5,10 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from .errors import AttestExtractError, BackendError, ConfigurationError
 
@@ -103,13 +105,25 @@ class RunTrace:
         if relative not in self._manifest["artifacts"]:
             self._manifest["artifacts"].append(relative)
 
-    def write_json(self, relative: str, payload: Any) -> None:
+    def write_json(self, relative: str, payload: Any, *, atomic: bool = False) -> None:
         if self.directory is None:
             return
         text = json.dumps(self._mask(payload), ensure_ascii=False, indent=2, allow_nan=False) + "\n"
         # Mask values before serialization only. A second text replacement
         # could corrupt JSON literals when a local key is e.g. "null" or "1".
-        self._target(relative).write_text(text, encoding="utf-8", newline="")
+        target = self._target(relative)
+        if atomic:
+            temporary = target.with_name(target.name + "." + uuid4().hex + ".tmp")
+            try:
+                with temporary.open("x", encoding="utf-8", newline="") as stream:
+                    stream.write(text)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                os.replace(temporary, target)
+            finally:
+                temporary.unlink(missing_ok=True)
+        else:
+            target.write_text(text, encoding="utf-8", newline="")
         if relative not in self._manifest["artifacts"]:
             self._manifest["artifacts"].append(relative)
 
@@ -160,6 +174,8 @@ class RunTrace:
             if exc.http_diagnostics is not None:
                 error.update(http_diagnostics=exc.http_diagnostics, http_details=exc.http_details)
         diagnostic = getattr(exc, "validation_details", None)
+        if getattr(exc, "response_metadata", None) is not None:
+            error["response_metadata"] = exc.response_metadata
         if diagnostic is not None:
             error.update(validation_phase=diagnostic["phase"], error_count=diagnostic["error_count"],
                          validation_details=getattr(exc, "validation_artifact", None),

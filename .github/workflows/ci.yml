@@ -40,6 +40,7 @@ jobs:
           wheel = next(Path("dist").glob("attestextract-*.whl")).resolve()
           acceptance_script = Path("scripts/d2_acceptance.py").resolve()
           selection_script = Path("scripts/model_selection_smoke.py").resolve()
+          execution_script = Path("scripts/execution_smoke.py").resolve()
           with tempfile.TemporaryDirectory(prefix="attestextract-smoke-") as directory:
               root = Path(directory)
               environment = root / "venv"
@@ -55,7 +56,7 @@ jobs:
               assert set(examples) == {"ccus", "procurement"}
               for name, count in (("ccus", 2), ("procurement", 3)):
                   result = examples[name]
-                  assert result["package_version"] == "0.1.0.dev11"
+                  assert result["package_version"] == "0.1.0.dev12"
                   assert result["run"]["mode"] == "replay"
                   assert len(result["candidates"]) == count
                   assert result["review"] == []
@@ -65,7 +66,7 @@ jobs:
               assert set(archives) == {"attribute", "observation", "relation"}
               for name, candidate_count, record_count in (("attribute", 2, 1), ("observation", 2, 2), ("relation", 1, 1)):
                   archive = archives[name]
-                  assert archive["extraction"]["package_version"] == "0.1.0.dev11"
+                  assert archive["extraction"]["package_version"] == "0.1.0.dev12"
                   assert archive["extraction"]["run"]["mode"] == "replay"
                   assert len(archive["extraction"]["candidates"]) == candidate_count
                   assert len(archive["records"]) == record_count
@@ -79,7 +80,7 @@ jobs:
               subprocess.run([str(python), str(copied), "--mode", "mock", "--output-dir", str(acceptance)],
                              check=True, cwd=root, env=env)
               summary = json.loads((acceptance / "summary.json").read_text(encoding="utf-8"))
-              assert summary["package_version"] == "0.1.0.dev11"
+              assert summary["package_version"] == "0.1.0.dev12"
               assert summary["passed"] and summary["real_endpoint_calls"] == 0
               assert summary["mock_http_calls"] == 3
               assert [case["candidate_count"] for case in summary["cases"]] == [1, 2, 1]
@@ -92,3 +93,12 @@ jobs:
               assert selection["passed"] and selection["real_endpoint_calls"] == 0
               assert selection["mock_http_calls"] == 7
               assert Path(selection["module_path"]).is_relative_to(environment)
+              execution_copy = scripts / "execution_smoke.py"
+              shutil.copyfile(execution_script, execution_copy)
+              execution_output = root / "execution"
+              subprocess.run([str(python), str(execution_copy), "--output-dir", str(execution_output)],
+                             check=True, cwd=root, env=env)
+              execution = json.loads((execution_output / "summary.json").read_text(encoding="utf-8"))
+              assert execution["passed"] and execution["real_endpoint_calls"] == 0
+              assert execution["mock_http_calls"] == 4 and execution["completed_resume_new_calls"] == 0
+              assert Path(execution["module_path"]).is_relative_to(environment)

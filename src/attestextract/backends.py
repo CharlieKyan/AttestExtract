@@ -365,45 +365,6 @@ class OpenAICompatibleBackend:
                 self._trace.describe_artifact(artifact, "observed_schema_compliance")
                 self._trace.event("schema_compliance", "checked", chunk_id=chunk_id,
                                   format_attempt=format_attempt, status=compliance["status"], artifact=artifact)
-        finish_reason = choice.get("finish_reason")
-        if self._trace is not None:
-            self._trace.event(
-                "model_response", "completion_status", chunk_id=chunk_id,
-                format_attempt=format_attempt,
-                finish_reason=finish_reason if isinstance(finish_reason, str) else None,
-            )
-        if finish_reason is not None and finish_reason != "stop":
-            code = "unsupported_response"
-            if finish_reason == "length":
-                code = "truncated_response"
-            elif finish_reason == "content_filter":
-                code = "refusal"
-            raise InvalidResponseError(
-                "The model completion was truncated, refused, or did not finish normally.",
-                attempts=attempt, code=code,
-            )
-        message = choice.get("message")
-        if not isinstance(message, dict):
-            raise InvalidResponseError(
-                "The model response has no valid assistant message.", attempts=attempt
-            )
-        if message.get("refusal"):
-            raise InvalidResponseError(
-                "The model response contains a refusal or an unsupported tool call.",
-                attempts=attempt, code="refusal",
-            )
-        if message.get("tool_calls") or message.get("function_call"):
-            raise InvalidResponseError(
-                "The model response contains a refusal or an unsupported tool call.",
-                attempts=attempt, code="unsupported_response",
-            )
-        content = message.get("content")
-        if not isinstance(content, str) or not content.strip():
-            raise InvalidResponseError(
-                "The model response has no nonempty text content.", attempts=attempt,
-                code="empty_response" if content is None or isinstance(content, str) else "unsupported_response",
-            )
-
         usage = payload.get("usage")
         safe_usage = (
             {
@@ -428,6 +389,59 @@ class OpenAICompatibleBackend:
                 identifier = re.sub(r"\bBearer\s+\S+", "Bearer [REDACTED]", identifier, flags=re.IGNORECASE)
                 request_id = " ".join("".join(ch if ch.isprintable() else " " for ch in identifier).split())[:256]
                 break
+        finish_reason = choice.get("finish_reason")
+        metadata = {
+            "model": reported_model or self.model, "attempts": attempt, "usage": safe_usage,
+            "elapsed_seconds": time.perf_counter() - started,
+            "finish_reason": finish_reason if isinstance(finish_reason, str) else None,
+            "request_id": request_id, "reported_model": reported_model,
+        }
+        if self._trace is not None and chunk_id is not None:
+            self._trace.write_json(f"responses/{artifact_stem or chunk_id}.meta.json",
+                                   {**metadata, "format_attempt": format_attempt})
+        if self._trace is not None:
+            self._trace.event(
+                "model_response", "completion_status", chunk_id=chunk_id,
+                format_attempt=format_attempt,
+                finish_reason=finish_reason if isinstance(finish_reason, str) else None,
+            )
+        if finish_reason is not None and finish_reason != "stop":
+            code = "unsupported_response"
+            if finish_reason == "length":
+                code = "truncated_response"
+            elif finish_reason == "content_filter":
+                code = "refusal"
+            raise InvalidResponseError(
+                ("The model completion was truncated (finish_reason=length); the partial response was retained, not accepted."
+                 if code == "truncated_response" else "The model completion was refused or did not finish normally."),
+                attempts=attempt, code=code, status_code=response.status_code, response_metadata=metadata,
+            )
+        message = choice.get("message")
+        if not isinstance(message, dict):
+            raise InvalidResponseError(
+                "The model response has no valid assistant message.", attempts=attempt,
+                status_code=response.status_code, response_metadata=metadata,
+            )
+        if message.get("refusal"):
+            raise InvalidResponseError(
+                "The model response contains a refusal or an unsupported tool call.",
+                attempts=attempt, code="refusal",
+                status_code=response.status_code, response_metadata=metadata,
+            )
+        if message.get("tool_calls") or message.get("function_call"):
+            raise InvalidResponseError(
+                "The model response contains a refusal or an unsupported tool call.",
+                attempts=attempt, code="unsupported_response",
+                status_code=response.status_code, response_metadata=metadata,
+            )
+        content = message.get("content")
+        if not isinstance(content, str) or not content.strip():
+            raise InvalidResponseError(
+                "The model response has no nonempty text content.", attempts=attempt,
+                code="empty_response" if content is None or isinstance(content, str) else "unsupported_response",
+                status_code=response.status_code, response_metadata=metadata,
+            )
+
         return BackendResponse(
             text=content,
             model=reported_model or self.model,

@@ -17,6 +17,7 @@ from .chunking import chunk_document
 from .errors import BackendError, ConfigurationError, InvalidResponseError, TaskValidationError
 from .diagnostics import RunTrace
 from .documents import Document
+from .execution import ExecutionSession, check_resume_paths, prepare_execution
 from .identity import can_ground_fields, grounded_candidate_id
 from .evidence import ground_quote as _ground_quote, check_measurement, is_missing, link_candidates, rule_matches
 from .json_validation import JSONValidationError, load_json as _load_json
@@ -25,7 +26,7 @@ from .validation import contract_details, details, error_path, issue
 from .models import (
     BackendResponse, Candidate, CheckResult, ContractModel, DocumentChunk, EvidenceRef,
     ExtractionBackend, ExtractionRequest, ExtractionResult, FieldValue,
-    GenerationOptions, MeasurementInput, ReviewItem, RunInfo, Scalar, SourceInfo, TaskSpec,
+    ExecutionOptions, GenerationOptions, MeasurementInput, ReviewItem, RunInfo, Scalar, SourceInfo, TaskSpec,
 )
 
 
@@ -198,6 +199,7 @@ def _validated_response(
     task: TaskSpec, chunk: DocumentChunk, backend: ExtractionBackend,
     trace: RunTrace | None, format_retries: int,
     generation: GenerationOptions,
+    session: ExecutionSession | None = None,
 ) -> tuple[_RawResponse, list[BackendResponse]]:
     """Regenerate only locally rejected output, keeping each attempt auditable."""
     request = _request(task, chunk, generation)
@@ -205,6 +207,8 @@ def _validated_response(
     allowed_keys = {name for record in task.record_types.values() for name in (*record.fields, *record.measurement_groups)}
     allowed_keys.update({"measurements", "context_quote", "value_text", "unit_text", "unit_quote"})
     for format_attempt in range(1, format_retries + 2):
+        if session is not None:
+            session.reserve(chunk.chunk_id)
         stem = request.artifact_stem
         if trace is not None:
             trace.event("model_request", "started", chunk_id=chunk.chunk_id, format_attempt=format_attempt)
@@ -225,7 +229,9 @@ def _validated_response(
         # HTTP, envelope, refusal and truncation failures do not trigger a format retry.
         try:
             response = backend.generate(request)
-        except BackendError:
+        except BackendError as exc:
+            if session is not None:
+                session.backend_failed(exc)
             if trace is not None and format_attempt > 1:
                 failed_stage = trace.stage
                 trace.event("format_retry", "failed", chunk_id=chunk.chunk_id,
@@ -233,6 +239,8 @@ def _validated_response(
                 trace.stage = failed_stage
             raise
         responses.append(response)
+        if session is not None:
+            session.observe(response)
         if trace is not None:
             trace.write_text(f"responses/{stem}.txt", response.text)
             trace.write_json(f"responses/{stem}.meta.json", {
@@ -248,6 +256,14 @@ def _validated_response(
                         format_attempt=format_attempt, attempts=response.attempts,
                         usage=response.usage, elapsed_seconds=response.elapsed_seconds)
             trace.event("validation", "started", chunk_id=chunk.chunk_id, format_attempt=format_attempt)
+        # Custom adapters can return normalized finish metadata themselves.
+        # Never parse a partial completion, even if its prefix is valid JSON.
+        if response.finish_reason not in (None, "stop"):
+            if trace is not None:
+                trace.stage = "model_response"
+            raise InvalidResponseError("The model completion did not finish normally.",
+                                       attempts=response.attempts,
+                                       code="truncated_response" if response.finish_reason == "length" else "invalid_response")
         try:
             raw = _parse_response(response.text, trace=trace, chunk_id=chunk.chunk_id,
                                   format_attempt=format_attempt, allowed_keys=allowed_keys)
@@ -282,8 +298,56 @@ def _validated_response(
             trace.event("validation", "passed", chunk_id=chunk.chunk_id, format_attempt=format_attempt)
             if format_attempt > 1:
                 trace.event("format_retry", "succeeded", chunk_id=chunk.chunk_id, format_attempt=format_attempt)
+        if session is not None:
+            session.complete(chunk.chunk_id, response)
         return raw, responses
     raise AssertionError("Unreachable format retry state")  # pragma: no cover
+
+
+def _responses_for_chunks(task: TaskSpec, chunks: list[DocumentChunk], backend: ExtractionBackend,
+                          trace: RunTrace | None, format_retries: int, generation: GenerationOptions,
+                          session: ExecutionSession | None):
+    if session is None:
+        for chunk in chunks:
+            if trace is not None:
+                trace.write_json(f"chunks/{chunk.chunk_id}.json", chunk.model_dump(mode="json"))
+            raw, responses = _validated_response(task, chunk, backend, trace, format_retries, generation)
+            yield chunk, raw, responses
+        return
+    # Validate ALL reused content before making any new call, even when an
+    # earlier pending leaf precedes a damaged cached leaf in document order.
+    checked = {}
+    for key, response in session.cached.items():
+        raw = _parse_response(response.text)
+        _check_task_records(raw, task, trace=None, chunk_id=key)
+        checked[key] = raw
+    session.event("started", **session.summary())
+    queue = session.leaves()
+    while queue:
+        key = queue.pop(0)
+        chunk = session.chunks[key]
+        if trace is not None:
+            trace.write_json(f"chunks/{chunk.chunk_id}.json", chunk.model_dump(mode="json"))
+        if key in checked:
+            session.reused += 1
+            session.event("reused", chunk_id=key)
+            yield chunk, checked[key], [session.cached[key]]
+            continue
+        try:
+            raw, responses = _validated_response(task, chunk, backend, trace, format_retries, generation, session)
+        except Exception as exc:
+            failed_stage = trace.stage if trace is not None else None
+            session.failed(key, exc)
+            if isinstance(exc, BackendError) and exc.code == "truncated_response":
+                children = session.subdivide(key)
+                if children:
+                    queue[0:0] = children
+                    continue
+                if trace is not None:
+                    trace.stage = failed_stage
+            raise
+        yield chunk, raw, responses
+    session.save()
 
 
 def _selected_backend(
@@ -360,6 +424,9 @@ def extract(
     trace: RunTrace | None = None,
     format_retries: int = 0,
     generation: GenerationOptions | None = None,
+    execution: ExecutionOptions | None = None,
+    resume_from: str | Path | None = None,
+    backend_identity: str | None = None,
 ) -> ExtractionResult:
     """Extract candidates. Matching evidence does not establish factual validity.
 
@@ -376,7 +443,17 @@ def extract(
     explicit ``generation`` controls override only their non-None values. The
     backend path retains its existing defaults and does not read credentials.
     """
+    if resume_from is not None and trace is not None and trace.directory is not None:
+        check_resume_paths(resume_from, [trace.directory])
     try:
+        if resume_from is not None and execution is None:
+            execution = ExecutionOptions()
+        if execution is not None:
+            if not isinstance(execution, ExecutionOptions):
+                raise ConfigurationError("execution must be an ExecutionOptions instance.")
+            execution = ExecutionOptions.model_validate(execution.model_dump())
+        if resume_from is not None and (trace is None or trace.directory is None):
+            raise ConfigurationError("Resuming extraction needs a new persistent RunTrace directory.")
         if type(format_retries) is not int or format_retries not in (0, 1):
             raise ConfigurationError("format_retries must be 0 or 1.")
         if generation is not None and not isinstance(generation, GenerationOptions):
@@ -402,6 +479,7 @@ def extract(
             text, task, backend=backend, source_name=source_name,
             max_chunk_chars=max_chunk_chars, table_rows_per_chunk=table_rows_per_chunk,
             trace=trace, format_retries=format_retries, generation=options,
+            execution=execution, resume_from=resume_from, backend_identity=backend_identity,
         )
     except Exception as exc:
         if trace is not None:
@@ -420,6 +498,9 @@ def _extract(
     trace: RunTrace | None,
     format_retries: int,
     generation: GenerationOptions,
+    execution: ExecutionOptions | None = None,
+    resume_from: str | Path | None = None,
+    backend_identity: str | None = None,
 ) -> ExtractionResult:
     started = time.perf_counter()
     mode = getattr(backend, "mode", "replay" if backend.name == "replay" else "live")
@@ -451,16 +532,22 @@ def _extract(
     if trace is not None:
         trace.write_json("task.json", spec.model_dump(mode="json"))
         trace.event("chunking", "started", max_chunk_chars=max_chunk_chars, table_rows_per_chunk=table_rows_per_chunk)
-    chunks = chunk_document(
-        text, max_chars=max_chunk_chars, table_rows_per_chunk=table_rows_per_chunk,
-    )
+    session = None
+    if execution is not None:
+        session = prepare_execution(text, spec, backend, generation, execution, max_chars=max_chunk_chars,
+                                    table_rows_per_chunk=table_rows_per_chunk, format_retries=format_retries,
+                                    source_name=source_name, backend_identity=backend_identity, trace=trace,
+                                    resume_from=resume_from)
+        chunks = [session.chunks[key] for key in session.state.roots]
+    else:
+        chunks = chunk_document(text, max_chars=max_chunk_chars, table_rows_per_chunk=table_rows_per_chunk)
     if trace is not None:
         trace.write_json("chunk_plan.json", {"chunks": [
             {"chunk_id": chunk.chunk_id, "character_count": len(chunk.text),
              "segments": [segment.model_dump() for segment in chunk.segments]}
             for chunk in chunks
         ]})
-        trace.event("chunking", "completed", chunk_count=len(chunks))
+        trace.event("chunking", "completed", chunk_count=len(session.leaves()) if session else len(chunks))
     source_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
     candidates: list[Candidate] = []
     review: list[ReviewItem] = []
@@ -471,10 +558,7 @@ def _extract(
     request_attempts = 0
     usage: dict[str, int] = {}
     model: str | None = None
-    for chunk in chunks:
-        if trace is not None:
-            trace.write_json(f"chunks/{chunk.chunk_id}.json", chunk.model_dump(mode="json"))
-        raw, responses = _validated_response(spec, chunk, backend, trace, format_retries, generation)
+    for chunk, raw, responses in _responses_for_chunks(spec, chunks, backend, trace, format_retries, generation, session):
         response_count += len(responses)
         for response in responses:
             request_attempts += response.attempts
@@ -586,13 +670,18 @@ def _extract(
         trace.event("extraction", "completed", candidate_count=len(candidates),
                     review_count=sum(item.severity == "review" for item in review),
                     info_count=sum(item.severity == "info" for item in review))
+    if session is not None:
+        response_count = session.state.response_count
+        request_attempts = session.state.request_attempts
+        usage = session.state.usage
+        model = session.state.model or model
     return ExtractionResult(
         task=spec,
         source=SourceInfo(name=source_name, sha256=source_hash, character_count=len(text), document_id=document.document_id),
         candidates=candidates, review=review, links=link_candidates(candidates, spec),
         run=RunInfo(
             backend=backend.name, mode=mode,
-            chunk_count=len(chunks), response_count=response_count,
+            chunk_count=len(session.leaves()) if session else len(chunks), response_count=response_count,
             candidate_count=len(candidates), request_attempts=request_attempts,
             model=model, usage=usage, elapsed_seconds=time.perf_counter() - started,
         ),

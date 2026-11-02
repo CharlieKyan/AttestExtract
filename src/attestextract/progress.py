@@ -19,6 +19,7 @@ class ConsoleProgress:
         self.total = 0
         self.current = 0
         self._last_chunk = None
+        self._managed_execution = False
         self._waiting_since: float | None = None
         self._lock = threading.Lock()
         self._stop = threading.Event()
@@ -59,6 +60,22 @@ class ConsoleProgress:
         elif stage == "chunking" and kind == "completed":
             self.total = event["chunk_count"]
             self._write(f"Chunks: {self.total}")
+        elif stage == "execution" and kind == "started":
+            self._managed_execution = True
+            self._write(f"Model-call budget: {event['calls_reserved']}/{event['max_model_calls']} reserved; "
+                        f"{event['completed_chunks']} completed chunks available for reuse")
+        elif stage == "execution" and kind == "split":
+            self._waiting_since = None
+            self.current = max(0, self.current - 1)  # The rejected parent is replaced by child leaves.
+            self.total = event["leaf_chunks"]
+            self._write(f"Truncated {event['chunk_id']}; split into {len(event['children'])} children; {self.total} leaf chunks")
+        elif stage == "execution" and kind == "reused":
+            self.current += 1
+            self._last_chunk = event["chunk_id"]
+            self._write(f"[{self.current}/{self.total}] reused completed response; validating evidence again")
+        elif stage == "execution" and kind in {"unsplittable", "budget_exhausted"}:
+            self._waiting_since = None
+            self._write(f"Execution stopped: {kind}; retain this run and its checkpoint")
         elif stage == "model_request" and kind == "started":
             if self._last_chunk != event["chunk_id"]:
                 self.current += 1
@@ -87,9 +104,10 @@ class ConsoleProgress:
             run = event.get("run", {})
             elapsed = run.get("elapsed_seconds", 0)
             usage = run.get("usage", {})
+            scope = "observed cumulative " if self._managed_execution else ""
             self._write(f"Completed: {run.get('candidate_count', 0)} candidates; "
-                        f"{run.get('request_attempts', 0)} HTTP attempts; {elapsed:.1f}s; "
-                        f"tokens in/out: {usage.get('prompt_tokens', '?')}/{usage.get('completion_tokens', '?')}")
+                        f"{scope}{run.get('request_attempts', 0)} HTTP attempts; this invocation {elapsed:.1f}s; "
+                        f"{scope}tokens in/out: {usage.get('prompt_tokens', '?')}/{usage.get('completion_tokens', '?')}")
         elif kind == "failed":
             self._waiting_since = None
             self._write(f"Failed during {stage}; run did not complete; inspect saved artifacts")

@@ -2,7 +2,9 @@
 
 Schema-driven extraction from text and tables, with source-linked evidence and pluggable decision backends.
 
-**Early prototype · `0.1.0.dev11` · Python 3.11+**
+**Early prototype · `0.1.0.dev12` · Python 3.11+**
+
+Dev12 adds output-aware CLI chunk planning, budgeted truncation subdivision and checkpoint recovery. See [execution and recovery](docs/EXECUTION.md) for defaults, budgets and offline acceptance. Python opts in with `execution=ExecutionOptions(...)`.
 
 Dev9 adds a minimal model-selection entry point: configure a provider key once,
 then change `--model-id` in the CLI or `model=` in Python. Named profiles and
@@ -129,7 +131,7 @@ attestextract extract --input src/attestextract/examples/procurement.md --task s
 
 On Bash, use `export ATTESTEXTRACT_BASE_URL=...`, `export ATTESTEXTRACT_MODEL=...`, and `export ATTESTEXTRACT_API_KEY=...`. Alternatively, load a configuration file explicitly with `--env-file`, as below. Configuration precedence is **CLI arguments → existing process environment → the explicit `.env` file**. No `.env` file is loaded automatically. `--api-key-env OTHER_VARIABLE` selects the variable containing the key; no command-line key value is accepted. A key may be omitted for a local endpoint that does not require authentication. `--timeout` accepts seconds greater than zero and at most 60, defaulting to 60 per attempt.
 
-Live extraction sends document chunks to your configured endpoint. There is no automatic fallback to demo responses. In the advanced configuration, transport failures and transient HTTP statuses are retried at most three times by default; model presets default to one attempt. Authentication and configuration failures stop immediately; response format errors stop by default, with an optional single format retry described below. An unrecovered chunk fails the run with a nonzero exit status; there is no partial-success or resume mode.
+Live extraction sends document chunks to your configured endpoint. There is no automatic fallback to demo responses. In the advanced configuration, transport failures and transient HTTP statuses are retried at most three times by default; model presets default to one attempt. Authentication and configuration failures stop immediately; response format errors stop by default, with an optional single format retry described below. An unrecovered chunk fails the run with a nonzero exit status; there is no partial-success result. CLI checkpoints can resume completed responses in a new run; see [execution and recovery](docs/EXECUTION.md).
 
 ### Optional structured output
 

@@ -13,13 +13,13 @@ from uuid import uuid4
 
 from . import __version__, extract, load_task
 from .backends import ReplayBackend
-from .chunking import chunk_document
 from .config import resolve_backend_config
 from .d1_examples import d1_example_names, load_d1_example
 from .diagnostics import RunTrace, redact_text
 from .envconfig import load_env_file
 from .errors import AttestExtractError, ConfigurationError
-from .models import TaskSpec
+from .execution import check_resume_paths, digest, prepare_execution
+from .models import ExecutionOptions, TaskSpec
 from .providers import available_models, resolve_model_config, resolve_model_credentials
 from .progress import ConsoleProgress
 from .reporting import render_markdown_report
@@ -88,6 +88,12 @@ def _parser() -> argparse.ArgumentParser:
     live.add_argument("--progress", choices=("normal", "quiet", "verbose"), default="normal",
                       help="Terminal detail level (default: normal); raw text stays in diagnostic files")
     live.add_argument("--check", action="store_true", help="Validate local configuration/task and show the chunk plan; no model/network calls")
+    live.add_argument("--chunking", choices=("adaptive", "fixed"), default="adaptive",
+                      help="Output-complexity planning (default: adaptive); fixed retains the character target")
+    live.add_argument("--max-chunk-chars", type=int, default=6000, help="Initial chunk character target (default: 6000; atomic table rows may exceed it)")
+    live.add_argument("--max-model-calls", type=int, help="Total generation-call budget including retries and prior resumed calls (default: 3 x initial planned chunks)")
+    live.add_argument("--max-split-depth", type=int, default=3, help="Maximum truncation subdivision depth (default: 3; 0 disables subdivision)")
+    live.add_argument("--resume", type=Path, help="Previous run directory, diagnostics directory or execution/checkpoint.json; saves a new run")
     return parser
 
 
@@ -112,19 +118,19 @@ def _write(payload: dict, output: Path | None, *, announce: bool = True) -> None
             print(f"Wrote {output}", file=sys.stderr)
 
 
-def _default_outputs(args: argparse.Namespace) -> None:
+def _default_outputs(args: argparse.Namespace) -> Path | None:
     if args.output is not None:
         return
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + uuid4().hex[:8]
     source_directory = args.input.resolve().parent
     root = source_directory.parent if source_directory.name.casefold() == "inputs" else source_directory
     directory = root / "outputs" / stamp
-    directory.mkdir(parents=True, exist_ok=False)
     args.output = directory / "result.json"
     if args.report is None:
         args.report = directory / "report.md"
     if args.log_dir is None:
         args.log_dir = directory / "diagnostics"
+    return directory
 
 
 def _check_output_paths(args: argparse.Namespace) -> None:
@@ -188,8 +194,18 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
             _write(payload, args.output)
             return 0
 
-        _default_outputs(args)
+        default_directory = _default_outputs(args)
+        if args.resume is not None:
+            check_resume_paths(args.resume, [path for path in (args.output, args.report, args.log_dir) if path is not None])
+        if default_directory is not None:
+            default_directory.mkdir(parents=True, exist_ok=False)
         _check_output_paths(args)
+        if args.max_chunk_chars < 1:
+            raise ConfigurationError("--max-chunk-chars must be positive.")
+        if args.resume is not None and args.log_dir is None:
+            raise ConfigurationError("Resume requires persistent diagnostics: omit --output or supply a new --log-dir.")
+        execution = ExecutionOptions(adaptive_chunking=args.chunking == "adaptive",
+                                     max_model_calls=args.max_model_calls, max_split_depth=args.max_split_depth)
         progress = ConsoleProgress(args.progress)
         api_key = os.environ.get(args.api_key_env or "ATTESTEXTRACT_API_KEY")
         trace = RunTrace(args.log_dir, secrets=[api_key] if api_key else [], on_event=progress)
@@ -231,6 +247,7 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
         backend = (registry if registry is not None else default_registry()).create(
             config.adapter, config=config, api_key=api_key, trace=trace,
         )
+        backend_identity = digest(config.model_dump(mode="json", exclude={"api_key_env"}))
         if trace is not None:
             trace.write_json("backend.json", {
                 "backend": backend.name, "model": config.model, "timeout": config.timeout,
@@ -250,9 +267,15 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
                         max_output_tokens=config.generation.max_output_tokens,
                         max_attempts=config.max_attempts, format_retries=config.format_retries)
         if args.check:
-            chunks = chunk_document(text)
+            session = prepare_execution(text, task, backend, config.generation, execution,
+                                        max_chars=args.max_chunk_chars, format_retries=config.format_retries,
+                                        source_name=args.input.name, backend_identity=backend_identity,
+                                        resume_from=args.resume)
             plan = {"mode": "local_check", "network_calls": 0, "model": config.model,
-                    "character_count": len(text), "chunk_count": len(chunks),
+                    "character_count": len(text), "chunk_count": len(session.leaves()),
+                    "execution": session.summary(), "execution_options": execution.model_dump(mode="json"),
+                    "max_http_attempts_upper_bound": (session.state.max_model_calls * backend.max_attempts
+                                                      if hasattr(backend, "max_attempts") else None),
                     "structured_output": config.structured_output, "tls_mode": config.tls_mode,
                     "timeout": config.timeout, "max_attempts": config.max_attempts,
                     "format_retries": config.format_retries,
@@ -264,7 +287,9 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
             print(json.dumps(plan, ensure_ascii=False, indent=2))
             return 0
         result = extract(text, task, backend=backend, source_name=args.input.name, trace=trace,
-                         format_retries=config.format_retries, generation=config.generation)
+                         format_retries=config.format_retries, generation=config.generation,
+                         execution=execution, resume_from=args.resume, backend_identity=backend_identity,
+                         max_chunk_chars=args.max_chunk_chars)
         if trace is not None:
             trace.event("output", "started")
         payload = result.model_dump(mode="json")
@@ -278,7 +303,17 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
             trace.finish(payload)
             if trace.directory is not None and args.progress != "quiet":
                 print(f"Run diagnostics: {trace.directory}", file=sys.stderr)
+                print(f"Resume checkpoint: {trace.directory / 'execution/checkpoint.json'}", file=sys.stderr)
         return 0
+    except KeyboardInterrupt as exc:
+        if trace is not None:
+            trace.fail(exc)
+        print("attestextract: interrupted; any in-flight call keeps its budget reservation.", file=sys.stderr)
+        if trace is not None and trace.directory is not None and (trace.directory / "execution/checkpoint.json").is_file():
+            print(f"Resume checkpoint: {trace.directory / 'execution/checkpoint.json'}", file=sys.stderr)
+        else:
+            print("No execution checkpoint was saved yet.", file=sys.stderr)
+        return 130
     except (AttestExtractError, OSError, ValueError) as exc:
         if trace is not None:
             trace.fail(exc)
@@ -286,6 +321,8 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
         print(f"attestextract: {message}", file=sys.stderr)
         if trace is not None and trace.directory is not None:
             print(f"Run diagnostics: {trace.directory}", file=sys.stderr)
+            if (trace.directory / "execution/checkpoint.json").is_file():
+                print(f"Resume checkpoint: {trace.directory / 'execution/checkpoint.json'}", file=sys.stderr)
             if getattr(exc, "http_details", None):
                 print(f"HTTP diagnostics: {trace.directory / exc.http_details}", file=sys.stderr)
             artifact = getattr(exc, "validation_artifact", None)

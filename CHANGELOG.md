@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.0.dev12
+
+- Plan CLI chunks using task/output complexity and original Unicode spans; retain atomic Markdown table rows. Keep Python's existing fixed execution unless `ExecutionOptions` is supplied.
+- Subdivide only truncated chunks with finite depth and a total generation-call budget (default: three times initial planned chunks). Count format regeneration and resumed reservations in the same budget; HTTP retries remain separately bounded by the adapter.
+- Save atomic local checkpoints and completed response caches. Resume into a new run, validate all caches before new calls, re-ground evidence and retain historical failure artifacts. Reject changed source/task/model/settings, damaged caches and writes into previous runs. Legacy runs without checkpoints are not resumable.
+- Preserve failed completion metadata, source chunks and raw responses. Display splits/reuse/budget and distinguish cumulative observed usage from current invocation time; do not accept partial JSON or silently refund interrupted calls.
+- Add synthetic failure/recovery tests and an installed-wheel recovery smoke check. No new dependency, real endpoint calls, semantic accuracy guarantee or result-schema change.
+
 ## 0.1.0.dev11
 
 - Save default CLI runs in `outputs/<timestamp-id>/` beside the input. For files directly inside an `inputs/` directory (case-insensitive), use its sibling `outputs/`. Preserve explicit paths and previous run files.

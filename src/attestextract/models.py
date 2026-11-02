@@ -104,6 +104,16 @@ class GenerationOptions(ContractModel):
     max_output_tokens: int | None = Field(default=None, gt=0)
 
 
+class ExecutionOptions(ContractModel):
+    """Bounded generation invocations; HTTP retries remain adapter-controlled."""
+
+    adaptive_chunking: bool = True
+    max_model_calls: int | None = Field(default=None, gt=0)
+    max_split_depth: int = Field(default=3, ge=0, le=8)
+    min_chunk_chars: int = Field(default=500, ge=1)
+    planning_output_tokens: int = Field(default=8192, gt=0)
+
+
 class ExtractionRequest(ContractModel):
     messages: list[dict[str, str]]
     chunk_id: str
@@ -219,7 +229,7 @@ class RunInfo(ContractModel):
 
 class ExtractionResult(ContractModel):
     schema_version: Literal["0.1", "0.2"] = "0.2"
-    package_version: str = "0.1.0.dev11"
+    package_version: str = "0.1.0.dev12"
     task: TaskSpec
     source: SourceInfo
     candidates: list[Candidate]

@@ -277,3 +277,7 @@ format, expected values and exact source evidence separately. Six small calls
 cannot establish a general extraction accuracy rate or parameter enforcement.
 They also do not validate strict Schema mode, forced live failures, or Jev.
 Offline/mock acceptance and live acceptance must always be reported separately.
+
+## Execution policy and recovery (dev12)
+
+The CLI now uses output-aware planning and bounded truncation subdivision. The generation-call budget includes format regeneration, parent/child calls and saved reservations from the selected recovery chain. HTTP retries remain adapter-controlled. Python opts in with `ExecutionOptions`; custom persistent backends require an explicit non-secret `backend_identity` binding all output-affecting configuration. The framework also rejects normalized non-stop completions before parsing records. See [execution and recovery](EXECUTION.md) for exact defaults, resume identity, observed cumulative usage and offline acceptance.

@@ -53,10 +53,12 @@ class InvalidResponseError(BackendError):
         validation_details: dict[str, Any] | None = None,
         validation_artifact: str | None = None,
         code: str = "invalid_response",
+        response_metadata: dict[str, Any] | None = None,
     ) -> None:
         super().__init__(message, status_code=status_code, attempts=attempts, code=code)
         self.validation_details = validation_details
         self.validation_artifact = validation_artifact
+        self.response_metadata = response_metadata
 
 
 class TaskValidationError(AttestExtractError):
