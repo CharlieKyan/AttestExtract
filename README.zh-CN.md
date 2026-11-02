@@ -12,6 +12,8 @@ dev7 增加测量上下文与数值／单位片段位置、任务声明的条件
 
 [English README and API details](README.md)
 
+[每次修改的审查摘要](docs/reviews/README.md)：按日期和改动主题查看行为变化、潜在问题、实际验证及人工重点，无需逐行翻阅全部 Diff。
+
 ## 无需密钥运行演示
 
 ```bash

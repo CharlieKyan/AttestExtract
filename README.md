@@ -19,6 +19,8 @@ AttestExtract is an independent, domain-configurable extraction core. It grew ou
 
 [中文说明](README.zh-CN.md)
 
+[Change review summaries](docs/reviews/README.md) record each completed change's scope, behavior, findings, verification and human review priorities. Start there to understand changes without reading every diff line.
+
 ## Try the offline demonstration
 
 ```bash
