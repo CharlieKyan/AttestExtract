@@ -50,6 +50,7 @@ def _compatible_factory(
         timeout=config.timeout, max_attempts=config.max_attempts, trace=trace,
         structured_output=config.structured_output, provider_options=config.provider_options,
         output_token_parameter=config.output_token_parameter,
+        tls_mode=config.tls_mode,
     )
 
 

@@ -20,7 +20,7 @@ def test_selecting_a_known_model_requires_only_its_credential(selector, key, bas
     config = resolve_model_config(selector, environment=environment)
     assert config.base_url == base and config.model == selector.split(":", 1)[1]
     assert config.api_key_env == key and config.provider_options == options
-    assert config.generation.max_output_tokens == 2048
+    assert config.generation.max_output_tokens == 8192
     assert config.max_attempts == 1 and config.format_retries == 0
     assert config.structured_output == "json_object"
     assert resolve_model_credentials(config, environment) == "synthetic-credential"

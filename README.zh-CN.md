@@ -2,7 +2,7 @@
 
 按任务模式从正文和表格抽取候选数据，保留原文证据，并预留可替换的决策后端。
 
-**早期原型 · `0.1.0.dev9` · Python 3.11+**
+**早期原型 · `0.1.0.dev10` · Python 3.11+**
 
 dev9 增加最少配置的模型选择入口：首次配置服务商密钥，之后只修改 CLI 的 `--model-id` 或 Python 的 `model=` 即可切换。已有 TOML profile 和后端注入继续可用。配置规则见 [D2 适配器指南](docs/BACKENDS.md)，完成范围和证据边界见 [D2 验收清单](docs/D2_ACCEPTANCE.md)。离线验证、既有真实调用和内容准确性分开报告。
 
@@ -69,7 +69,7 @@ DASHSCOPE_API_KEY=你的Qwen北京区密钥
 
 ```bash
 attestextract models
-attestextract extract --model-id deepseek:deepseek-flash --env-file .env --input src/attestextract/examples/procurement.md --task src/attestextract/examples/procurement.task.json --output extraction-results.json
+attestextract extract --model-id deepseek:deepseek-flash --env-file .env --input src/attestextract/examples/procurement.md --task src/attestextract/examples/procurement.task.json
 ```
 
 切换 Qwen 时，只将 `--model-id` 改为 `qwen:qwen3.8-27b`，原文和任务保持不变。Python 写法：
@@ -85,7 +85,7 @@ result = extract(
 )
 ```
 
-首批明确支持 `deepseek:deepseek-flash`、`qwen:qwen3.8-27b`、`qwen:qwen-plus` 三个预设，Qwen 限北京区。默认请求 JSON object、关闭思考、每次生成仅一次 HTTP 尝试、零格式再生成、最多输出 2,048 token。它们是请求默认值，不代表抽取准确率或服务端执行保证。已有的 `VLM_API_KEY`／`VLM_BASE_URL` 可作为 Qwen 配置，具体优先级见 [配置指南](docs/BACKENDS.md)。`.env` 仍需显式传入，不会自动加载。
+首批明确支持 `deepseek:deepseek-flash`、`qwen:qwen3.8-27b`、`qwen:qwen-plus` 三个预设，Qwen 限北京区。默认请求 JSON object、关闭思考、每次生成仅一次 HTTP 尝试、零格式再生成、temperature 为 0、最多输出 8,192 token。它们是请求默认值，不代表抽取准确率或服务端执行保证。已有的 `VLM_API_KEY`／`VLM_BASE_URL` 可作为 Qwen 配置，具体优先级见 [配置指南](docs/BACKENDS.md)。`.env` 仍需显式传入，不会自动加载。
 
 未知模型、其他地域和特殊协议使用高级 profile 或适配器。原 CLI `--model` 保留“服务原生模型名”的语义，不解析 `provider:model`；新的 `--model-id` 不能与 `--model`、`--adapter`、`--config`、`--profile` 混用。
 
@@ -140,7 +140,7 @@ New-Item -ItemType Directory -Force -Path $runDir | Out-Null
 attestextract extract --env-file .env --structured-output json_schema --input src/attestextract/examples/procurement.md --task src/attestextract/examples/procurement.task.json --output "$runDir\extraction.json" --report "$runDir\review.md" --log-dir "$runDir\diagnostics"
 ```
 
-`--log-dir` 开启文件日志，并在标准错误实时显示关键阶段进度。指定目录必须为空或尚不存在，不会覆盖已有运行；每次运行请使用新目录。不传该参数时，照常抽取且不生成这些跟踪文件。
+不填 `--output` 时，正式 CLI 在输入旁自动新建 `attestextract-runs/<时间-随机标识>/`，保存 `result.json`、`report.md` 和 `diagnostics/`。显式指定 `--output` 时，仍只有传入 `--log-dir` 才保存诊断文件；该目录必须为空或尚不存在。两种方式默认都显示简洁进度，可用 `--progress quiet` 静默。完整默认值、无模型调用的 `--check` 和验收方法见 [CLI 体验说明](docs/CLI_EXPERIENCE.md)。
 
 | 日志文件 | 用途 |
 | --- | --- |
@@ -167,7 +167,7 @@ attestextract extract --env-file .env --structured-output json_schema --input sr
 
 失败运行可能留下此前已处理分块的文件，供排查使用，不代表部分结果已成功。即使已去除凭据和后端敏感信息，日志仍可能包含**整篇论文、任务说明和模型输出**。请像上述示例一样放在仓库之外，不提交到 GitHub；对外分享前先检查内容。日志只对应当前已实现的抽取流程，尚未实现或模拟 Jev、Stage2.5／Stage3 决策模块。
 
-`extract` 将 JSON 写入必填的 `--output` 文件。增加 `--report review.md` 可从同一次成功结果生成 Markdown 审阅报告，不额外调用模型。报告展示候选、字段值、逐字引文、原文位置、证据状态和复核原因，便于直接阅读；它不会接受候选或证明事实正确，JSON 仍是供程序处理的结果。报告会隐藏已配置的已知 API 密钥；抽取失败时不生成成功报告。结果和报告路径必须互不相同，也不能覆盖输入、任务或 `.env`，且都需位于 `--log-dir` 之外。
+`extract` 将 JSON 写入可选的 `--output` 文件；省略时自动建立本次运行的结果目录。增加 `--report review.md` 可从同一次成功结果生成 Markdown 审阅报告，不额外调用模型。报告展示候选、字段值、逐字引文、原文位置、证据状态和复核原因，便于直接阅读；它不会接受候选或证明事实正确，JSON 仍是供程序处理的结果。报告会隐藏已配置的已知 API 密钥；抽取失败时不生成成功报告。结果和报告路径必须互不相同，也不能覆盖输入、任务或 `.env`，且都需位于 `--log-dir` 之外。
 
 开启日志后，关键阶段开始、完成和重试会实时显示在标准错误，写入提示和错误摘要也发往标准错误；字段级细节保存在 `events.jsonl`，模型响应和跟踪内容不逐条打印到标准输出。原有 `demo`、`d1` 在不传 `--output` 时仍将 JSON 写入标准输出；中间结果可查看各分块文件。
 

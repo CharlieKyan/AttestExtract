@@ -22,6 +22,7 @@ class BackendConfig(ContractModel):
     max_attempts: int = Field(default=3, ge=1)
     structured_output: Literal["off", "json_object", "json_schema"] = "off"
     format_retries: int = Field(default=0, ge=0, le=1)
+    tls_mode: Literal["auto", "1.2"] = "auto"
     generation: GenerationOptions = Field(default_factory=GenerationOptions)
     provider_options: dict[str, Any] = Field(default_factory=dict, repr=False)
     output_token_parameter: Literal["max_tokens", "max_completion_tokens"] = "max_tokens"

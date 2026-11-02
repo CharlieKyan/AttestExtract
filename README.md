@@ -2,7 +2,7 @@
 
 Schema-driven extraction from text and tables, with source-linked evidence and pluggable decision backends.
 
-**Early prototype · `0.1.0.dev9` · Python 3.11+**
+**Early prototype · `0.1.0.dev10` · Python 3.11+**
 
 Dev9 adds a minimal model-selection entry point: configure a provider key once,
 then change `--model-id` in the CLI or `model=` in Python. Named profiles and
@@ -84,7 +84,7 @@ List the local presets without network access, then select a model:
 
 ```bash
 attestextract models
-attestextract extract --model-id deepseek:deepseek-flash --env-file .env --input src/attestextract/examples/procurement.md --task src/attestextract/examples/procurement.task.json --output extraction-results.json
+attestextract extract --model-id deepseek:deepseek-flash --env-file .env --input src/attestextract/examples/procurement.md --task src/attestextract/examples/procurement.task.json
 ```
 
 For Qwen, change only `--model-id` to `qwen:qwen3.8-27b`. The same source and task
@@ -104,7 +104,7 @@ result = extract(
 The three explicit presets are `deepseek:deepseek-flash`, `qwen:qwen3.8-27b`, and
 `qwen:qwen-plus`; Qwen presets support Beijing only. Defaults are JSON object
 output, thinking disabled, one HTTP attempt, no format regeneration and at most
-2,048 output tokens per generation. These are request defaults, not a guarantee
+8,192 output tokens per generation, with temperature 0. These are request defaults, not a guarantee
 of extraction accuracy or server-side parameter enforcement. Existing
 `VLM_API_KEY` / `VLM_BASE_URL` can be used for Qwen; credential and address
 precedence is documented in the [configuration guide](docs/BACKENDS.md).
@@ -175,7 +175,7 @@ New-Item -ItemType Directory -Force -Path $runDir | Out-Null
 attestextract extract --env-file .env --structured-output json_schema --input src/attestextract/examples/procurement.md --task src/attestextract/examples/procurement.task.json --output "$runDir\extraction.json" --report "$runDir\review.md" --log-dir "$runDir\diagnostics"
 ```
 
-`--log-dir` enables file-based tracing and key stage progress on stderr. Its directory must be empty or not yet exist; an existing run is never overwritten. Choose a new directory for each run. Omit it for ordinary extraction without these trace files.
+`--log-dir` explicitly enables file tracing; its directory must be empty or not yet exist. Without `--output`, the CLI now creates a fresh `attestextract-runs/<timestamp-id>/` beside the input, containing `result.json`, `report.md`, and `diagnostics/`. With explicit `--output`, file tracing remains opt-in. Normal terminal progress works in either mode. See [CLI defaults and acceptance](docs/CLI_EXPERIENCE.md).
 
 | Trace file | What it records |
 | --- | --- |
@@ -202,7 +202,7 @@ New traces use `trace_schema_version: "0.3"`; existing log directories are not r
 
 A failed run can leave earlier chunk files for diagnosis; they are not a successful partial result. Trace files can contain **the full paper text, task instructions, and model output**, even when credentials and backend details are sanitized. Store them outside this repository, as above, and do not commit or publicly share them without reviewing their contents. These are logs of the implemented extraction pipeline; Jev and Stage2.5/Stage3 decision modules are not implemented or simulated by tracing.
 
-`extract` writes JSON to its required `--output` file. Add `--report review.md` for a Markdown review report generated from the same successful result, with no additional model call. It shows candidates, field values, verbatim quotations, source positions, evidence status, and review reasons. The report does not accept candidates or establish factual correctness; JSON remains the machine-readable result. Known configured API keys are redacted from the report. A failed extraction produces no success report. Output and report paths must differ from each other and from input, task, and `.env` files, and both must be outside `--log-dir`.
+`extract` writes JSON to the optional `--output` file, or to the automatically created run directory. Add `--report review.md` for a Markdown review report generated from the same successful result, with no additional model call. It shows candidates, field values, verbatim quotations, source positions, evidence status, and review reasons. The report does not accept candidates or establish factual correctness; JSON remains the machine-readable result. Known configured API keys are redacted from the report. A failed extraction produces no success report. Output and report paths must differ from each other and from input, task, and `.env` files, and both must be outside `--log-dir`.
 
 With tracing enabled, key stages, completions, and retries appear on stderr in real time, alongside file-written notices and error summaries. Field-level details remain in `events.jsonl`; model responses and trace contents are not streamed to stdout. `demo` and `d1` still print JSON to stdout when `--output` is omitted. Inspect the per-chunk files for intermediate results.
 

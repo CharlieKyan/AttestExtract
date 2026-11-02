@@ -1,0 +1,66 @@
+# CLI 默认值与验收（dev10）
+
+这是正式包入口的行为，不依赖论文启动脚本。密钥配置一次；用户主要填写模型、输入和任务。`.env` 明确通过 `--env-file` 读取；已有进程环境变量仍优先。
+
+```powershell
+attestextract extract --model-id deepseek:deepseek-flash --env-file .env --input paper.md --task task.json
+```
+
+更换为 `--model-id qwen:qwen3.8-27b` 即使用 Qwen。以下默认值只适用于这几个已支持的模型预设，高级 profile 和显式 backend 保持原有默认值。
+
+| 配置 | 默认值与原因 |
+| --- | --- |
+| API 地址、凭据变量、思考参数 | 根据模型预设解析；不猜测未知模型或地域 |
+| `structured_output` | `json_object`；通用性优先，本地结构和证据检查仍必须通过 |
+| `temperature` | `0`；减少采样变化，不保证重复运行完全一致 |
+| `max_output_tokens` | `8192`；由原先 `2048` 提高，给字段引文和测量证据留出空间。这是每次生成的上限，不是固定消耗；可能增加最大费用 |
+| `timeout` | `60` 秒（HTTPX 每个网络阶段的超时，并非整个文档的总时限） |
+| `max_attempts` | `1`；不自动重发可能已经在服务端生成的请求 |
+| `format_retries` | `0`；非法 JSON 直接失败。明确添加 `--format-retries 1` 才允许每块多生成一次 |
+| 分块 | 与此前一致：约 `6000` 字符、每批最多 `12` 行简单 Markdown 表格；原子表格行可能超出字符目标 |
+| 输出路径 | 不填 `--output` 时，在输入所在目录新建 `attestextract-runs/<时间-随机标识>/`，包含 `result.json`、`report.md`、`diagnostics/` |
+| 终端 | 默认 `--progress normal`：模型和预算、总块数、当前块、等待提示、实际返回的 token 数、候选与复核项数量、完成路径 |
+
+显式提供 `--output` 仍兼容原有调用：输出父目录需存在，报告和文件诊断仍通过 `--report` / `--log-dir` 自行开启。正常终端进度不依赖文件日志；`quiet` 隐藏进度和成功路径，但错误仍显示；`verbose` 增加阶段名称，不打印原文、提示词和响应正文。等待时每 15 秒最多输出一行，不伪造生成百分比。复核项数量不等于需要复核的候选数量。
+
+自动诊断目录包含原文和模型原始输出，仅留在用户本地。公共仓库忽略 `attestextract-runs/`，分享结果前仍需选择适当文件。模型或校验失败不会生成成功结果；文件写入阶段失败可能已保存部分产物，需检查诊断。尚无断点续跑，重新启动会重新处理全文。没有日志目录的调用只接收事件，不落盘原文或提示词。
+
+## TLS 兼容处理
+
+TLS 是 HTTPS 加密连接的协议，`1.2` 是协议版本，不是模型版本，也不改变 JSON 结构。本轮针对已观察到的 TLS 记录校验失败，把 DeepSeek 预设设为经过验证的 TLS 1.2 兼容路径；Qwen 和高级配置仍自动协商。证书和主机名验证始终保留，HTTPX 的系统代理及 `SSL_CERT_FILE` / `SSL_CERT_DIR` 证书配置继续生效。没有网络预探测、关闭验证或失败后自动换 TLS 再提交 POST 的行为。
+
+普通用户不需要 TLS 参数。高级用户可在 profile 设置 `tls_mode = "auto"` 或 `"1.2"`；Python 的 `model_options={"tls_mode": "auto"}` 可覆盖预设。注入自定义 HTTP transport 时，其连接策略由注入者控制。该兼容默认值不是所有网络错误的通用解决办法，其他网络故障仍会明确失败。
+
+传输失败文件保存异常类型、数字错误码和允许的 SSL 原因码，不保存可能包含密钥或地址的异常原文。依据：[HTTPX SSL](https://www.python-httpx.org/advanced/ssl/)、[HTTPX 环境变量](https://www.python-httpx.org/environment_variables/)、[Python SSLContext](https://docs.python.org/3/library/ssl.html#ssl.SSLContext)。
+
+## JSON 错误：看见原因，保留证据
+
+例如 `"fields":{"first":{...},{"second":{...}}}` 不合法：对象逗号后需要下一个属性名，不能出现匿名 `{`。提示词现在明确要求字段是同一 `fields` 对象中的并列属性；已有任务示例继续提供合法完整结构。
+
+框架不删括号、不补引文、不接受部分 JSON。失败终端直接给出原始响应路径和校验文件路径。`responses/chunk-0001.txt` 保留原响应（已知凭据仍脱敏）；`validation/chunk-0001.errors.json` 记录解析器原因及位置：
+
+- `line` / `column`：去掉外围空白和 Markdown fence 后的 JSON，均从 1 开始。
+- `raw_line` / `raw_column`：原始响应位置，从 1 开始；有 fence 时用这组坐标查看文件。
+- `offset` / `raw_offset`：从 0 开始的 Unicode 字符位置，不是 UTF-8 字节偏移。
+
+明确选择 `--format-retries 1` 后，仅对本地 JSON／记录结构／任务字段校验失败的块重新生成一次，反馈包含有界解析原因和行列，不回传非法原文。原响应、新响应和 token 用量均保留；新结果继续做完整检查。网络错误、空响应、拒绝和截断不会触发格式重试。每块最多 HTTP 请求数为 `max_attempts * (1 + format_retries)`；真实调用效果不能由模拟测试保证。
+
+## 可执行验收
+
+使用上面的实际模型／文件配置，追加 `--check`：
+
+```powershell
+attestextract extract --model-id deepseek:deepseek-flash --env-file .env --input paper.md --task task.json --check
+```
+
+它只检查本地配置、凭据形式、任务、输入和分块，输出 `mode: local_check`、`network_calls: 0` 和实际默认值。诊断 manifest 为 `checked`，不产生 `result.json`，不验证密钥有效性或服务端 Schema 支持。去掉 `--check` 才会调用模型。
+
+仓库开发环境中的合成验收命令（无需密钥，不调用真实端点）：
+
+```powershell
+python -m pytest -q tests/test_cli_experience.py tests/test_model_selection_cli.py tests/test_format_retry.py tests/test_schema_diagnostics.py
+```
+
+覆盖最小调用生成三类产物、模型切换、JSON 原样保留及坐标、显式重生成、进度与静默、心跳退出、TLS 验证与脱敏、服务端不支持 Schema 时明确失败。`scripts/model_selection_smoke.py` 在安装后的 wheel 上再检查 Python／显式 CLI／最小 CLI 切换，以及零网络的 `--check`。
+
+需要验收 `json_schema` 时显式添加 `--structured-output json_schema`。检查诊断目录的 `schema/*.request.json`（是否发送）和 `schema/*.compliance.json`（返回文本是否合规）；HTTP 200 不等于服务端严格执行 Schema。服务端不支持则保留错误，不自动退回 `json_object`。

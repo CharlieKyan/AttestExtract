@@ -7,6 +7,8 @@ profiles, legacy CLI environment configuration, result schema 0.2 (including
 reading 0.1), evidence rules, and opt-in format regeneration remain available.
 The [D2 acceptance checklist](D2_ACCEPTANCE.md) records the verification scope.
 
+Dev10 makes CLI output/report/diagnostic paths optional as a group and adds concise progress plus local-only `--check`. See [CLI experience](CLI_EXPERIENCE.md) for defaults, TLS compatibility and JSON error handling.
+
 ## Select a model with minimal configuration
 
 Set the keys for the providers you use in the process environment or an explicit
@@ -42,7 +44,7 @@ result = extract(
 | `qwen:qwen3.8-27b` | Qwen Beijing public endpoint | `enable_thinking = false` |
 | `qwen:qwen-plus` | Qwen Beijing public endpoint | `enable_thinking = false` |
 
-All three presets default to `json_object`, `max_tokens: 2048`, timeout 60 seconds,
+All three presets default to `json_object`, `max_tokens: 8192`, `temperature: 0`, timeout 60 seconds,
 one HTTP attempt and zero format regeneration. The token cap applies per chunk
 generation, not to the whole document. Explicit options override these defaults.
 Unknown provider/model identifiers fail before a model request; use a complete
@@ -140,6 +142,7 @@ An existing empty environment value does not fall back to the file.
 | `api_key_env` | `ATTESTEXTRACT_API_KEY`; local unauthenticated services remain possible |
 | `timeout` | 60 seconds; HTTPX per-operation timeout, not a total wall-clock deadline |
 | `max_attempts` | 3 HTTP attempts per generation; use 1 for bounded acceptance |
+| `tls_mode` | `auto` (HTTPX negotiation), or `1.2` with certificate/hostname validation; DeepSeek presets select `1.2`, Qwen presets use `auto` |
 | `structured_output` | `off`, `json_object`, or `json_schema`; default `off` |
 | `format_retries` | 0; explicitly setting 1 can add one generation per chunk |
 | `generation.temperature` | Optional number from 0 through 2; otherwise omitted |

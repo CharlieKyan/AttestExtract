@@ -17,6 +17,7 @@ from .diagnostics import RunTrace, redact_text
 from .http_diagnostics import describe_http_error
 from .models import BackendResponse, ExtractionRequest
 from .schema_diagnostics import assess_schema_compliance, schema_request_info
+from .transport import tls_context, transport_details
 
 _RETRYABLE_STATUS_CODES = frozenset({408, 409, 429, 500, 502, 503, 504})
 _RESERVED_OPTIONS = frozenset({
@@ -89,6 +90,7 @@ class OpenAICompatibleBackend:
         structured_output: Literal["off", "json_object", "json_schema"] = "off",
         provider_options: dict[str, Any] | None = None,
         output_token_parameter: Literal["max_tokens", "max_completion_tokens"] = "max_tokens",
+        tls_mode: Literal["auto", "1.2"] = "auto",
     ) -> None:
         if not isinstance(base_url, str) or not base_url.strip():
             raise ConfigurationError("A nonempty HTTP(S) API base URL is required.")
@@ -136,6 +138,8 @@ class OpenAICompatibleBackend:
             raise ConfigurationError("structured_output must be 'off', 'json_object', or 'json_schema'.")
         if output_token_parameter not in ("max_tokens", "max_completion_tokens"):
             raise ConfigurationError("output_token_parameter must be 'max_tokens' or 'max_completion_tokens'.")
+        if tls_mode not in ("auto", "1.2"):
+            raise ConfigurationError("tls_mode must be 'auto' or '1.2'.")
 
         self.base_url = str(url).rstrip("/")
         self.model = model
@@ -144,6 +148,7 @@ class OpenAICompatibleBackend:
         self.structured_output = structured_output
         self.provider_options = _validate_provider_options(provider_options)
         self.output_token_parameter = output_token_parameter
+        self.tls_mode = tls_mode
         self._api_key = api_key
         self._transport = transport
         self._sleep = sleep_fn
@@ -207,6 +212,7 @@ class OpenAICompatibleBackend:
         with httpx.Client(
             timeout=self.timeout,
             transport=self._transport,
+            verify=tls_context(self.tls_mode) if self._transport is None else True,
             follow_redirects=False,
         ) as client:
             for attempt in range(1, self.max_attempts + 1):
@@ -218,23 +224,27 @@ class OpenAICompatibleBackend:
                         headers=headers,
                         json=payload,
                     )
-                except httpx.TimeoutException:
+                except httpx.TimeoutException as exc:
+                    diagnostic, artifact = self._transport_failure(exc, request, attempt)
                     if attempt == self.max_attempts:
                         raise BackendError(
                             f"The model request timed out after {attempt} attempt(s).",
                             attempts=attempt,
                             code="timeout", retryable=True,
+                            http_diagnostics=diagnostic, http_details=artifact,
                         ) from None
                     if self._trace is not None:
                         self._trace.event("http", "retry", **context, attempt=attempt, reason="timeout")
                     self._pause(attempt)
                     continue
-                except httpx.TransportError:
+                except httpx.TransportError as exc:
+                    diagnostic, artifact = self._transport_failure(exc, request, attempt)
                     if attempt == self.max_attempts:
                         raise BackendError(
                             f"The model request failed in transport after {attempt} attempt(s).",
                             attempts=attempt,
                             code="transport_error", retryable=True,
+                            http_diagnostics=diagnostic, http_details=artifact,
                         ) from None
                     if self._trace is not None:
                         self._trace.event("http", "retry", **context, attempt=attempt, reason="transport")
@@ -265,9 +275,10 @@ class OpenAICompatibleBackend:
                     diagnostic["schema_request"] = schema_info
                     artifact = None
                     if self._trace is not None:
-                        artifact = f"http/{request.artifact_stem}.attempt-{attempt}.error.json"
-                        self._trace.write_json(artifact, diagnostic)
-                        self._trace.describe_artifact(artifact, "http_error_details")
+                        if self._trace.directory is not None:
+                            artifact = f"http/{request.artifact_stem}.attempt-{attempt}.error.json"
+                            self._trace.write_json(artifact, diagnostic)
+                            self._trace.describe_artifact(artifact, "http_error_details")
                         self._trace.event("http", "error_reported", **context,
                                           attempt=attempt, status_code=response.status_code,
                                           diagnostic_status=diagnostic["diagnostic_status"], artifact=artifact)
@@ -296,6 +307,19 @@ class OpenAICompatibleBackend:
                                             output_schema=request.output_schema)
 
         raise BackendError("The model request did not complete.")  # pragma: no cover
+
+    def _transport_failure(self, exc: Exception, request: ExtractionRequest,
+                           attempt: int) -> tuple[dict[str, Any], str | None]:
+        diagnostic = transport_details(exc, tls_mode=self.tls_mode, attempt=attempt)
+        diagnostic["custom_transport"] = self._transport is not None
+        if self._transport is not None:
+            diagnostic["certificate_verification"] = None  # Controlled by the injected transport.
+        artifact = None
+        if self._trace is not None and self._trace.directory is not None:
+            artifact = f"http/{request.artifact_stem}.attempt-{attempt}.transport.json"
+            self._trace.write_json(artifact, diagnostic)
+            self._trace.describe_artifact(artifact, "transport_error_details")
+        return diagnostic, artifact
 
     def _pause(self, attempt: int) -> None:
         self._sleep(min(0.5 * (2 ** min(attempt - 1, 3)), 2.0))

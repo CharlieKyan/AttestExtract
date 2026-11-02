@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.0.dev10
+
+- Make CLI `--output` optional: create a unique run directory beside the input with result, report and diagnostics. Explicit output paths retain opt-in file tracing. Add local-only `--check` and normal/quiet/verbose terminal progress with waiting heartbeat, chunk counts, tokens and review counts.
+- Report JSON parser reasons, stripped/unfenced positions and original-response coordinates; send bounded syntax reasons on explicit format regeneration. Keep invalid responses intact and fail without guessing repairs. Clarify sibling field syntax in prompts.
+- Raise preset output ceilings from 2,048 to 8,192 tokens for evidence-rich records and set temperature 0. Keep one HTTP attempt and zero format retries; additional calls still require explicit configuration.
+- Use verified TLS 1.2 for the DeepSeek preset compatibility path; retain auto negotiation for Qwen and advanced profiles, configured certificate roots and proxy behavior. No failed POST is silently resent with another TLS version. Record safe transport exception types/codes; `certifi` is now an explicit direct dependency (already required by HTTPX).
+- Preserve result schema 0.2 and trace schema 0.3 with additive event/diagnostic fields and a `checked` manifest state. No new live model calls or universal model-format/network guarantee.
+
 ## 0.1.0.dev9
 
 - Add `extract(..., model="provider:model")`, CLI `--model-id` and an offline `models` list. Three explicit presets cover DeepSeek Flash, Qwen 3.8-27B and Qwen Plus; keep native CLI `--model`, profiles, registry and injected backends compatible.

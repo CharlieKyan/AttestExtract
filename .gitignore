@@ -22,3 +22,4 @@ pending-archive.json
 logs/
 run-logs/
 *.log
+attestextract-runs/

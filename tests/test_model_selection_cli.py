@@ -69,7 +69,7 @@ def test_switching_only_selector_routes_model_key_and_parameters(tmp_path, monke
     assert calls[0][0:2] == ("api.deepseek.com", "Bearer synthetic-deepseek")
     assert calls[1][0:2] == ("demo.cn-beijing.maas.aliyuncs.com", "Bearer synthetic-qwen")
     for (_, _, body), model in zip(calls, ("deepseek-flash", "qwen3.8-27b")):
-        assert body["model"] == model and body["max_tokens"] == 2048
+        assert body["model"] == model and body["max_tokens"] == 8192
         assert body["response_format"] == {"type": "json_object"}
     assert calls[0][2]["thinking"] == {"type": "disabled"}
     assert calls[1][2]["enable_thinking"] is False and "thinking" not in calls[1][2]

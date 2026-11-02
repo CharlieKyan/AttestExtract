@@ -122,6 +122,9 @@ def build_messages(task: TaskSpec, chunk: DocumentChunk) -> list[dict[str, str]]
         "the inner value. Each key may occur only once within the same object, even when "
         "the repeated values would be identical. Reusing a key in a different object is allowed. "
         "Use standard JSON: no comments, trailing commas, NaN, or Infinity; numbers must be finite. "
+        "Inside fields, separate named properties with commas; after a comma write the next quoted field name, "
+        "not an anonymous object beginning with {. All field wrappers are siblings inside ONE fields object. "
+        'For example: {"fields":{"first":{"value":1,"quote":"1"},"second":{"value":2,"quote":"2"}}}. '
         "The scalar type never applies to the wrapper object. A field named value still requires "
         "fields.value.value for its scalar and fields.value.quote for its evidence. "
         'For example, a numeric field named value is {"fields":{"value":{"value":12.5,"quote":"12.5"}}}. '

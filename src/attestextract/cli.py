@@ -6,11 +6,14 @@ import argparse
 import json
 import os
 import sys
+from datetime import datetime
 from importlib.resources import files
 from pathlib import Path
+from uuid import uuid4
 
 from . import __version__, extract, load_task
 from .backends import ReplayBackend
+from .chunking import chunk_document
 from .config import resolve_backend_config
 from .d1_examples import d1_example_names, load_d1_example
 from .diagnostics import RunTrace, redact_text
@@ -18,6 +21,7 @@ from .envconfig import load_env_file
 from .errors import AttestExtractError, ConfigurationError
 from .models import TaskSpec
 from .providers import available_models, resolve_model_config, resolve_model_credentials
+from .progress import ConsoleProgress
 from .reporting import render_markdown_report
 from .registry import BackendRegistry, default_registry
 
@@ -44,7 +48,7 @@ def _parser() -> argparse.ArgumentParser:
     live = commands.add_parser("extract", help="Extract UTF-8 text or Markdown using a configured model")
     live.add_argument("--input", type=Path, required=True, help="UTF-8 .txt or .md input")
     live.add_argument("--task", type=Path, required=True, help="JSON task specification")
-    live.add_argument("--output", type=Path, required=True, help="Destination JSON file")
+    live.add_argument("--output", type=Path, help="Destination JSON; omitted: new attestextract-runs directory beside input, with report and diagnostics")
     live.add_argument("--report", type=Path, help="Also write a readable Markdown review of candidates and evidence")
     live.add_argument("--base-url", help="OpenAI-compatible API base URL, or ATTESTEXTRACT_BASE_URL")
     live.add_argument("--model", help="Model name, or ATTESTEXTRACT_MODEL")
@@ -55,19 +59,22 @@ def _parser() -> argparse.ArgumentParser:
     live.add_argument("--adapter", help="Registered backend name (default: openai-compatible)")
     live.add_argument("--api-key-env", help="Environment variable containing the API key (default: ATTESTEXTRACT_API_KEY)")
     live.add_argument("--timeout", type=float, help="HTTP timeout in seconds (default: 60)")
-    live.add_argument("--max-attempts", type=int, help="Maximum HTTP attempts per generation (default: 3)")
-    live.add_argument("--temperature", type=float, help="Explicit sampling temperature; omitted by default")
-    live.add_argument("--max-output-tokens", type=int, help="Explicit output token limit; omitted by default")
+    live.add_argument("--max-attempts", type=int, help="Maximum HTTP attempts per generation (presets: 1; profiles/legacy: 3)")
+    live.add_argument("--temperature", type=float, help="Sampling temperature (presets: 0; profiles/legacy: provider default)")
+    live.add_argument("--max-output-tokens", type=int, help="Output token ceiling (presets: 8192; profiles/legacy: provider default)")
     live.add_argument("--env-file", type=Path, help="Explicit KEY=value configuration file; existing environment takes precedence")
     live.add_argument("--log-dir", type=Path, help="Empty directory for source, prompts, responses and diagnostic events")
     live.add_argument(
         "--structured-output", choices=("off", "json_object", "json_schema"),
-        help="Opt in to JSON or strict JSON Schema output (default: off; no automatic fallback)",
+        help="Output mode (presets: json_object; profiles/legacy: off; no automatic fallback)",
     )
     live.add_argument(
         "--format-retries", type=int, choices=(0, 1),
         help="Regenerate a chunk once after a local output-format failure; adds model calls (default: 0)",
     )
+    live.add_argument("--progress", choices=("normal", "quiet", "verbose"), default="normal",
+                      help="Terminal detail level (default: normal); raw text stays in diagnostic files")
+    live.add_argument("--check", action="store_true", help="Validate local configuration/task and show the chunk plan; no model/network calls")
     return parser
 
 
@@ -82,13 +89,27 @@ def _demo(example: str) -> dict:
     return result.model_dump(mode="json")
 
 
-def _write(payload: dict, output: Path | None) -> None:
+def _write(payload: dict, output: Path | None, *, announce: bool = True) -> None:
     serialized = json.dumps(payload, ensure_ascii=False, indent=2, allow_nan=False) + "\n"
     if output is None:
         print(serialized, end="")
     else:
         output.write_bytes(serialized.encode("utf-8"))
-        print(f"Wrote {output}", file=sys.stderr)
+        if announce:
+            print(f"Wrote {output}", file=sys.stderr)
+
+
+def _default_outputs(args: argparse.Namespace) -> None:
+    if args.output is not None:
+        return
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + uuid4().hex[:8]
+    directory = args.input.resolve().parent / "attestextract-runs" / stamp
+    directory.mkdir(parents=True, exist_ok=False)
+    args.output = directory / "result.json"
+    if args.report is None:
+        args.report = directory / "report.md"
+    if args.log_dir is None:
+        args.log_dir = directory / "diagnostics"
 
 
 def _check_output_paths(args: argparse.Namespace) -> None:
@@ -119,6 +140,7 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
     args = _parser().parse_args(argv)
     api_key = None
     trace = None
+    progress = None
     try:
         if args.command == "models":
             print("Built-in model presets (offline list; not a live availability check):")
@@ -151,14 +173,12 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
             _write(payload, args.output)
             return 0
 
+        _default_outputs(args)
         _check_output_paths(args)
+        progress = ConsoleProgress(args.progress)
         api_key = os.environ.get(args.api_key_env or "ATTESTEXTRACT_API_KEY")
-        if args.log_dir is not None:
-            trace = RunTrace(
-                args.log_dir, secrets=[api_key] if api_key else [],
-                progress=lambda message: print(message, file=sys.stderr),
-            )
-            trace.event("configuration", "started")
+        trace = RunTrace(args.log_dir, secrets=[api_key] if api_key else [], on_event=progress)
+        trace.event("configuration", "started")
         environment = load_env_file(args.env_file) if args.env_file else os.environ
         overrides = {name: getattr(args, name) for name in (
             "adapter", "base_url", "model", "api_key_env", "timeout", "max_attempts",
@@ -203,27 +223,57 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
                 "format_retries": config.format_retries,
                 "generation": config.generation.model_dump(mode="json"),
                 "output_token_parameter": config.output_token_parameter,
+                "tls_mode": config.tls_mode,
             })
-            trace.event("configuration", "completed")
+            trace.event("configuration", "completed", model=config.model,
+                        structured_output=config.structured_output,
+                        max_output_tokens=config.generation.max_output_tokens,
+                        max_attempts=config.max_attempts, format_retries=config.format_retries)
+        if args.check:
+            chunks = chunk_document(text)
+            plan = {"mode": "local_check", "network_calls": 0, "model": config.model,
+                    "character_count": len(text), "chunk_count": len(chunks),
+                    "structured_output": config.structured_output, "tls_mode": config.tls_mode,
+                    "timeout": config.timeout, "max_attempts": config.max_attempts,
+                    "format_retries": config.format_retries,
+                    "generation": config.generation.model_dump(mode="json"),
+                    "output": str(args.output.resolve()), "report": str(args.report.resolve()) if args.report else None,
+                    "diagnostics": str(trace.directory) if trace.directory else None,
+                    "notice": "Local validation only; credentials, endpoint availability and model output are not verified."}
+            trace.checked(plan)
+            print(json.dumps(plan, ensure_ascii=False, indent=2))
+            return 0
         result = extract(text, task, backend=backend, source_name=args.input.name, trace=trace,
                          format_retries=config.format_retries, generation=config.generation)
         if trace is not None:
             trace.event("output", "started")
         payload = result.model_dump(mode="json")
-        _write(payload, args.output)
+        _write(payload, args.output, announce=args.progress != "quiet")
         if args.report is not None:
             report = render_markdown_report(result, secrets=[api_key] if api_key else [])
             args.report.write_bytes(report.encode("utf-8"))
-            print(f"Wrote {args.report}", file=sys.stderr)
+            if args.progress != "quiet":
+                print(f"Wrote {args.report}", file=sys.stderr)
         if trace is not None:
             trace.finish(payload)
-            print(f"Run diagnostics: {trace.directory}", file=sys.stderr)
+            if trace.directory is not None and args.progress != "quiet":
+                print(f"Run diagnostics: {trace.directory}", file=sys.stderr)
         return 0
     except (AttestExtractError, OSError, ValueError) as exc:
         if trace is not None:
             trace.fail(exc)
         message = redact_text(str(exc), [api_key] if api_key else [])
         print(f"attestextract: {message}", file=sys.stderr)
-        if trace is not None and getattr(exc, "http_details", None):
-            print(f"HTTP diagnostics: {trace.directory / exc.http_details}", file=sys.stderr)
+        if trace is not None and trace.directory is not None:
+            print(f"Run diagnostics: {trace.directory}", file=sys.stderr)
+            if getattr(exc, "http_details", None):
+                print(f"HTTP diagnostics: {trace.directory / exc.http_details}", file=sys.stderr)
+            artifact = getattr(exc, "validation_artifact", None)
+            if artifact:
+                stem = Path(artifact).name.removesuffix(".errors.json")
+                print(f"Original model output: {trace.directory / 'responses' / (stem + '.txt')}", file=sys.stderr)
+                print(f"Validation details: {trace.directory / artifact}", file=sys.stderr)
         return 1
+    finally:
+        if progress is not None:
+            progress.close()

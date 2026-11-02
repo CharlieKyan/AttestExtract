@@ -58,16 +58,26 @@ def _response_error(
 ) -> InvalidResponseError:
     first = diagnostic["errors"][0] if diagnostic["errors"] else None
     if first:
-        message += (f" ({diagnostic['error_count']} error(s); first: {first['path']}; "
-                    f"expected {first['expected']}, got {first['actual_type']}).")
+        if first["code"] == "invalid_json" and "line" in first:
+            raw_line, raw_column = first["raw_line"], first["raw_column"]
+            position = f"original response line {raw_line}, column {raw_column}"
+            if (raw_line, raw_column) != (first["line"], first["column"]):
+                position += f" (unfenced JSON line {first['line']}, column {first['column']})"
+            message = (f"Model returned invalid JSON at {position}: "
+                       f"{first['message']}. No response text was repaired.")
+        else:
+            message += (f" ({diagnostic['error_count']} error(s); first: {first['path']}; "
+                        f"expected {first['expected']}, got {first['actual_type']}).")
     artifact = None
     if trace is not None and chunk_id is not None:
         stem = chunk_id if format_attempt == 1 else f"{chunk_id}.format-{format_attempt}"
-        artifact = f"validation/{stem}.errors.json"
-        trace.write_json(artifact, diagnostic)
-        trace.describe_artifact(artifact, "validation_errors")
+        if trace.directory is not None:
+            artifact = f"validation/{stem}.errors.json"
+            trace.write_json(artifact, diagnostic)
+            trace.describe_artifact(artifact, "validation_errors")
         trace.event("validation", "rejected", chunk_id=chunk_id, format_attempt=format_attempt,
                     phase=diagnostic["phase"], error_count=diagnostic["error_count"],
+                    line=first.get("raw_line") if first else None, column=first.get("raw_column") if first else None,
                     path=first["path"] if first else "$", details=artifact)
     return InvalidResponseError(message, validation_details=diagnostic, validation_artifact=artifact)
 
@@ -76,18 +86,26 @@ def _parse_response(
     text: str, *, trace: RunTrace | None = None, chunk_id: str | None = None,
     format_attempt: int = 1, allowed_keys: set[str] | None = None,
 ) -> _RawResponse:
+    original_text = text
+    offset = len(text) - len(text.lstrip())
     text = text.strip()
     fence = re.fullmatch(r"```(?:json)?\s*\n([\s\S]*?)\n```", text, flags=re.IGNORECASE)
     if fence:
+        offset += fence.start(1)
         text = fence.group(1)
     message = "Model output must match the requested JSON records contract"
     try:
         payload = _load_json(text, allowed_keys=allowed_keys)
     except json.JSONDecodeError as exc:
+        position = offset + exc.pos
+        # JSONDecodeError.msg is decoder-authored; never include its input document.
         diagnostic = details("json_syntax", [issue(
-            (), "invalid_json", "valid JSON", text, "Invalid JSON syntax; positions refer to the unfenced text.",
-            line=exc.lineno, column=exc.colno,
+            (), "invalid_json", "valid JSON", text, exc.msg,
+            line=exc.lineno, column=exc.colno, offset=exc.pos,
+            raw_offset=position, raw_line=original_text.count("\n", 0, position) + 1,
+            raw_column=position - original_text.rfind("\n", 0, position),
         )])
+        diagnostic["position_basis"] = "line/column: stripped, unfenced JSON; raw_*: original response; offsets: zero-based Unicode"
         raise _response_error(message, diagnostic, trace=trace, chunk_id=chunk_id,
                               format_attempt=format_attempt) from None
     except JSONValidationError as exc:
@@ -152,7 +170,7 @@ def _value_has_type(value: Scalar, field_type: str) -> bool:
     return type(value) in accepted[field_type]
 
 
-def _format_feedback(diagnostic: dict[str, Any], task: TaskSpec) -> list[dict[str, str]]:
+def _format_feedback(diagnostic: dict[str, Any], task: TaskSpec) -> list[dict[str, Any]]:
     """Send bounded structural hints without reflecting undeclared property names."""
     known_paths = {"$", "records", "records[0]", "records[0].record_type", "records[0].fields", "records[0].measurements"}
     for record in task.record_types.values():
@@ -170,6 +188,9 @@ def _format_feedback(diagnostic: dict[str, Any], task: TaskSpec) -> list[dict[st
             path = "$"
         feedback.append({"path": path[:256], "code": error["code"][:256],
                          "expected": error["expected"][:256]})
+        if error["code"] == "invalid_json" and "line" in error:
+            feedback[-1].update(line=error["line"], column=error["column"],
+                                reason=error["message"][:256])
     return feedback
 
 
@@ -224,7 +245,8 @@ def _validated_response(
             trace.describe_artifact(f"responses/{stem}.meta.json", "response_metadata")
             trace.describe_artifact(f"responses/{stem}.txt", "model_output_text")
             trace.event("model_response", "completed", chunk_id=chunk.chunk_id,
-                        format_attempt=format_attempt, attempts=response.attempts)
+                        format_attempt=format_attempt, attempts=response.attempts,
+                        usage=response.usage, elapsed_seconds=response.elapsed_seconds)
             trace.event("validation", "started", chunk_id=chunk.chunk_id, format_attempt=format_attempt)
         try:
             raw = _parse_response(response.text, trace=trace, chunk_id=chunk.chunk_id,
@@ -315,6 +337,7 @@ def _selected_backend(
             "format_retries": config.format_retries,
             "generation": config.generation.model_dump(mode="json"),
             "output_token_parameter": config.output_token_parameter,
+            "tls_mode": config.tls_mode,
         })
     return backend, config.generation
 

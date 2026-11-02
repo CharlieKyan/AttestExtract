@@ -108,9 +108,10 @@ def resolve_model_config(
     values.update(
         adapter="openai-compatible", model=model, timeout=60.0, max_attempts=1,
         structured_output="json_object", format_retries=0,
+        tls_mode="1.2" if provider == "deepseek" else "auto",
         output_token_parameter="max_tokens", provider_options=deepcopy(_PRESETS[selector]),
     )
-    generation = {"max_output_tokens": 2048}
+    generation = {"max_output_tokens": 8192, "temperature": 0}
     if "generation" in supplied:
         if not isinstance(supplied["generation"], Mapping):
             raise ConfigurationError("generation overrides must be a mapping of generation controls.")

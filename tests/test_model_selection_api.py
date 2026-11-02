@@ -68,7 +68,7 @@ def test_switching_only_model_routes_to_matching_service_and_credentials(monkeyp
     assert observed[0][2]["thinking"] == {"type": "disabled"}
     assert observed[1][2]["enable_thinking"] is False
     for _, _, payload in observed:
-        assert payload["max_tokens"] == 2048
+        assert payload["max_tokens"] == 8192
         assert payload["response_format"] == {"type": "json_object"}
         assert json.loads(payload["messages"][-1]["content"])["source"] == SOURCE
     for result in results:
@@ -88,7 +88,7 @@ def test_model_path_preserves_output_limit_when_only_temperature_is_overridden(m
     extract(SOURCE, TASK, model="deepseek:deepseek-flash", api_key="synthetic-direct-key",
             generation=GenerationOptions(temperature=0))
     assert payloads[0]["temperature"] == 0
-    assert payloads[0]["max_tokens"] == 2048
+    assert payloads[0]["max_tokens"] == 8192
 
 
 def test_advanced_controls_are_sent_without_mutating_or_ignoring_them(monkeypatch):
@@ -130,7 +130,8 @@ def test_explicit_env_file_and_direct_key_override_without_secret_artifacts(monk
     assert received == ["Bearer synthetic-process-key", "Bearer synthetic-explicit-key"]
     backend = json.loads((trace.directory / "backend.json").read_text(encoding="utf-8"))
     assert backend["model_id"] == "deepseek:deepseek-flash" and backend["selection_mode"] == "preset"
-    assert backend["generation"]["max_output_tokens"] == 2048
+    assert backend["generation"]["max_output_tokens"] == 8192
+    assert backend["tls_mode"] == "1.2"
     artifacts = "".join(path.read_text(encoding="utf-8") for path in trace.directory.rglob("*") if path.is_file())
     assert not any(secret in artifacts for secret in ("synthetic-file-key", "synthetic-process-key", "synthetic-explicit-key"))
     assert "https://api.deepseek.com" not in artifacts
