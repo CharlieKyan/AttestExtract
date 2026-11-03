@@ -53,7 +53,7 @@ def _case(directory, text):
     task.write_text(json.dumps(_TASK), encoding="utf-8")
     return ["extract", "--input", str(source), "--task", str(task),
             "--model-id", "deepseek:deepseek-flash", "--chunking", "fixed",
-            "--max-chunk-chars", "18"]
+            "--max-chunk-chars", "18", "--format-retries", "1"]
 
 
 def _invoke(directory, arguments, expected_exit):

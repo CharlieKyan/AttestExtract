@@ -84,7 +84,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     live.add_argument(
         "--format-retries", type=int, choices=(0, 1),
-        help="Regenerate a chunk once after a local output-format failure; adds model calls (CLI default: 1; explicit profile/CLI 0 disables it)",
+        help="Regenerate a chunk once after a local output-format failure; adds model calls (default: 0; opt in with 1 in CLI or profile)",
     )
     live.add_argument("--progress", choices=("normal", "quiet", "verbose"), default="normal",
                       help="Terminal detail level (default: normal); raw text stays in diagnostic files")
@@ -224,7 +224,6 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
         if args.model_id is not None:
             if any(value is not None for value in (args.config, args.profile, args.model, args.adapter)):
                 raise ConfigurationError("--model-id cannot be combined with --config, --profile, --model or --adapter.")
-            overrides.setdefault("format_retries", 1)
             config = resolve_model_config(args.model_id, environment=environment,
                                           overrides=overrides, region=args.region)
             api_key = resolve_model_credentials(config, environment)
@@ -233,10 +232,6 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
                 raise ConfigurationError("--region requires --model-id; advanced profiles declare their full endpoint.")
             config = resolve_backend_config(overrides=overrides, environment=environment,
                                             config_path=args.config, profile=args.profile)
-            # Apply this CLI-only default after merging, preserving an explicit
-            # profile/CLI zero and the public Python configuration defaults.
-            if "format_retries" not in config.model_fields_set:
-                config = config.model_copy(update={"format_retries": 1})
             api_key = environment.get(config.api_key_env)
         capability = check_structured_output(
             config.base_url, config.model, config.structured_output,

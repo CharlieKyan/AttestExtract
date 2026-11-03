@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.0.dev16
+
+- Roll back the CLI default format regeneration from one to zero after saved live failures showed no recovery in the observed attempts. Keep explicit CLI/profile one, Python behavior, per-chunk reservations and strict failures unchanged; this limited evidence does not establish that regeneration never helps.
+- Include shape-placeholder explanations only when a specific structural hint exists. Preserve raw responses, error coordinates and the optional bounded scanner; do not claim that this prompt cleanup improves model accuracy.
+- Retain the explicit Responses protocol adapter, but document the observed malformed JSON despite a Schema request. Withdraw switching protocols as a demonstrated reliability fix. New regression tests and acceptance runners distinguish opt-in regeneration from the default; no new paid calls or JSON repair.
+
 ## 0.1.0.dev15
 
 - Diagnose an anonymous object where a quoted property name is expected, adding bounded, value-free structural paths and shape illustrations to validation artifacts, regeneration feedback and checkpoints. Preserve original text and Unicode error coordinates; never repair or skip failed output.

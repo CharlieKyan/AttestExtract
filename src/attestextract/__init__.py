@@ -14,7 +14,7 @@ from .config import BackendConfig, resolve_backend_config
 from .registry import BackendRegistry, default_registry
 from .providers import available_models, resolve_model_config
 
-__version__ = "0.1.0.dev15"
+__version__ = "0.1.0.dev16"
 
 __all__ = [
     "__version__", "extract", "load_task", "TaskSpec", "RecordSpec", "FieldSpec",

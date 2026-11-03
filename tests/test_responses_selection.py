@@ -152,6 +152,6 @@ def test_cli_selection_check_is_offline_and_keeps_its_format_retry_default(tmp_p
     }}}), encoding="utf-8")
     assert cli.main(["extract", "--input", str(source), "--task", str(task), "--model-id", SELECTOR, "--check"]) == 0
     plan = json.loads(capsys.readouterr().out)
-    assert plan["network_calls"] == 0 and plan["format_retries"] == 1
+    assert plan["network_calls"] == 0 and plan["format_retries"] == 0
     assert plan["structured_output_capability"]["protocol"] == "responses"
     assert plan["structured_output_capability"]["server_enforcement"] == "not_verified"

@@ -85,7 +85,7 @@ def test_check_is_network_free_and_marks_checked_not_extracted(tmp_path, monkeyp
     assert cli.main(arguments(tmp_path) + ["--check"]) == 0
     plan = json.loads(capsys.readouterr().out)
     assert plan["chunk_count"] == 1 and plan["network_calls"] == 0
-    assert plan["max_attempts"] == 1 and plan["format_retries"] == 1
+    assert plan["max_attempts"] == 1 and plan["format_retries"] == 0
     run = next((tmp_path / "outputs").iterdir())
     assert not (run / "result.json").exists()
     assert json.loads((run / "diagnostics/manifest.json").read_text())["status"] == "checked"

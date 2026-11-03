@@ -1,4 +1,4 @@
-# CLI 默认值与验收（dev13）
+# CLI 默认值与验收（dev16）
 
 这是正式包入口的行为，不依赖论文启动脚本。密钥配置一次；用户主要填写模型、输入和任务。`.env` 明确通过 `--env-file` 读取；已有进程环境变量仍优先。
 
@@ -6,7 +6,7 @@
 attestextract extract --model-id deepseek:deepseek-flash --env-file .env --input paper.md --task task.json
 ```
 
-更换为 `--model-id qwen:qwen3.8-27b` 即使用 Qwen。连接及生成默认值适用于已支持的模型预设；格式重生成的新 CLI 默认也适用于未显式设置该项的高级 profile。Python 默认保持不变。
+更换为 `--model-id qwen:qwen3.8-27b` 即使用 Qwen。连接及生成默认值适用于已支持的模型预设；格式重生成默认关闭，也适用于未显式设置该项的高级 profile；显式 1 保留。Python 默认保持不变。
 
 | 配置 | 默认值与原因 |
 | --- | --- |
@@ -16,7 +16,7 @@ attestextract extract --model-id deepseek:deepseek-flash --env-file .env --input
 | `max_output_tokens` | `8192`；由原先 `2048` 提高，给字段引文和测量证据留出空间。这是每次生成的上限，不是固定消耗；可能增加最大费用 |
 | `timeout` | `60` 秒（HTTPX 每个网络阶段的超时，并非整个文档的总时限） |
 | `max_attempts` | `1`；不自动重发可能已经在服务端生成的请求 |
-| `format_retries` | CLI 未显式设置时为 `1`；失败块最多重生成一次。CLI／profile 显式 0 优先，Python 默认仍为 0 |
+| `format_retries` | CLI 与 Python 默认 `0`；显式 CLI／profile 设置为 `1` 才允许失败块重生成一次 |
 | 分块 | 优先完整句子，字符目标 `6000`，按输出复杂度进一步规划；每批最多 `12` 行简单 Markdown 表格；原子词／公式／表格行可以超出目标 |
 | 输出路径 | 不填 `--output` 时，在输入所在目录的 `outputs/<时间-随机标识>/` 保存；若文件直接位于 `inputs/`（不区分大小写），则使用与 `inputs/` 同级的 `outputs/`。包含 `result.json`、`report.md`、`diagnostics/` |
 | 终端 | 默认 `--progress normal`：模型和预算、总块数、当前块、等待提示、实际返回的 token 数、候选与复核项数量、完成路径 |
@@ -65,7 +65,7 @@ TLS 是 HTTPS 加密连接的协议，`1.2` 是协议版本，不是模型版本
 - `raw_line` / `raw_column`：原始响应位置，从 1 开始；有 fence 时用这组坐标查看文件。
 - `offset` / `raw_offset`：从 0 开始的 Unicode 字符位置，不是 UTF-8 字节偏移。
 
-CLI 默认仅对本地 JSON／记录结构／任务字段校验失败的块重新生成一次，反馈包含有界解析原因和行列，不回传非法原文。原响应、新响应和 token 用量均保留；新结果继续做完整检查。显式 `--format-retries 0` 关闭重生成。网络错误、空响应、拒绝和截断不会触发格式重试。每次块尝试最多 HTTP 请求数为 `max_attempts * (1 + format_retries)`；截断后的子块是新生成，CLI 全部生成另受 `--max-model-calls` 统一约束（含已恢复调用）。检查点保存逐块格式额度，恢复／增加总预算不会重置已预留或中断的重生成机会。终端给出结构恢复、失败／待处理／复用数量；失败块不会被空列表替代。真实调用效果不能由模拟测试保证。
+CLI 默认不格式重生成。显式设置 `--format-retries 1` 后，仅对本地 JSON／记录结构／任务字段校验失败的块重新生成一次，反馈包含有界解析原因和行列，不回传非法原文。原响应、新响应和 token 用量均保留；新结果继续做完整检查。显式 `--format-retries 0` 关闭重生成。网络错误、空响应、拒绝和截断不会触发格式重试。每次块尝试最多 HTTP 请求数为 `max_attempts * (1 + format_retries)`；截断后的子块是新生成，CLI 全部生成另受 `--max-model-calls` 统一约束（含已恢复调用）。检查点保存逐块格式额度，恢复／增加总预算不会重置已预留或中断的重生成机会。终端给出结构恢复、失败／待处理／复用数量；失败块不会被空列表替代。真实调用效果不能由模拟测试保证。
 
 ## 可执行验收
 

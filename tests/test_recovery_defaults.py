@@ -1,4 +1,4 @@
-"""CLI-only recovery defaults and explicit opt-outs, using synthetic HTTP."""
+"""Format regeneration stays opt-in across CLI entry points, using synthetic HTTP."""
 
 import json
 import os
@@ -45,9 +45,9 @@ def arguments(tmp_path, selection="legacy", profile_retry=None):
 
 
 @pytest.mark.parametrize("selection,profile_retry,cli_retry,expected", [
-    ("preset", None, None, 1), ("preset", None, 0, 0),
-    ("legacy", None, None, 1), ("legacy", None, 0, 0),
-    ("profile", None, None, 1), ("profile", 0, None, 0),
+    ("preset", None, None, 0), ("preset", None, 0, 0), ("preset", None, 1, 1),
+    ("legacy", None, None, 0), ("legacy", None, 0, 0), ("legacy", None, 1, 1),
+    ("profile", None, None, 0), ("profile", 0, None, 0),
     ("profile", 1, None, 1), ("profile", 0, 1, 1), ("profile", 1, 0, 0),
 ])
 def test_cli_default_is_lower_priority_than_explicit_configuration(
@@ -64,8 +64,15 @@ def test_cli_default_is_lower_priority_than_explicit_configuration(
     assert plan["structured_output_capability"]["server_enforcement"] == "not_verified"
 
 
-@pytest.mark.parametrize("explicit_zero,calls_expected,status", [(False, 2, 0), (True, 1, 1)])
-def test_cli_regenerates_only_when_policy_allows(tmp_path, monkeypatch, explicit_zero, calls_expected, status):
+@pytest.mark.parametrize("selection,profile_retry,cli_retry,calls_expected,status", [
+    ("preset", None, None, 1, 1), ("legacy", None, None, 1, 1),
+    ("profile", None, None, 1, 1), ("profile", 0, None, 1, 1),
+    ("preset", None, 1, 2, 0), ("legacy", None, 1, 2, 0),
+    ("profile", 1, None, 2, 0), ("profile", 1, 0, 1, 1),
+])
+def test_cli_regenerates_only_when_explicitly_enabled(
+    tmp_path, monkeypatch, selection, profile_retry, cli_retry, calls_expected, status,
+):
     bodies = []
 
     def handler(request):
@@ -75,15 +82,22 @@ def test_cli_regenerates_only_when_policy_allows(tmp_path, monkeypatch, explicit
 
     monkeypatch.setattr("attestextract.backends.OpenAICompatibleBackend", lambda **kwargs:
                         OpenAICompatibleBackend(**kwargs, transport=httpx.MockTransport(handler)))
-    args = arguments(tmp_path, "profile", 0 if explicit_zero else None)
+    args = arguments(tmp_path, selection, profile_retry)
+    if cli_retry is not None:
+        args += ["--format-retries", str(cli_retry)]
     assert cli.main(args) == status
     assert len(bodies) == calls_expected
     run = next((tmp_path / "outputs").iterdir())
     assert (run / "result.json").exists() is (status == 0)
     assert (run / "diagnostics/responses/chunk-0001.txt").read_text(encoding="utf-8") == "malformed JSON"
-    if not explicit_zero:
+    if calls_expected == 2:
         assert "previous output failed local format validation" in bodies[1]["messages"][0]["content"]
         assert (run / "diagnostics/responses/chunk-0001.format-2.txt").read_text(encoding="utf-8") == VALID
+    else:
+        assert not (run / "diagnostics/responses/chunk-0001.format-2.txt").exists()
+        checkpoint = json.loads((run / "diagnostics/execution/checkpoint.json").read_text(encoding="utf-8"))["state"]
+        assert checkpoint["calls_used"] == 1
+        assert checkpoint["nodes"]["chunk-0001"]["format_retries_reserved"] == 0
 
 
 def test_python_default_stays_opt_in():

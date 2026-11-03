@@ -50,7 +50,7 @@ result = extract(
 The three Chat presets default to `json_object` and `max_tokens: 8192`; the explicit
 Responses preset uses `json_schema` and `max_output_tokens: 8192`. All default to
 `temperature: 0`, timeout 60 seconds and one HTTP attempt. Python keeps zero format
-regeneration; the CLI defaults to one unless explicitly configured. The token cap applies per chunk
+regeneration; the CLI also defaults to zero. Explicit CLI/profile one remains supported. The token cap applies per chunk
 generation, not to the whole document. Explicit options override these defaults.
 Unknown provider/model identifiers fail before a model request; use a complete
 profile to specify another model's endpoint and parameters. No model-family
@@ -155,7 +155,7 @@ An existing empty environment value does not fall back to the file.
 | `max_attempts` | 3 HTTP attempts per generation; use 1 for bounded acceptance |
 | `tls_mode` | `auto` (HTTPX negotiation), or `1.2` with certificate/hostname validation; DeepSeek presets select `1.2`, Qwen presets use `auto` |
 | `structured_output` | `off`, `json_object`, or `json_schema`; default `off` |
-| `format_retries` | Python configuration defaults to 0; CLI uses 1 if neither profile nor CLI explicitly sets it. Explicit 0 is preserved. One extra generation per failing chunk is bounded by execution policy |
+| `format_retries` | Python and CLI default to 0. Explicit CLI/profile 1 enables regeneration. One extra generation per failing chunk is bounded by execution policy |
 | `generation.temperature` | Optional number from 0 through 2; otherwise omitted |
 | `generation.max_output_tokens` | Optional positive integer; otherwise omitted |
 | `output_token_parameter` | `max_tokens`; may explicitly select `max_completion_tokens` |

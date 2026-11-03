@@ -109,7 +109,7 @@ def main(argv=None):
         assert len(created) == 1
         return created.pop()
 
-    chat = invoke("deepseek:deepseek-flash")
+    chat = invoke("deepseek:deepseek-flash", extra=("--format-retries", "1"))
     assert len(calls) == 2
     hint = read(chat / "diagnostics/validation/chunk-0001.errors.json")["errors"][0]["structure"]
     assert hint["path"] == "records[0].fields"
