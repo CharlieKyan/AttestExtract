@@ -47,11 +47,16 @@ def _map_spans(local: list[SourceSpan], parent: DocumentChunk) -> list[SourceSpa
     return mapped
 
 
-def split_chunk(text: str, parent: DocumentChunk, *, min_chars: int) -> list[DocumentChunk]:
-    """Split paragraphs/table rows; never cut an atomic table header or data row."""
+def split_chunk(text: str, parent: DocumentChunk, *, min_chars: int,
+                target_chars: int | None = None) -> list[DocumentChunk]:
+    """Use the shared sentence/table splitter and require strictly smaller children.
+
+    Truncation recovery defaults to half the parent size. Initial planning can
+    supply an estimated target directly, avoiding repeated arbitrary halvings.
+    """
     if len(parent.text) <= min_chars:
         return []
-    target = max(min_chars, math.ceil(len(parent.text) / 2))
+    target = max(min_chars, target_chars if target_chars is not None else math.ceil(len(parent.text) / 2))
     local = chunk_document(parent.text, max_chars=target,
                            table_rows_per_chunk=max(1, len(parent.text.splitlines()) // 2))
     if len(local) < 2 or any(len(child.text) >= len(parent.text) for child in local):
@@ -73,8 +78,11 @@ def plan_chunks(text: str, task: TaskSpec, generation: GenerationOptions,
     while queue:
         chunk = queue.pop(0)
         children = []
-        if options.adaptive_chunking and estimate_output_tokens(chunk.text, task) > limit * 0.7:
-            children = split_chunk(text, chunk, min_chars=options.min_chunk_chars)
+        if options.adaptive_chunking:
+            estimate = estimate_output_tokens(chunk.text, task)
+            if estimate > limit * 0.7:
+                target = max(1, math.floor(len(chunk.text) * limit * 0.7 / estimate))
+                children = split_chunk(text, chunk, min_chars=options.min_chunk_chars, target_chars=target)
         if children:
             queue[0:0] = children
         else:

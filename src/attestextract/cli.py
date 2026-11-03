@@ -13,6 +13,7 @@ from uuid import uuid4
 
 from . import __version__, extract, load_task
 from .backends import ReplayBackend
+from .capabilities import check_structured_output
 from .config import resolve_backend_config
 from .d1_examples import d1_example_names, load_d1_example
 from .diagnostics import RunTrace, redact_text
@@ -83,7 +84,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     live.add_argument(
         "--format-retries", type=int, choices=(0, 1),
-        help="Regenerate a chunk once after a local output-format failure; adds model calls (default: 0)",
+        help="Regenerate a chunk once after a local output-format failure; adds model calls (CLI default: 1; explicit profile/CLI 0 disables it)",
     )
     live.add_argument("--progress", choices=("normal", "quiet", "verbose"), default="normal",
                       help="Terminal detail level (default: normal); raw text stays in diagnostic files")
@@ -223,6 +224,7 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
         if args.model_id is not None:
             if any(value is not None for value in (args.config, args.profile, args.model, args.adapter)):
                 raise ConfigurationError("--model-id cannot be combined with --config, --profile, --model or --adapter.")
+            overrides.setdefault("format_retries", 1)
             config = resolve_model_config(args.model_id, environment=environment,
                                           overrides=overrides, region=args.region)
             api_key = resolve_model_credentials(config, environment)
@@ -231,7 +233,15 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
                 raise ConfigurationError("--region requires --model-id; advanced profiles declare their full endpoint.")
             config = resolve_backend_config(overrides=overrides, environment=environment,
                                             config_path=args.config, profile=args.profile)
+            # Apply this CLI-only default after merging, preserving an explicit
+            # profile/CLI zero and the public Python configuration defaults.
+            if "format_retries" not in config.model_fields_set:
+                config = config.model_copy(update={"format_retries": 1})
             api_key = environment.get(config.api_key_env)
+        capability = check_structured_output(
+            config.base_url, config.model, config.structured_output,
+            provider_options=config.provider_options, adapter=config.adapter,
+        )
         if trace is not None and api_key:
             trace.add_secrets(api_key)
         if args.input.suffix.lower() not in {".txt", ".md"}:
@@ -247,7 +257,7 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
         backend = (registry if registry is not None else default_registry()).create(
             config.adapter, config=config, api_key=api_key, trace=trace,
         )
-        backend_identity = digest(config.model_dump(mode="json", exclude={"api_key_env"}))
+        backend_identity = digest(config.model_dump(mode="json", exclude={"api_key_env", "format_retries"}))
         if trace is not None:
             trace.write_json("backend.json", {
                 "backend": backend.name, "model": config.model, "timeout": config.timeout,
@@ -257,6 +267,7 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
                 "model_id": args.model_id,
                 "selection_mode": "preset" if args.model_id is not None else "profile" if args.profile else "legacy",
                 "structured_output": config.structured_output,
+                "structured_output_capability": capability,
                 "format_retries": config.format_retries,
                 "generation": config.generation.model_dump(mode="json"),
                 "output_token_parameter": config.output_token_parameter,
@@ -277,6 +288,7 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
                     "max_http_attempts_upper_bound": (session.state.max_model_calls * backend.max_attempts
                                                       if hasattr(backend, "max_attempts") else None),
                     "structured_output": config.structured_output, "tls_mode": config.tls_mode,
+                    "structured_output_capability": capability,
                     "timeout": config.timeout, "max_attempts": config.max_attempts,
                     "format_retries": config.format_retries,
                     "generation": config.generation.model_dump(mode="json"),

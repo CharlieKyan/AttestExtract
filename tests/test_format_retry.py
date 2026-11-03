@@ -365,7 +365,8 @@ def test_http_failure_during_regeneration_records_its_failure_without_a_third_ca
     assert {event["event"] for event in events} >= {"retry", "failed"}
 
 
-@pytest.mark.parametrize("option,status,calls", [(None, 1, 1), ("1", 0, 2)], ids=["default-off", "explicit-on"])
+@pytest.mark.parametrize("option,status,calls", [(None, 0, 2), ("1", 0, 2), ("0", 1, 1)],
+                         ids=["default-on", "explicit-on", "explicit-off"])
 def test_cli_controls_pipeline_regeneration_without_requiring_live_api(tmp_path, monkeypatch, option, status, calls):
     source = tmp_path / "source.txt"
     task = tmp_path / "task.json"

@@ -85,7 +85,7 @@ def test_check_is_network_free_and_marks_checked_not_extracted(tmp_path, monkeyp
     assert cli.main(arguments(tmp_path) + ["--check"]) == 0
     plan = json.loads(capsys.readouterr().out)
     assert plan["chunk_count"] == 1 and plan["network_calls"] == 0
-    assert plan["max_attempts"] == 1 and plan["format_retries"] == 0
+    assert plan["max_attempts"] == 1 and plan["format_retries"] == 1
     run = next((tmp_path / "outputs").iterdir())
     assert not (run / "result.json").exists()
     assert json.loads((run / "diagnostics/manifest.json").read_text())["status"] == "checked"
@@ -172,10 +172,10 @@ def test_explicit_output_needs_no_trace_for_progress_and_quiet_is_quiet(tmp_path
     assert capsys.readouterr().err == ""
 
 
-def test_invalid_json_is_preserved_located_and_not_retried_by_default(tmp_path, monkeypatch, capsys):
+def test_invalid_json_is_preserved_located_with_explicit_retry_opt_out(tmp_path, monkeypatch, capsys):
     calls = []
     intercept(monkeypatch, lambda request: (calls.append(request), response(INVALID))[1])
-    assert cli.main(arguments(tmp_path)) == 1
+    assert cli.main(arguments(tmp_path) + ["--format-retries", "0"]) == 1
     assert len(calls) == 1
     run = next((tmp_path / "outputs").iterdir())
     assert not (run / "result.json").exists()

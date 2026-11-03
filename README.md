@@ -2,9 +2,9 @@
 
 Schema-driven extraction from text and tables, with source-linked evidence and pluggable decision backends.
 
-**Early prototype · `0.1.0.dev12` · Python 3.11+**
+**Early prototype · `0.1.0.dev13` · Python 3.11+**
 
-Dev12 adds output-aware CLI chunk planning, budgeted truncation subdivision and checkpoint recovery. See [execution and recovery](docs/EXECUTION.md) for defaults, budgets and offline acceptance. Python opts in with `execution=ExecutionOptions(...)`.
+Dev13 adds sentence-aware chunking, one CLI format regeneration by default, and persistent regeneration allowances across recovery. Known incompatible structured-output requests fail before HTTP. See [execution and recovery](docs/EXECUTION.md) for defaults, budgets and offline acceptance. Python keeps format retries off by default and opts into managed execution with `execution=ExecutionOptions(...)`. Dev12 checkpoints require a new run with this planner.
 
 Dev9 adds a minimal model-selection entry point: configure a provider key once,
 then change `--model-id` in the CLI or `model=` in Python. Named profiles and
@@ -131,7 +131,7 @@ attestextract extract --input src/attestextract/examples/procurement.md --task s
 
 On Bash, use `export ATTESTEXTRACT_BASE_URL=...`, `export ATTESTEXTRACT_MODEL=...`, and `export ATTESTEXTRACT_API_KEY=...`. Alternatively, load a configuration file explicitly with `--env-file`, as below. Configuration precedence is **CLI arguments → existing process environment → the explicit `.env` file**. No `.env` file is loaded automatically. `--api-key-env OTHER_VARIABLE` selects the variable containing the key; no command-line key value is accepted. A key may be omitted for a local endpoint that does not require authentication. `--timeout` accepts seconds greater than zero and at most 60, defaulting to 60 per attempt.
 
-Live extraction sends document chunks to your configured endpoint. There is no automatic fallback to demo responses. In the advanced configuration, transport failures and transient HTTP statuses are retried at most three times by default; model presets default to one attempt. Authentication and configuration failures stop immediately; response format errors stop by default, with an optional single format retry described below. An unrecovered chunk fails the run with a nonzero exit status; there is no partial-success result. CLI checkpoints can resume completed responses in a new run; see [execution and recovery](docs/EXECUTION.md).
+Live extraction sends document chunks to your configured endpoint. There is no automatic fallback to demo responses. In the advanced configuration, transport failures and transient HTTP statuses are retried at most three times by default; model presets default to one attempt. Authentication and configuration failures stop immediately. CLI response-format errors allow one regeneration by default; an explicit CLI/profile zero disables it. An unrecovered chunk fails the run with a nonzero exit status; there is no partial-success result or failed chunk disguised as empty records. CLI checkpoints can resume completed responses in a new run; see [execution and recovery](docs/EXECUTION.md).
 
 ### Optional structured output
 
@@ -147,13 +147,13 @@ In strict mode, every declared field has a required `{ "value": ..., "quote": ..
 
 The provider/model must support this schema format. HTTP 400/422 failures stop the run; AttestExtract does not silently fall back to unstructured output or issue a format retry for HTTP errors. Normal transient-network retry rules still apply. [Wenwen's structured-output documentation](https://wenwen-ai.apifox.cn/305807074e0) shows this request format; support must be checked on the actual provider/model route. Local validation remains mandatory even when the endpoint accepts the parameter.
 
-### Optional format retry
+### Bounded format regeneration
 
 Prompts require unique keys in each JSON object, the declared scalar types, and exactly one `value` and one `quote` per supplied field wrapper. A nested `fields.value.value` is valid; two `value` keys in the same object are rejected, even when their values agree. The parser also rejects non-finite numbers. Diagnostics identify `duplicate_key` and `non_finite_number` paths, masking undeclared key names; ordinary JSON syntax errors retain line and column information. Nothing is silently repaired or overwritten.
 
-`extract --format-retries 0|1` defaults to `0`. With `1`, a local JSON, record-contract, or task-schema failure allows **one new generation for that chunk** using the same source, task, and schema plus bounded validation feedback. The new response must pass structural validation and undergo the usual evidence checks. Earlier successful chunks are not rerun. The Python equivalent is `extract(text, task, backend=backend, format_retries=1)`.
+CLI `extract --format-retries 0|1` defaults to `1` when neither CLI nor profile explicitly sets it. A local JSON, record-contract, or task-schema failure allows **one new generation for that chunk** using the same source, task, and schema plus bounded validation feedback. The new response must pass structural validation and undergo the usual evidence checks. Earlier successful chunks are not rerun. Python retains its default `0`; opt in with `extract(text, task, backend=backend, format_retries=1)`.
 
-Enabling this option can add a paid generation per failing chunk; each generation retains the usual bounded HTTP retries. It does not retry HTTP 400/401, malformed API response envelopes, refusals, or truncated completions. Missing, unmatched, or ambiguous quotations continue to require review without a format retry. If the second format attempt fails, the run fails explicitly. This is candidate generation, not acceptance or factual verification.
+This CLI default can add one paid generation per failing chunk within the total call budget; each generation retains the usual bounded HTTP retries. It does not format-retry HTTP 400/401, malformed API response envelopes, refusals, or truncated completions. Truncation instead follows the bounded subdivision policy. Missing, unmatched, or ambiguous quotations continue to require review without a format retry. If the second format attempt fails, the run fails explicitly. Checkpoint v2 preserves the pending feedback and reserved regeneration allowance: resume cannot reset it, including after an interrupted regeneration. Raising the total call budget does not restore an exhausted format allowance. This is candidate generation, not acceptance or factual verification.
 
 ### Explicit `.env` configuration and run logs
 

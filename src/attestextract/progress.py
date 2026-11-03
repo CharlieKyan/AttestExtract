@@ -20,6 +20,8 @@ class ConsoleProgress:
         self.current = 0
         self._last_chunk = None
         self._managed_execution = False
+        self._calls_reserved = 0
+        self._call_limit = 0
         self._waiting_since: float | None = None
         self._lock = threading.Lock()
         self._stop = threading.Event()
@@ -60,20 +62,36 @@ class ConsoleProgress:
         elif stage == "chunking" and kind == "completed":
             self.total = event["chunk_count"]
             self._write(f"Chunks: {self.total}")
+            if event.get("oversized_chunks"):
+                self._write(f"{event['oversized_chunks']} chunk(s) exceed the character target to preserve indivisible source units")
         elif stage == "execution" and kind == "started":
             self._managed_execution = True
+            self._calls_reserved = event["calls_reserved"]
+            self._call_limit = event["max_model_calls"]
             self._write(f"Model-call budget: {event['calls_reserved']}/{event['max_model_calls']} reserved; "
                         f"{event['completed_chunks']} completed chunks available for reuse")
+        elif stage == "execution" and kind == "call_reserved":
+            self._calls_reserved, self._call_limit = event["used"], event["limit"]
+        elif stage == "execution" and kind in {"finished", "stopped"}:
+            self._waiting_since = None
+            self._write(f"Chunk summary: {event['completed_chunks']}/{event['leaf_chunks']} completed; "
+                        f"{event['first_pass_chunks']} first call; {event['format_recovered_chunks']} format recovered; "
+                        f"{event['split_chunks']} subdivided; {event['reused_chunks']} reused; "
+                        f"{event['failed_chunks']} failed; {event['pending_chunks']} pending; "
+                        f"calls {event['calls_reserved']}/{event['max_model_calls']}")
         elif stage == "execution" and kind == "split":
             self._waiting_since = None
-            self.current = max(0, self.current - 1)  # The rejected parent is replaced by child leaves.
+            # A saved truncated parent can split on resume before a request
+            # starts in this run; do not subtract a previously reused chunk.
+            if self._last_chunk == event["chunk_id"]:
+                self.current = max(0, self.current - 1)
             self.total = event["leaf_chunks"]
             self._write(f"Truncated {event['chunk_id']}; split into {len(event['children'])} children; {self.total} leaf chunks")
         elif stage == "execution" and kind == "reused":
             self.current += 1
             self._last_chunk = event["chunk_id"]
             self._write(f"[{self.current}/{self.total}] reused completed response; validating evidence again")
-        elif stage == "execution" and kind in {"unsplittable", "budget_exhausted"}:
+        elif stage == "execution" and kind in {"unsplittable", "budget_exhausted", "format_retry_exhausted"}:
             self._waiting_since = None
             self._write(f"Execution stopped: {kind}; retain this run and its checkpoint")
         elif stage == "model_request" and kind == "started":
@@ -84,7 +102,8 @@ class ConsoleProgress:
             if self._thread is None:
                 self._thread = threading.Thread(target=self._heartbeat, daemon=True)
                 self._thread.start()
-            self._write(f"[{self.current}/{self.total}] requesting model; format attempt {event['format_attempt']}")
+            budget = f"; calls {self._calls_reserved}/{self._call_limit}" if self._managed_execution else ""
+            self._write(f"[{self.current}/{self.total}] requesting model; format attempt {event['format_attempt']}{budget}")
         elif stage == "model_response" and kind == "completed":
             self._waiting_since = None
             usage = event.get("usage", {})
@@ -95,6 +114,11 @@ class ConsoleProgress:
         elif stage == "validation" and kind == "rejected":
             position = f" original response line {event['line']}, column {event['column']}" if event.get("line") else ""
             self._write(f"{prefix} rejected: {event['phase']}{position}; {event['error_count']} error(s)")
+        elif stage == "format_retry" and kind in {"retry", "resumed"}:
+            self._write(f"{prefix} format_retry: {event['chunk_id']} regeneration 1/1 "
+                        f"{'resumed from checkpoint' if kind == 'resumed' else 'requested'}; additional model call")
+        elif stage == "format_retry" and kind == "succeeded":
+            self._write(f"{prefix} {event['chunk_id']}: regenerated format passed; checking source evidence")
         elif kind == "retry" and stage in {"http", "format_retry"}:
             self._write(f"{prefix} {stage}: retry requested; an additional model call may be charged")
         elif stage == "chunk" and kind == "completed":

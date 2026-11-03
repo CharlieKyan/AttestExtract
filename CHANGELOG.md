@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.0.dev13
+
+- Prefer complete sentences in initial chunking and truncation subdivision; fall back through line/clause/word boundaries for long sentences while preserving Unicode source spans, recognizable math and atomic table rows. Character sizes remain targets rather than hard limits.
+- Default CLI format regeneration to one when not explicitly configured, preserving profile/CLI zero and Python's existing default. Keep strict JSON, task and evidence validation; never hide failed chunks as empty records or automatically subdivide repeated format failures.
+- Persist format-failure feedback and regeneration reservations in checkpoint v2. Resume continues an unused regeneration, but cannot reset a used/interrupted allowance. Audit changes to total call budget and format allowance; preserve exact content identity. Dev12 checkpoints are incompatible with the new planner and require a new run.
+- Preflight documented output-mode constraints for known DeepSeek/Qwen Chat endpoints, recording documentation evidence separately from unverified server enforcement. Keep unknown services explicitly configured; no automatic Schema promotion, downgrade or Responses adapter.
+- Report regeneration, budget and final chunk counts, including failed/pending/reused chunks. Add synthetic recovery acceptance and installed-wheel checks; no new dependency, real endpoint call or semantic-accuracy claim.
+
 ## 0.1.0.dev12
 
 - Plan CLI chunks using task/output complexity and original Unicode spans; retain atomic Markdown table rows. Keep Python's existing fixed execution unless `ExecutionOptions` is supplied.

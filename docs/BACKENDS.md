@@ -146,7 +146,7 @@ An existing empty environment value does not fall back to the file.
 | `max_attempts` | 3 HTTP attempts per generation; use 1 for bounded acceptance |
 | `tls_mode` | `auto` (HTTPX negotiation), or `1.2` with certificate/hostname validation; DeepSeek presets select `1.2`, Qwen presets use `auto` |
 | `structured_output` | `off`, `json_object`, or `json_schema`; default `off` |
-| `format_retries` | 0; explicitly setting 1 can add one generation per chunk |
+| `format_retries` | Python configuration defaults to 0; CLI uses 1 if neither profile nor CLI explicitly sets it. Explicit 0 is preserved. One extra generation per failing chunk is bounded by execution policy |
 | `generation.temperature` | Optional number from 0 through 2; otherwise omitted |
 | `generation.max_output_tokens` | Optional positive integer; otherwise omitted |
 | `output_token_parameter` | `max_tokens`; may explicitly select `max_completion_tokens` |
@@ -156,6 +156,22 @@ An existing empty environment value does not fall back to the file.
 `--format-retries`, `--timeout`, `--adapter`, `--base-url`, `--model`, and
 `--api-key-env` override individual profile settings. Token field mapping and
 provider-specific options are configured in TOML or Python.
+
+Known Chat endpoint constraints are checked before HTTP. Official DeepSeek Chat
+does not accept `json_schema`; use `json_object`. The Beijing Qwen 3.8-27B preset
+is not listed in the documented Schema model set, so requesting Schema fails
+locally. Qwen Plus Schema support remains unknown because the provider's feature
+table and model list differ; explicit configuration is preserved, with local
+validation still mandatory. Unknown endpoints/adapters do not inherit official
+capabilities. Neither automatic Schema promotion nor runtime downgrade occurs.
+`backend.json` and CLI `--check` include `structured_output_capability` with
+documentation URLs/date and `server_enforcement: not_verified`; this is not a
+live probe. DeepSeek Responses requires a separate adapter and is not implemented
+in this release.
+
+References: [DeepSeek Chat](https://api-docs.deepseek.com/api/create-chat-completion/),
+[Qwen structured output](https://www.alibabacloud.com/help/en/model-studio/qwen-structured-output)
+(documentation checked 2026-11-03).
 
 Provider options cannot override model/messages/output format, generation controls,
 streaming, tools, number of completions, or connection/credential fields. They are

@@ -12,6 +12,7 @@ from typing import Any, Literal
 
 import httpx
 
+from .capabilities import check_structured_output
 from .errors import BackendError, ConfigurationError, InvalidResponseError
 from .diagnostics import RunTrace, redact_text
 from .http_diagnostics import describe_http_error
@@ -147,6 +148,8 @@ class OpenAICompatibleBackend:
         self.max_attempts = max_attempts
         self.structured_output = structured_output
         self.provider_options = _validate_provider_options(provider_options)
+        check_structured_output(self.base_url, self.model, self.structured_output,
+                                provider_options=self.provider_options)
         self.output_token_parameter = output_token_parameter
         self.tls_mode = tls_mode
         self._api_key = api_key
@@ -177,6 +180,8 @@ class OpenAICompatibleBackend:
         }
         # Revalidate mutable options so later mutation cannot bypass reserved keys.
         payload.update(_validate_provider_options(self.provider_options))
+        check_structured_output(self.base_url, self.model, self.structured_output,
+                                provider_options=self.provider_options)
         if request.generation.temperature is not None:
             payload["temperature"] = request.generation.temperature
         if request.generation.max_output_tokens is not None:

@@ -1,6 +1,7 @@
 """Synthetic fault injection for bounded subdivision and checkpoint recovery."""
 
 import hashlib
+import io
 import json
 import re
 from pathlib import Path
@@ -16,6 +17,7 @@ from attestextract.errors import BackendError, ConfigurationError, InvalidRespon
 from attestextract.execution import check_resume_paths, digest
 from attestextract.models import BackendResponse, GenerationOptions, TaskSpec
 from attestextract.planning import plan_chunks, split_chunk
+from attestextract.progress import ConsoleProgress
 
 
 TEXT = "Item A reads 11.\n\nItem B reads 22.\n\nItem C reads 33."
@@ -200,7 +202,7 @@ def test_http_retry_count_is_distinct_from_generation_budget(tmp_path):
 
 
 @pytest.mark.parametrize("change", [{"text": TEXT + " extra"}, {"max_chars": 19}, {"depth": 2},
-    {"retries": 1}, {"generation": GenerationOptions(max_output_tokens=1000)}, {"backend_identity": "changed"}])
+    {"generation": GenerationOptions(max_output_tokens=1000)}, {"backend_identity": "changed"}])
 def test_resume_identity_mismatch_is_rejected_without_new_calls(tmp_path, change):
     run(tmp_path / "first")
     with pytest.raises(ConfigurationError, match="identity mismatch"):
@@ -394,6 +396,140 @@ def test_inconsistent_ledger_rejected_even_with_valid_checksum(tmp_path, field, 
     path.write_text(json.dumps(envelope), encoding="utf-8")
     with pytest.raises(ConfigurationError):
         run(tmp_path / "second", resume=tmp_path / "first")
+    assert run.calls == []
+
+
+def test_format_feedback_and_attempt_survive_budget_stop(tmp_path):
+    first, second = tmp_path / "first", tmp_path / "second"
+    with pytest.raises(BackendError, match="budget exhausted"):
+        run(first, budget=1, retries=1, max_chars=1000,
+            handler=lambda *_: reply('{"records":[{"record_type":"reading"} "fields":{}]}'))
+    node = checkpoint(first)["nodes"]["chunk-0001"]
+    assert node["format_failures"] == 1 and node["format_retries_reserved"] == 0
+    assert node["format_feedback"][0]["code"] == "invalid_json"
+    run(second, budget=2, retries=1, max_chars=1000, resume=first)
+    assert len(run.calls) == 1
+    body = read(second / "requests/chunk-0001.format-2.request.json")
+    assert json.loads(body["messages"][-1]["content"])["source"] == TEXT
+    assert '"code": "invalid_json"' in body["messages"][0]["content"]
+    assert read(second / "responses/chunk-0001.format-2.meta.json")["format_attempt"] == 2
+    summary = read(second / "execution/summary.json")
+    assert summary["format_recovered_chunks"] == summary["format_retries_reserved"] == 1
+    assert summary["first_pass_chunks"] == summary["failed_chunks"] == summary["pending_chunks"] == 0
+
+
+def test_exhausted_format_allowance_cannot_be_reset_by_resume_or_policy_toggle(tmp_path):
+    first = tmp_path / "first"
+    with pytest.raises(InvalidResponseError):
+        run(first, retries=1, max_chars=1000, handler=lambda *_: reply("bad synthetic JSON"))
+    assert len(run.calls) == 2
+    for index, retries in enumerate((1, 0, 1)):
+        next_run = tmp_path / f"resume-{index}"
+        with pytest.raises(InvalidResponseError) as error:
+            run(next_run, budget=100, retries=retries, max_chars=1000, resume=first)
+        assert error.value.code == "format_retry_exhausted" and error.value.attempts == 0
+        assert run.calls == []
+        assert checkpoint(next_run)["calls_used"] == 2
+        assert checkpoint(next_run)["nodes"]["chunk-0001"]["format_retries_reserved"] == 1
+        assert not (next_run / "result.json").exists()
+        first = next_run
+
+
+@pytest.mark.parametrize("failure", ["interrupt", "transport"])
+def test_interrupted_or_failed_regeneration_keeps_its_reservation(tmp_path, failure):
+    def handler(source, count):
+        if count == 1:
+            return reply("bad synthetic JSON")
+        if failure == "interrupt":
+            raise KeyboardInterrupt()
+        raise httpx.ConnectError("synthetic connection failure")
+    with pytest.raises(KeyboardInterrupt if failure == "interrupt" else BackendError):
+        run(tmp_path / "first", retries=1, max_chars=1000, handler=handler)
+    assert checkpoint(tmp_path / "first")["calls_used"] == 2
+    with pytest.raises(InvalidResponseError) as error:
+        run(tmp_path / "second", retries=1, max_chars=1000, resume=tmp_path / "first", budget=100)
+    assert error.value.code == "format_retry_exhausted" and run.calls == []
+
+
+def test_enabling_unused_format_retry_is_audited_and_reuses_good_cache(tmp_path):
+    def handler(source, count):
+        return reply(output(source)) if count == 1 else reply("bad synthetic JSON")
+    with pytest.raises(InvalidResponseError):
+        run(tmp_path / "first", retries=0, handler=handler)
+    result = run(tmp_path / "second", retries=1, resume=tmp_path / "first")
+    assert len(run.calls) == 2 and all("Item A" not in source for source in run.calls)
+    assert len(result.candidates) == 3
+    assert checkpoint(tmp_path / "second")["policy_changes"] == [
+        {"format_retries": {"from": 0, "to": 1}}]
+    assert (tmp_path / "second/responses/chunk-0002.format-2.txt").is_file()
+
+
+def test_disable_pending_format_retry_prevents_new_call(tmp_path):
+    with pytest.raises(BackendError, match="budget exhausted"):
+        run(tmp_path / "first", budget=1, retries=1, max_chars=1000,
+            handler=lambda *_: reply("bad synthetic JSON"))
+    with pytest.raises(InvalidResponseError) as error:
+        run(tmp_path / "second", budget=5, retries=0, max_chars=1000, resume=tmp_path / "first")
+    assert error.value.code == "format_retry_exhausted" and run.calls == []
+    assert checkpoint(tmp_path / "second")["nodes"]["chunk-0001"]["format_retries_reserved"] == 0
+
+
+def test_truncated_format_regeneration_can_still_subdivide(tmp_path):
+    def handler(source, count):
+        if count == 1:
+            return reply("bad synthetic JSON")
+        if count == 2:
+            return reply('{"records":[]}', finish="length")
+        return reply(output(source))
+    result = run(tmp_path / "trace", budget=5, retries=1, max_chars=1000, handler=handler)
+    assert [candidate.fields["amount"].value for candidate in result.candidates] == [11, 22, 33]
+    node = checkpoint(tmp_path / "trace")["nodes"]["chunk-0001"]
+    assert node["status"] == "split" and node["format_retries_reserved"] == 1
+
+
+def test_checkpoint_v1_is_rejected_with_new_run_guidance(tmp_path):
+    run(tmp_path / "first")
+    path = tmp_path / "first/execution/checkpoint.json"
+    envelope = read(path)
+    envelope["state"]["checkpoint_version"] = "1"
+    envelope["sha256"] = digest(envelope["state"])
+    path.write_text(json.dumps(envelope), encoding="utf-8")
+    with pytest.raises(ConfigurationError, match="Start a new run"):
+        run(tmp_path / "second", resume=tmp_path / "first")
+    assert run.calls == []
+
+
+def test_progress_saved_truncation_split_does_not_subtract_reused_chunk():
+    stream = io.StringIO()
+    progress = ConsoleProgress(stream=stream)
+    try:
+        progress({"stage": "chunking", "event": "completed", "chunk_count": 2})
+        progress({"stage": "execution", "event": "reused", "chunk_id": "chunk-0001"})
+        progress({"stage": "execution", "event": "split", "chunk_id": "chunk-0002",
+                  "children": ["chunk-0002.1", "chunk-0002.2"], "leaf_chunks": 3})
+        for chunk in ("chunk-0002.1", "chunk-0002.2"):
+            progress({"stage": "model_request", "event": "started", "chunk_id": chunk, "format_attempt": 1})
+    finally:
+        progress.close()
+    assert "[2/3] requesting model" in stream.getvalue()
+    assert "[3/3] requesting model" in stream.getvalue()
+
+
+@pytest.mark.parametrize("damage", ["missing_feedback", "impossible_retry"])
+def test_inconsistent_format_ledger_is_rejected_before_calls(tmp_path, damage):
+    with pytest.raises(InvalidResponseError):
+        run(tmp_path / "first", retries=0, max_chars=1000, handler=lambda *_: reply("invalid JSON"))
+    path = tmp_path / "first/execution/checkpoint.json"
+    envelope = read(path)
+    node = envelope["state"]["nodes"]["chunk-0001"]
+    if damage == "missing_feedback":
+        node["format_feedback"] = []
+    else:
+        node["format_retries_reserved"] = 1  # Only one call exists; cannot have regenerated.
+    envelope["sha256"] = digest(envelope["state"])
+    path.write_text(json.dumps(envelope), encoding="utf-8")
+    with pytest.raises(ConfigurationError):
+        run(tmp_path / "second", retries=1, max_chars=1000, resume=tmp_path / "first")
     assert run.calls == []
 
 

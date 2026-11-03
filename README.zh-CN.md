@@ -2,9 +2,9 @@
 
 按任务模式从正文和表格抽取候选数据，保留原文证据，并预留可替换的决策后端。
 
-**早期原型 · `0.1.0.dev12` · Python 3.11+**
+**早期原型 · `0.1.0.dev13` · Python 3.11+**
 
-dev12 增加输出复杂度分块、调用预算内的截断细分和检查点恢复。CLI 默认启用；Python 通过 `execution=ExecutionOptions(...)` 显式启用。默认值、预算含义和模拟验收见[分块与恢复指南](docs/EXECUTION.md)。
+dev13 增加句子优先分块、CLI 默认一次格式重生成及跨恢复保留的逐块重生成额度；已知不兼容的结构化输出请求在 HTTP 前拒绝。Python 保持默认零格式重试，通过 `execution=ExecutionOptions(...)` 显式启用预算与恢复。dev12 检查点与新版分块不兼容，需要新运行。默认值、预算含义和模拟验收见[分块与恢复指南](docs/EXECUTION.md)。
 
 dev9 增加最少配置的模型选择入口：首次配置服务商密钥，之后只修改 CLI 的 `--model-id` 或 Python 的 `model=` 即可切换。已有 TOML profile 和后端注入继续可用。配置规则见 [D2 适配器指南](docs/BACKENDS.md)，完成范围和证据边界见 [D2 验收清单](docs/D2_ACCEPTANCE.md)。离线验证、既有真实调用和内容准确性分开报告。
 
@@ -87,7 +87,7 @@ result = extract(
 )
 ```
 
-首批明确支持 `deepseek:deepseek-flash`、`qwen:qwen3.8-27b`、`qwen:qwen-plus` 三个预设，Qwen 限北京区。默认请求 JSON object、关闭思考、每次生成仅一次 HTTP 尝试、零格式再生成、temperature 为 0、最多输出 8,192 token。它们是请求默认值，不代表抽取准确率或服务端执行保证。已有的 `VLM_API_KEY`／`VLM_BASE_URL` 可作为 Qwen 配置，具体优先级见 [配置指南](docs/BACKENDS.md)。`.env` 仍需显式传入，不会自动加载。
+首批明确支持 `deepseek:deepseek-flash`、`qwen:qwen3.8-27b`、`qwen:qwen-plus` 三个预设，Qwen 限北京区。默认请求 JSON object、关闭思考、每次生成仅一次 HTTP 尝试、temperature 为 0、最多输出 8,192 token。CLI 未显式设置时允许每个格式失败块重生成一次；Python 默认关闭格式重生成。它们是请求默认值，不代表抽取准确率或服务端执行保证。已有的 `VLM_API_KEY`／`VLM_BASE_URL` 可作为 Qwen 配置，具体优先级见 [配置指南](docs/BACKENDS.md)。`.env` 仍需显式传入，不会自动加载。
 
 通过 `--max-output-tokens provider` 可让请求不发送输出上限，服务商仍使用自己的默认值和硬上限，不表示无限输出。省略该参数时，模型预设仍使用8192。
 
@@ -106,7 +106,7 @@ attestextract extract --input src/attestextract/examples/procurement.md --task s
 
 也可以使用下面的 `--env-file` 显式加载配置文件。配置优先级为 **命令行参数 → 当前进程已有环境变量 → 显式指定的 `.env` 文件**，程序不会自动搜索或加载 `.env`。`--api-key-env` 可指定保存密钥的变量名，不接受命令行密钥值。无需认证的本地端点可以不设置密钥。`--timeout` 为每次请求超时，默认 60 秒，范围为大于 0 且不超过 60 秒。
 
-高级配置下，网络传输失败和暂时性 HTTP 错误默认最多尝试三次；模型预设默认仅一次。鉴权和配置错误直接失败。响应格式错误默认失败，也可明确开启下面的一次格式重试。程序不伪装成“未抽到数据”，也不自动退回演示。任一分块最终未恢复会使整个运行以非零退出码失败；不输出部分成功结果。新运行的检查点支持在新目录恢复已完成回答，详见[分块与恢复指南](docs/EXECUTION.md)。
+高级配置下，网络传输失败和暂时性 HTTP 错误默认最多尝试三次；模型预设默认仅一次。鉴权和配置错误直接失败。CLI 对响应格式错误默认重生成一次，显式 CLI／profile 的 0 可以关闭。程序不伪装成“未抽到数据”，也不自动退回演示。任一分块最终未恢复会使整个运行以非零退出码失败；不输出部分成功结果。新运行的检查点支持在新目录恢复已完成回答，详见[分块与恢复指南](docs/EXECUTION.md)。
 
 ### 可选的结构化输出
 
@@ -120,7 +120,7 @@ attestextract extract --input src/attestextract/examples/procurement.md --task s
 
 提示明确要求每个 JSON 对象的键名唯一、标量类型符合任务，以及每个已提供字段只包含一次 `value` 和一次 `quote`。`fields.value.value` 是合法的不同层级嵌套；同一对象内写两次 `value` 会被拒绝，即使值相同。解析器也拒绝非有限数值。日志分别用 `duplicate_key`、`non_finite_number` 标明错误路径，未声明的键名会隐藏；普通 JSON 语法错误保留行列位置。程序不会静默清理重复键或覆盖值。
 
-`extract --format-retries 0|1` 默认 `0`。设为 `1` 后，本地 JSON、记录结构或任务字段类型校验失败时，允许**只对失败分块重新生成一次**：原文、任务和输出模式不变，追加有长度限制的错误反馈。新响应仍要经过完整结构和证据检查；此前成功分块不重跑。Python 写法为 `extract(text, task, backend=backend, format_retries=1)`。
+CLI `extract --format-retries 0|1` 在 CLI／profile 未显式配置时默认 `1`，显式 `0` 优先。本地 JSON、记录结构或任务字段类型校验失败时，允许**只对失败分块重新生成一次**：原文、任务和输出模式不变，追加有长度限制的错误反馈。新响应仍要经过完整结构和证据检查；此前成功分块不重跑。Python 保持默认 `0`，启用写法为 `extract(text, task, backend=backend, format_retries=1)`。检查点 v2 保存失败反馈和已预留的重生成额度，恢复不会重置；中断或传输失败也不退还已预留机会。增加总调用预算不能复活耗尽的格式重生成额度。
 
 开启后每个失败分块可能增加一次付费生成，每次生成仍沿用原有有限 HTTP 重试。HTTP 400／401、接口响应外层结构错误、拒答及被截断的输出不触发格式重试。引文缺失、找不到或多义仍进入复核，也不触发格式重试。第二次格式尝试仍失败就明确终止；生成候选不等于接受结果或事实核验。
 
