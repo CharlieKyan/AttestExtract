@@ -25,7 +25,7 @@ class BackendConfig(ContractModel):
     tls_mode: Literal["auto", "1.2"] = "auto"
     generation: GenerationOptions = Field(default_factory=GenerationOptions)
     provider_options: dict[str, Any] = Field(default_factory=dict, repr=False)
-    output_token_parameter: Literal["max_tokens", "max_completion_tokens"] = "max_tokens"
+    output_token_parameter: Literal["max_tokens", "max_completion_tokens", "max_output_tokens"] = "max_tokens"
 
 
 def load_profile(path: str | Path, name: str) -> dict[str, Any]:

@@ -20,11 +20,23 @@ from .models import (BackendResponse, ContractModel, DocumentChunk, ExecutionOpt
 from .planning import plan_chunks, split_chunk
 # Hold the concrete built-in type, not a mutable registry/factory replacement.
 from .backends import OpenAICompatibleBackend as _CompatibleBackend
+from .responses_backend import DeepSeekResponsesBackend as _ResponsesBackend
 
 
 def digest(value: Any) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False,
                                     allow_nan=False, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+class _StructureFeedback(ContractModel):
+    code: Literal["unexpected_object_in_object"]
+    path: str = Field(max_length=256)
+    actual_token: Literal["{"]
+    previous_key: str | None = Field(default=None, max_length=64)
+    next_key: str = Field(max_length=64)
+    wrong_shape: str = Field(max_length=384)
+    correct_shape: str = Field(max_length=384)
+    message: str = Field(max_length=256)
 
 
 class _FormatFeedback(ContractModel):
@@ -34,6 +46,7 @@ class _FormatFeedback(ContractModel):
     line: int | None = Field(default=None, ge=1)
     column: int | None = Field(default=None, ge=1)
     reason: str | None = Field(default=None, max_length=256)
+    structure: _StructureFeedback | None = None
 
 
 class _Node(ContractModel):
@@ -341,7 +354,7 @@ def prepare_execution(text: str, task: TaskSpec, backend: Any, generation: Gener
     from . import __version__
 
     if backend_identity is None:
-        if type(backend) is _CompatibleBackend:
+        if type(backend) in (_CompatibleBackend, _ResponsesBackend):
             backend_identity = digest({key: getattr(backend, key, None) for key in (
                 "name", "base_url", "model", "timeout", "max_attempts", "tls_mode", "structured_output",
                 "provider_options", "output_token_parameter")})

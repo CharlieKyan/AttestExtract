@@ -10,6 +10,7 @@ from .config import BackendConfig
 from .diagnostics import RunTrace
 from .errors import ConfigurationError
 from .models import ExtractionBackend
+from .responses_backend import DeepSeekResponsesBackend
 
 
 BackendFactory = Callable[..., ExtractionBackend]
@@ -54,7 +55,19 @@ def _compatible_factory(
     )
 
 
+def _responses_factory(
+    *, config: BackendConfig, api_key: str | None = None, trace: RunTrace | None = None,
+) -> ExtractionBackend:
+    return DeepSeekResponsesBackend(
+        base_url=config.base_url, model=config.model, api_key=api_key,
+        timeout=config.timeout, max_attempts=config.max_attempts, trace=trace,
+        structured_output=config.structured_output, provider_options=config.provider_options,
+        output_token_parameter=config.output_token_parameter, tls_mode=config.tls_mode,
+    )
+
+
 def default_registry() -> BackendRegistry:
     registry = BackendRegistry()
     registry.register("openai-compatible", _compatible_factory)
+    registry.register("deepseek-responses", _responses_factory)
     return registry

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.0.dev15
+
+- Diagnose an anonymous object where a quoted property name is expected, adding bounded, value-free structural paths and shape illustrations to validation artifacts, regeneration feedback and checkpoints. Preserve original text and Unicode error coordinates; never repair or skip failed output.
+- Add explicit `deepseek-responses:deepseek-flash` selection with official endpoint binding, `text.format` JSON Schema, `reasoning.effort=none` and native token controls. Keep Chat presets unchanged; reject unsupported parameters, statuses and tool/refusal output without fallback.
+- Reuse HTTP/TLS/redaction and finite call budgets; normalize Responses text/usage and retain failure evidence. Add Mock HTTP, resumed feedback and installed CLI acceptance. No new dependencies or paid model calls; documented Schema support remains separate from observed server enforcement.
+
 ## 0.1.0.dev14
 
 - Fix result metadata left at dev12 in dev13: new extraction results now resolve the current package version instead of duplicating a version literal. Explicit versions in historical results remain unchanged when loaded.

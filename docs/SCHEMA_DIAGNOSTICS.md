@@ -1,8 +1,13 @@
 # 定位 json_schema 问题
 
-`--structured-output json_schema` 会在 OpenAI 兼容请求里发送
+使用 Chat 兼容适配器时，`--structured-output json_schema` 会发送
 `response_format.json_schema`，并设置 `strict: true`。它不会切换到服务商的原生
 API，也不会在失败后自动改成 `off`。同一个模型名称经由不同代理或路由，支持情况可能不同。
+
+dev15 可显式选择 `--model-id deepseek-responses:deepseek-flash`，通过独立 Responses
+适配器发送 `text.format={type: json_schema, name: ..., schema: ...}`，不附加未文档化的
+`strict` 字段。DeepSeek Chat 本身仍不能通过只改 `--structured-output` 切换协议。
+完整命令、边界和离线验收见[结构化输出指南](STRUCTURED_OUTPUT.md)。
 
 新增诊断只检查和记录，不修改模型响应，不自动重试，也不把 HTTP 200 当成服务端确实
 执行了 Schema 约束的证明。原有 `--format-retries` 行为保持独立。
@@ -31,7 +36,8 @@ New-Item -ItemType Directory -Force -Path $probe | Out-Null
 ## 按层检查日志
 
 1. `requests/chunk-0001.request.json`：实际发送的 HTTP JSON。
-   确认包含 `response_format`、`strict: true` 和预期字段；里面也有完整提示词和原文。
+   Chat 检查 `response_format`、`strict: true`；Responses 检查 `text.format` 和预期字段。
+   里面也有完整提示词和原文。
 2. `schema/chunk-0001.request.json`：请求模式、`schema_sent`、规范化 Schema 的
    SHA-256。相同 hash 表示比较的是相同 Schema；这不代表模型、提示词、输入也相同。
 3. HTTP 失败时看 `error.json` 指向的 `http/*.error.json`：先读
@@ -54,7 +60,7 @@ New-Item -ItemType Directory -Force -Path $probe | Out-Null
 | HTTP 200，compliance `failed` | 本次原始输出没有遵守目标 Schema；按路径查看响应。若服务端宣称 strict 支持，可携请求 ID、Schema 和脱敏小样本询问路由实际行为。 |
 | HTTP 200，compliance `passed` | 只证明这一份输出符合本次 Schema，不证明服务端强制约束，也不证明语义或证据正确。 |
 | compliance `not_evaluated` | 没有目标 Schema，或检查器不支持该自定义 Schema；不能按通过处理。 |
-| `schema_sent: false` | 本次为 `off`，未请求服务端结构约束。仍可对照目标 Schema观察输出质量。 |
+| `schema_sent: false` | 本次为 `off` 或 `json_object`，未发送任务 Schema。仍可对照目标 Schema 观察输出质量。 |
 | 本地候选保留成功，但 compliance `failed` | 本地契约允许部分缺失信息进入复核；严格请求 Schema 则要求完整包装。这两种检查用途不同。 |
 
 检查器覆盖程序生成的 `type/properties/required/additionalProperties/enum/items/anyOf`
@@ -63,7 +69,7 @@ New-Item -ItemType Directory -Force -Path $probe | Out-Null
 
 成功一次后，再分别测试“最小任务”和“实际完整任务”。如果仅完整任务失败，缩减到服务商
 明确指出的 Schema 片段做对照。保留两次请求与服务端错误证据，不要先删除所有约束或默默
-退回 `off`。服务商原生协议适配、自动能力探测均未在本版实现。
+退回 `off`。当前仅增加明确选择的 DeepSeek Responses 通道，不自动探测或切换协议。
 
 ## 离线验证
 

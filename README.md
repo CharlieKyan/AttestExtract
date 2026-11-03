@@ -2,7 +2,9 @@
 
 Schema-driven extraction from text and tables, with source-linked evidence and pluggable decision backends.
 
-**Early prototype · `0.1.0.dev14` · Python 3.11+**
+**Early prototype · `0.1.0.dev15` · Python 3.11+**
+
+Dev15 adds localized, value-free feedback for anonymous objects inside JSON objects and an explicit `deepseek-responses:deepseek-flash` preset using DeepSeek's documented `text.format` Schema protocol. The existing Chat preset is unchanged. One regeneration still uses the same budget and never repairs or silently skips invalid output. See [structured output and recovery](docs/STRUCTURED_OUTPUT.md); new adapter verification is offline, not a live enforcement claim. Start a new run after upgrading or changing protocol.
 
 Dev14 fixes result version metadata reported by dev13; new results use the installed package version and historical explicit versions remain unchanged.
 

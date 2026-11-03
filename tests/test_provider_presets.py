@@ -27,7 +27,8 @@ def test_selecting_a_known_model_requires_only_its_credential(selector, key, bas
 
 
 def test_local_catalog_is_fixed_and_does_not_claim_service_discovery():
-    assert available_models() == ("deepseek:deepseek-flash", "qwen:qwen3.8-27b", "qwen:qwen-plus")
+    assert available_models() == ("deepseek:deepseek-flash", "deepseek-responses:deepseek-flash",
+                                  "qwen:qwen3.8-27b", "qwen:qwen-plus")
 
 
 def test_vlm_credential_keeps_its_own_endpoint_pair():

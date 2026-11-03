@@ -43,15 +43,24 @@ result = extract(
 | Model identifier | Default endpoint | Default provider option |
 | --- | --- | --- |
 | `deepseek:deepseek-flash` | DeepSeek official | `thinking = { type = "disabled" }` |
+| `deepseek-responses:deepseek-flash` | DeepSeek official Responses | `reasoning = { effort = "none" }` |
 | `qwen:qwen3.8-27b` | Qwen Beijing public endpoint | `enable_thinking = false` |
 | `qwen:qwen-plus` | Qwen Beijing public endpoint | `enable_thinking = false` |
 
-All three presets default to `json_object`, `max_tokens: 8192`, `temperature: 0`, timeout 60 seconds,
-one HTTP attempt and zero format regeneration. The token cap applies per chunk
+The three Chat presets default to `json_object` and `max_tokens: 8192`; the explicit
+Responses preset uses `json_schema` and `max_output_tokens: 8192`. All default to
+`temperature: 0`, timeout 60 seconds and one HTTP attempt. Python keeps zero format
+regeneration; the CLI defaults to one unless explicitly configured. The token cap applies per chunk
 generation, not to the whole document. Explicit options override these defaults.
 Unknown provider/model identifiers fail before a model request; use a complete
 profile to specify another model's endpoint and parameters. No model-family
 guessing or automatic output-format downgrade is performed.
+
+The Responses adapter is intentionally limited to the official DeepSeek HTTPS
+root or `/v1`, with the same `DEEPSEEK_API_KEY`. It does not accept custom gateways,
+tools, streaming or Chat-only provider options. Select another registered adapter
+for another protocol. Details, source documentation and synthetic acceptance are
+in [structured output](STRUCTURED_OUTPUT.md).
 
 `--region beijing` is optional for Qwen. Other Qwen regions need a complete
 profile with the appropriate endpoint and credential. DeepSeek presets do not

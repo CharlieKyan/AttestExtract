@@ -1,0 +1,95 @@
+# 结构化输出与格式恢复（dev15）
+
+本次修复针对重复出现的“对象期待属性名，却遇到匿名对象”错误。程序在标准 JSON
+解析失败后尝试给出更具体的结构解释，仍然拒绝原回答；随后在原有一次重生成额度内，
+让模型依据原文重新生成完整块。没有字符串替换修复、部分字段抢救或空列表跳过。
+
+## 错误反馈发生了什么变化
+
+例如合成回答的结构是 `{"subject": <value>, {"amount": <value>}}`。
+`<value>` 仅为去值示意，不是可直接提交的 JSON。反馈现在指出：
+
+- 位置 `records[0].fields`，分类 `unexpected_object_in_object`。
+- 这里需要带引号的属性名，却遇到匿名 `{`；相邻的命名属性应属于同一对象。
+- 正确形状为 `{"subject": <value>, "amount": <value>}`；完整字段包装仍以任务示例为准。
+
+提示只包含声明过的键名和固定占位符；未知键替换为 `<undeclared>`，不把模型值或引文
+再次塞进系统提示。完整错误回答保留在 `diagnostics/responses/`，不要提交公开仓库。
+`validation/*.errors.json` 保留原有 `invalid_json`、行列和 Unicode offset，并增加
+`errors[0].structure`。终端只增加一行结构位置，不输出原始回答。
+
+扫描器只诊断上述可确认的语法形态，最多扫描 131,072 个字符、32 层、8,192 个词法单元；
+合法对象数组以及字符串内的括号不会触发。无法确认或超过上限时保留通用解析错误。
+诊断不保证模型下一次一定正确；第二次仍失败就停止，保留已完成块、两次回答和检查点。
+增加总预算或反复恢复不会重置已用的重生成额度。
+
+## 显式选择 DeepSeek Responses Schema
+
+[官方 Responses API](https://api-docs.deepseek.com/api/create-response/) 文档定义
+`text.format` 的 Schema 请求方式；[协议指南](https://api-docs.deepseek.com/guides/responses_api/)
+定义请求、输出状态和参数映射（核对日期 2026-11-03）。框架新增独立适配器和预设，
+不把 Chat 的 `response_format` 或 `thinking` 参数照搬过去。
+
+| 选择 | 请求路径与格式 | 非思考配置 |
+| --- | --- | --- |
+| `deepseek:deepseek-flash` | `/chat/completions`；`response_format.type=json_object` | `thinking.type=disabled` |
+| `deepseek-responses:deepseek-flash` | `/responses`；`text.format.type=json_schema` | `reasoning.effort=none` |
+
+两者都读取 `DEEPSEEK_API_KEY`，默认 8192 输出 token、温度 0、60 秒超时、一次 HTTP
+尝试、CLI 一次格式重生成。新通道仅允许官方 HTTPS 根地址或 `/v1`；不支持自定义网关、
+流式、工具和服务端会话。保留证书校验的 TLS 兼容设置由预设处理。
+
+在仓库根目录配置好 `.env`，先运行不发网络请求的预检：
+
+```powershell
+.\.venv\Scripts\python.exe -m attestextract extract --input src/attestextract/examples/procurement.md --task src/attestextract/examples/procurement.task.json --env-file .env --model-id deepseek-responses:deepseek-flash --check
+```
+
+下面是实际抽取命令，会调用真实服务并计费；本次发布没有执行它：
+
+```powershell
+.\.venv\Scripts\python.exe -m attestextract extract --input src/attestextract/examples/procurement.md --task src/attestextract/examples/procurement.task.json --env-file .env --model-id deepseek-responses:deepseek-flash
+```
+
+Python 使用同一个选择入口：
+
+```python
+from attestextract import extract, load_task
+
+result = extract("Lamp A uses 8 W.", load_task("task.json"),
+                 model="deepseek-responses:deepseek-flash", env_file=".env")
+```
+
+Python 默认仍不格式重生成；显式传 `format_retries=1` 才启用。预算与持久化恢复需要
+`ExecutionOptions`，详见[恢复指南](EXECUTION.md)。高级配置使用 `adapter="deepseek-responses"`
+时须对应设置 `output_token_parameter="max_output_tokens"`；不能混用 Chat 的 token 参数。
+高级设置开启思考时，官方说明 `temperature` 不生效；Flash 非思考模式的 `top_p` 固定为 1。
+这些服务端限制不等于用户传入的采样值已实际执行；默认预设不发送 `top_p`。
+
+`completed` 响应只提取 assistant 的 `output_text`，原样拼接并转换 token 用量；
+`incomplete/max_output_tokens` 映射为截断，走已有预算内细分；拒绝、失败、空文本和工具
+输出明确失败，不进入格式重生成。HTTP 400 不降级到 Chat 或 JSON Object。
+`responses/<chunk>.protocol.json` 单独保留脱敏响应 ID、协议状态及已知截断原因，
+避免统一响应元数据覆盖原生状态；它也不包含服务端推理内容。
+
+Schema 的发送、返回内容是否符合 Schema、服务端是否真正强制约束分别记录。
+`schema_sent=true` 不能证明强制约束；本轮始终标明 `server_enforcement=not_verified`。
+现有严格本地候选契约与证据检查继续执行；更严格的请求 Schema 对照仍是诊断，例如
+缺失字段可进入复核，不把 Schema 诊断当作语义接受决定。
+
+## 不调用模型的完整验收
+
+在仓库根目录直接执行；每次使用新的输出目录：
+
+```powershell
+$acceptance = Join-Path (Split-Path $PWD) ("research\attestextract\audits\structured-output-" + (Get-Date -Format "yyyyMMdd-HHmmss-fff"))
+.\.venv\Scripts\python.exe scripts/structured_output_smoke.py --output-dir "$acceptance"
+Get-Content -Raw -Encoding UTF8 (Join-Path $acceptance "summary.json")
+```
+
+预期：`passed=true`、4 次模拟 HTTP、0 次真实调用，结构定位与重生成、Responses
+Schema 请求、已完成检查点零调用恢复、截断拒绝均通过。该脚本也进入 wheel 仓库外安装
+验收与 CI。它验证框架实现，不证明真实模型遵守 Schema 或抽取完整性。
+
+升级包版本或换模型／协议需要新运行，已有原始回答和检查点不改写。相同版本、配置下
+才可恢复；若旧块已用完格式重生成，不能以增加总预算再试第三次。

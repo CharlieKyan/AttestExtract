@@ -5,4 +5,5 @@ include scripts/d2_acceptance.py
 include scripts/model_selection_smoke.py
 include scripts/execution_smoke.py
 include scripts/format_recovery_smoke.py
+include scripts/structured_output_smoke.py
 recursive-include docs *.md

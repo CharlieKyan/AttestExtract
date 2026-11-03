@@ -17,10 +17,12 @@ import httpx
 from .backends import OpenAICompatibleBackend
 from .config import BackendConfig, resolve_backend_config
 from .errors import ConfigurationError
+from .responses_backend import DeepSeekResponsesBackend
 
 
 _PRESETS = {
     "deepseek:deepseek-flash": {"thinking": {"type": "disabled"}},
+    "deepseek-responses:deepseek-flash": {"reasoning": {"effort": "none"}},
     "qwen:qwen3.8-27b": {"enable_thinking": False},
     "qwen:qwen-plus": {"enable_thinking": False},
 }
@@ -35,7 +37,7 @@ def available_models() -> tuple[str, ...]:
 
 
 def _connection_defaults(provider: str, environment: Mapping[str, str], explicit_key: str | None) -> dict:
-    if provider == "deepseek":
+    if provider in {"deepseek", "deepseek-responses"}:
         key_name = explicit_key if explicit_key is not None else "DEEPSEEK_API_KEY"
         return {"api_key_env": key_name, "base_url": environment.get("DEEPSEEK_BASE_URL", _DEEPSEEK_URL)}
     # Presence, including an empty value, selects a variable. Empty selected keys
@@ -49,15 +51,16 @@ def _connection_defaults(provider: str, environment: Mapping[str, str], explicit
 
 def _check_endpoint(config: BackendConfig, provider: str, *, explicit_url: bool,
                     explicit_key: bool, region: str | None) -> None:
-    # Reuse the compatible backend's URL and parameter validation without I/O.
-    OpenAICompatibleBackend(
+    # Reuse the selected backend's URL and parameter validation without I/O.
+    backend_type = DeepSeekResponsesBackend if config.adapter == "deepseek-responses" else OpenAICompatibleBackend
+    backend_type(
         config.base_url, config.model, timeout=config.timeout, max_attempts=config.max_attempts,
         structured_output=config.structured_output, provider_options=config.provider_options,
         output_token_parameter=config.output_token_parameter,
     )
     url = httpx.URL(config.base_url)
     path = url.path.rstrip("/")
-    if provider == "deepseek":
+    if provider in {"deepseek", "deepseek-responses"}:
         official_host = url.host == "api.deepseek.com"
         official = official_host and path in ("", "/v1")
     else:
@@ -92,8 +95,8 @@ def resolve_model_config(
     if not isinstance(selector, str) or selector.count(":") != 1 or any(ch.isspace() for ch in selector):
         raise ConfigurationError("Select a model as provider:model; list available presets or use a complete profile.")
     provider, model = selector.split(":", 1)
-    if provider not in {"deepseek", "qwen"}:
-        raise ConfigurationError("Unknown provider; select deepseek or qwen, or configure an advanced profile and adapter.")
+    if provider not in {"deepseek", "deepseek-responses", "qwen"}:
+        raise ConfigurationError("Unknown provider; select deepseek, deepseek-responses or qwen, or configure an advanced profile and adapter.")
     if selector not in _PRESETS:
         raise ConfigurationError("This model has no preset; list available models or use a complete profile with explicit endpoint and parameters.")
     if region is not None and (provider != "qwen" or region != "beijing"):
@@ -105,11 +108,14 @@ def resolve_model_config(
         raise ConfigurationError("Select the provider/model through the model identifier; pass api_key separately and use a profile for another adapter.")
     supplied = {key: value for key, value in supplied.items() if value is not None}
     values = _connection_defaults(provider, environment, supplied.get("api_key_env"))
+    responses = provider == "deepseek-responses"
     values.update(
-        adapter="openai-compatible", model=model, timeout=60.0, max_attempts=1,
-        structured_output="json_object", format_retries=0,
-        tls_mode="1.2" if provider == "deepseek" else "auto",
-        output_token_parameter="max_tokens", provider_options=deepcopy(_PRESETS[selector]),
+        adapter="deepseek-responses" if responses else "openai-compatible",
+        model=model, timeout=60.0, max_attempts=1,
+        structured_output="json_schema" if responses else "json_object", format_retries=0,
+        tls_mode="1.2" if provider in {"deepseek", "deepseek-responses"} else "auto",
+        output_token_parameter="max_output_tokens" if responses else "max_tokens",
+        provider_options=deepcopy(_PRESETS[selector]),
     )
     generation = {"max_output_tokens": 8192, "temperature": 0}
     if "generation" in supplied:

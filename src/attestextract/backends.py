@@ -76,6 +76,9 @@ class OpenAICompatibleBackend:
     """
 
     name = "openai-compatible"
+    endpoint_path = "/chat/completions"
+    output_token_parameters = ("max_tokens", "max_completion_tokens")
+    format_parameter = "response_format"
 
     def __init__(
         self,
@@ -137,8 +140,10 @@ class OpenAICompatibleBackend:
             raise ConfigurationError("sleep_fn must be callable.")
         if structured_output not in ("off", "json_object", "json_schema"):
             raise ConfigurationError("structured_output must be 'off', 'json_object', or 'json_schema'.")
-        if output_token_parameter not in ("max_tokens", "max_completion_tokens"):
-            raise ConfigurationError("output_token_parameter must be 'max_tokens' or 'max_completion_tokens'.")
+        if output_token_parameter not in self.output_token_parameters:
+            raise ConfigurationError(
+                "output_token_parameter must be one of: " + ", ".join(self.output_token_parameters) + "."
+            )
         if tls_mode not in ("auto", "1.2"):
             raise ConfigurationError("tls_mode must be 'auto' or '1.2'.")
 
@@ -149,7 +154,7 @@ class OpenAICompatibleBackend:
         self.structured_output = structured_output
         self.provider_options = _validate_provider_options(provider_options)
         check_structured_output(self.base_url, self.model, self.structured_output,
-                                provider_options=self.provider_options)
+                                provider_options=self.provider_options, adapter=self.name)
         self.output_token_parameter = output_token_parameter
         self.tls_mode = tls_mode
         self._api_key = api_key
@@ -161,7 +166,7 @@ class OpenAICompatibleBackend:
 
     def __repr__(self) -> str:
         return (
-            f"OpenAICompatibleBackend(model={self.model!r}, "
+            f"{type(self).__name__}(model={self.model!r}, "
             f"timeout={self.timeout!r}, max_attempts={self.max_attempts!r}, "
             f"structured_output={self.structured_output!r}, "
             "api_key=<redacted>)"
@@ -181,7 +186,7 @@ class OpenAICompatibleBackend:
         # Revalidate mutable options so later mutation cannot bypass reserved keys.
         payload.update(_validate_provider_options(self.provider_options))
         check_structured_output(self.base_url, self.model, self.structured_output,
-                                provider_options=self.provider_options)
+                                provider_options=self.provider_options, adapter=self.name)
         if request.generation.temperature is not None:
             payload["temperature"] = request.generation.temperature
         if request.generation.max_output_tokens is not None:
@@ -225,7 +230,7 @@ class OpenAICompatibleBackend:
                     self._trace.event("http", "started", **context, attempt=attempt)
                 try:
                     response = client.post(
-                        self.base_url + "/chat/completions",
+                        self.base_url + self.endpoint_path,
                         headers=headers,
                         json=payload,
                     )
@@ -268,7 +273,7 @@ class OpenAICompatibleBackend:
                     compatibility_hint = None
                     if self.structured_output != "off" and response.status_code in {400, 422}:
                         compatibility_hint = (
-                            f"The endpoint may not support response_format/{self.structured_output} or the supplied schema;"
+                            f"The endpoint may not support {self.format_parameter}/{self.structured_output} or the supplied schema;"
                             " no fallback was attempted."
                         )
                     diagnostic = describe_http_error(

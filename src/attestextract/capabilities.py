@@ -1,4 +1,4 @@
-"""Small, documentation-backed output constraints for known Chat endpoints.
+"""Small, documentation-backed output constraints for known model endpoints.
 
 This is neither live model discovery nor a claim of server-side enforcement.
 Unregistered endpoints/adapters keep their explicit configuration; they are
@@ -15,6 +15,7 @@ from .errors import ConfigurationError
 
 
 _DEEPSEEK_SOURCE = "https://api-docs.deepseek.com/api/create-chat-completion/"
+_DEEPSEEK_RESPONSES_SOURCE = "https://api-docs.deepseek.com/api/create-response/"
 _QWEN_SOURCE = "https://www.alibabacloud.com/help/en/model-studio/qwen-structured-output"
 
 
@@ -27,17 +28,18 @@ def structured_output_capabilities(
     json_object. Qwen's Schema feature table and model list disagree about Plus;
     therefore the moving qwen-plus alias remains unknown. The qwen3.8-27b model is
     in the JSON Object family but not the documented Schema model list. No preset
-    is automatically promoted to Schema on this evidence.
+    is automatically promoted to Schema on this evidence. DeepSeek Responses
+    uses an explicitly selected adapter and documents its own Schema format.
     """
     result: dict[str, Any] = {
         "provider": "unknown", "region": "unknown",
-        "protocol": "chat_completions" if adapter == "openai-compatible" else "unknown",
+        "protocol": {"openai-compatible": "chat_completions", "deepseek-responses": "responses"}.get(adapter, "unknown"),
         "modes": {"off": "available", "json_object": "unknown", "json_schema": "unknown"},
         "documentation": [], "documentation_checked": None,
         "evidence": "unregistered", "server_enforcement": "not_verified",
         "requires_non_thinking": False,
     }
-    if adapter != "openai-compatible":
+    if adapter not in {"openai-compatible", "deepseek-responses"}:
         return result
     try:
         url = httpx.URL(base_url)
@@ -46,6 +48,12 @@ def structured_output_capabilities(
     if url.scheme != "https" or url.port not in (None, 443) or url.userinfo or url.query or url.fragment:
         return result
     path = url.path.rstrip("/")
+    if adapter == "deepseek-responses":
+        if url.host == "api.deepseek.com" and path in ("", "/v1") and model in {"deepseek-flash", "deepseek-v4-pro"}:
+            result.update(provider="deepseek", region="provider_default", evidence="documentation_only",
+                          documentation=[_DEEPSEEK_RESPONSES_SOURCE], documentation_checked="2026-11-03")
+            result["modes"].update(json_object="documented", json_schema="documented")
+        return result
     if url.host == "api.deepseek.com" and path in ("", "/v1"):
         result.update(provider="deepseek", region="provider_default", evidence="documentation_only",
                       documentation=[_DEEPSEEK_SOURCE], documentation_checked="2026-11-03")

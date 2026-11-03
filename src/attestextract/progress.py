@@ -114,6 +114,9 @@ class ConsoleProgress:
         elif stage == "validation" and kind == "rejected":
             position = f" original response line {event['line']}, column {event['column']}" if event.get("line") else ""
             self._write(f"{prefix} rejected: {event['phase']}{position}; {event['error_count']} error(s)")
+            structure = event.get("structure")
+            if structure and structure.get("code") == "unexpected_object_in_object":
+                self._write(f"{prefix} structure: {structure['path']}; expected a named property, found anonymous '{{'")
         elif stage == "format_retry" and kind in {"retry", "resumed"}:
             self._write(f"{prefix} format_retry: {event['chunk_id']} regeneration 1/1 "
                         f"{'resumed from checkpoint' if kind == 'resumed' else 'requested'}; additional model call")
