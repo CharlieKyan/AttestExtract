@@ -2,7 +2,9 @@
 
 Schema-driven extraction from text and tables, with source-linked evidence and pluggable decision backends.
 
-**Early prototype · `0.1.0.dev13` · Python 3.11+**
+**Early prototype · `0.1.0.dev14` · Python 3.11+**
+
+Dev14 fixes result version metadata reported by dev13; new results use the installed package version and historical explicit versions remain unchanged.
 
 Dev13 adds sentence-aware chunking, one CLI format regeneration by default, and persistent regeneration allowances across recovery. Known incompatible structured-output requests fail before HTTP. See [execution and recovery](docs/EXECUTION.md) for defaults, budgets and offline acceptance. Python keeps format retries off by default and opts into managed execution with `execution=ExecutionOptions(...)`. Dev12 checkpoints require a new run with this planner.
 

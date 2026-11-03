@@ -227,9 +227,15 @@ class RunInfo(ContractModel):
     elapsed_seconds: float
 
 
+def _package_version() -> str:
+    # Resolve at result creation: package exports import models during startup.
+    from . import __version__
+    return __version__
+
+
 class ExtractionResult(ContractModel):
     schema_version: Literal["0.1", "0.2"] = "0.2"
-    package_version: str = "0.1.0.dev12"
+    package_version: str = Field(default_factory=_package_version)
     task: TaskSpec
     source: SourceInfo
     candidates: list[Candidate]

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.0.dev14
+
+- Fix result metadata left at dev12 in dev13: new extraction results now resolve the current package version instead of duplicating a version literal. Explicit versions in historical results remain unchanged when loaded.
+- Add demo/D1 version checks and a runtime-default regression. Preserve dev13's published tag and behavior changes; rerun package and CI acceptance against dev14.
+
 ## 0.1.0.dev13
 
 - Prefer complete sentences in initial chunking and truncation subdivision; fall back through line/clause/word boundaries for long sentences while preserving Unicode source spans, recognizable math and atomic table rows. Character sizes remain targets rather than hard limits.
