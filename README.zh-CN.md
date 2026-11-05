@@ -2,7 +2,9 @@
 
 按任务模式从正文和表格抽取候选数据，保留原文证据，并预留可替换的决策后端。
 
-**早期原型 · `0.1.0.dev16` · Python 3.11+**
+**早期原型 · `0.1.0.dev17` · Python 3.11+**
+
+dev17 新模型调用统一使用 flat-v1：字段值放在 `values`，逐字引文放在 `quotes`，保留测量证据组。用户无需额外选择协议；旧 native-v1 仅供内置 ReplayBackend 显式离线回放。新增范围端点与单位位置绑定，区分明确下标和独立数值；混合单位、损坏 OCR 继续复核，绝不自动接受事实。结果格式升级为 0.3，旧档案按原规则读取。
 
 dev16 将 CLI 自动格式重生成默认值回退为 0，保留显式 `--format-retries 1` 与 profile 配置。用户保存的真实运行表明，改用 Responses Schema 仍可能返回非法 JSON；保留协议适配和诊断，但撤回将切换协议作为格式稳定性修复的建议。只有存在具体结构提示时才添加对应形状说明。证据与限制见[结构化输出指南](docs/STRUCTURED_OUTPUT.md)。
 
@@ -118,13 +120,13 @@ attestextract extract --input src/attestextract/examples/procurement.md --task s
 
 `extract --structured-output off|json_object|json_schema` 可覆盖当前配置。高级配置默认 `off`，模型预设默认 `json_object`；后者请求有效 JSON，不保证服务端执行任务 Schema。选择 `json_schema` 时，框架根据任务自动生成 JSON Schema，发送 `response_format.type: "json_schema"` 和 `strict: true`。Python 后端对应参数为 `OpenAICompatibleBackend(..., structured_output="json_schema")`。
 
-严格模式要求每个已声明字段都带 `{ "value": ..., "quote": ... }` 包装；任务中的标量类型限制的是内部 **`value`**，`quote` 始终是字符串。未报告字段返回 `value: null`、`quote: ""`。可选空字段只产生一条信息项；任务要求的关键条件缺失仍进入复核。关闭结构化输出时，可继续省略未报告的可选字段。配置测量组后，严格 Schema 还要求返回该组的上下文及片段字段。
+严格模式要求 `values` 与 `quotes` 包含全部声明字段；任务标量类型约束 `values` 中的值，`quotes` 中的引文始终为字符串。未报告字段使用 null 值与空引文。可选空字段只产生一条信息项；任务要求的关键条件缺失仍进入复核。关闭结构化输出时，可继续省略未报告的可选字段。配置测量组后，严格 Schema 还要求返回该组的上下文及片段字段。
 
 模型服务需支持相应格式。HTTP 400／422 会明确失败，不自动降级为非结构化请求，也不触发格式重试；网络及暂时性 HTTP 错误仍使用原有有限重试。[Wenwen 官方结构化说明](https://wenwen-ai.apifox.cn/305807074e0) 给出了这类请求格式，但需针对实际模型渠道确认兼容性。即使端点接受参数，仍保留全部本地校验。
 
 ### 可选的一次格式重试
 
-提示明确要求每个 JSON 对象的键名唯一、标量类型符合任务，以及每个已提供字段只包含一次 `value` 和一次 `quote`。`fields.value.value` 是合法的不同层级嵌套；同一对象内写两次 `value` 会被拒绝，即使值相同。解析器也拒绝非有限数值。日志分别用 `duplicate_key`、`non_finite_number` 标明错误路径，未声明的键名会隐藏；普通 JSON 语法错误保留行列位置。程序不会静默清理重复键或覆盖值。
+提示明确要求每个 JSON 对象的键名唯一、标量类型符合任务。任务字段名为 value 时，数值保存在 `values.value`，引文保存在 `quotes.value`；同一对象中重复键会被拒绝，即使值相同。解析器也拒绝非有限数值。日志分别用 `duplicate_key`、`non_finite_number` 标明错误路径，未声明的键名会隐藏；普通 JSON 语法错误保留行列位置。程序不会静默清理重复键或覆盖值。
 
 CLI `extract --format-retries 0|1` 默认 `0`；显式 CLI／profile 设置为 `1` 时，本地 JSON、记录结构或任务字段类型校验失败才允许**只对失败分块重新生成一次**：原文、任务和输出模式不变，追加有长度限制的错误反馈。新响应仍要经过完整结构和证据检查；此前成功分块不重跑。Python 保持默认 `0`，启用写法为 `extract(text, task, backend=backend, format_retries=1)`。检查点 v2 保存失败反馈和已预留的重生成额度，恢复不会重置；中断或传输失败也不退还已预留机会。增加总调用预算不能复活耗尽的格式重生成额度。
 
@@ -233,9 +235,9 @@ if ($extractExitCode -eq 0) {
 
 ## 任务、证据和扩展接口
 
-JSON 任务包含 `name`、可选 `description` 和 `record_types`。每种记录声明 `fields`，字段类型为 `string`、`integer`、`number` 或 `boolean`，并可声明说明和 `required`。类型约束作用于字段内部的 `value`，不是 `{value, quote}` 包装对象；`quote` 必须是字符串，布尔值不能当作整数。`identity_fields`、`condition_fields` 引用已声明的字段；缺少这些字段会进入复核。完整配置见打包示例。
+JSON 任务包含 `name`、可选 `description` 和 `record_types`。每种记录声明 `fields`，字段类型为 `string`、`integer`、`number` 或 `boolean`，并可声明说明和 `required`。类型约束作用于模型回答 `values` 中的对应字段；`quotes` 中对应字段必须是字符串，布尔值不能当作整数。`identity_fields`、`condition_fields` 引用已声明的字段；缺少这些字段会进入复核。完整配置见打包示例。
 
-提示会根据当前任务的记录类型、全部字段和标量类型构造完整合成示例，用于展示输出约定，不是论文证据，也不能把示例直接复制为抽取结果。每个输出字段都保留 `value` 与逐字 `quote`；引文必须保留 OCR 错误、空格、Unicode 符号和 LaTeX 写法。例如原文为 `$10^{-3}$`，不能把引文改写成 `0.001`，也不能默默纠正 OCR。标量值可表达原文报告的数值，但引文仍须是原文子串；在 JSON 字符串中，LaTeX 的字面反斜杠应按 JSON 规则写成 `\\`。
+提示会根据当前任务的记录类型、全部字段和标量类型构造完整合成示例，用于展示输出约定，不是论文证据，也不能把示例直接复制为抽取结果。模型输出通过 `values` 与 `quotes` 保留每个字段的值和逐字引文；引文必须保留 OCR 错误、空格、Unicode 符号和 LaTeX 写法。例如原文为 `$10^{-3}$`，不能把引文改写成 `0.001`，也不能默默纠正 OCR。标量值可表达原文报告的数值，但引文仍须是原文子串；在 JSON 字符串中，LaTeX 的字面反斜杠应按 JSON 规则写成 `\\`。
 
 Python API：
 
@@ -252,7 +254,7 @@ print(result.model_dump_json(indent=2))
 - 输入支持 UTF-8 TXT、Markdown 正文和简单管道表格；默认按 6,000 字符及每批最多 12 行表格分块。单个表头或表格行保持完整，可能超过字符目标。后续表格批次重复携带原表头并保留原文位置。PDF 需先用 MinerU 等外部工具转换。
 - 每个字段保留值、逐字引文、原文位置和检查结果。位置为 Python 解码字符串的 Unicode 字符偏移，采用左闭右开区间；不是 UTF-8 字节数或 UTF-16 单元数。唯一匹配时可用 `text[start:end]` 取回引文。
 - 缺失、找不到或多处匹配的引文进入复核，不猜测位置。只合并值和证据位置完全相同的候选；不同位置或条件下的同值观测继续保留。未知字段、未知记录类型、错误标量类型和无效 JSON 明确失败。
-- 新输出的 `schema_version` 为 `0.2`，包含任务、源文档摘要、候选、复核项、待确认关联及运行信息。读取仍兼容旧 `0.1`；旧程序读取新格式需要升级。`review[].severity` 区分 `review` 与 `info`，统计复核错误时只计前者。新增测量证据和可选空字段身份规则可能改变候选 ID，不应盲目复用旧审阅决定。原文定位通过只说明引文存在，**不等于语义支持性核验或事实验证**。
+- 新输出的 `schema_version` 为 `0.3`，包含任务、源文档摘要、候选、复核项、待确认关联及运行信息。读取仍兼容旧 `0.1/0.2`；旧程序读取新格式需要升级。`review[].severity` 区分 `review` 与 `info`，统计复核错误时只计前者。新增测量证据和可选空字段身份规则可能改变候选 ID，不应盲目复用旧审阅决定。原文定位通过只说明引文存在，**不等于语义支持性核验或事实验证**。
 - `ExtractionBackend` 负责生成；`ReplayBackend` 仅显式回放。`DecisionBackend`、`DecisionTask`、`DecisionResult` 和 `validate_decision` 为后续决策预留边界，只允许选择已有候选、拒绝或转复核。当前抽取流程尚未调用决策后端。
 
 ## 文档、审阅与正式结果的保存约定
@@ -300,3 +302,19 @@ CI 在 Windows／Ubuntu、Python 3.11／3.13 下运行，公共测试仅使用�
 公开内容仅包含新框架、文档、测试和合成示例，不包含论文原文、专家标注、专利材料、研究目录、运行输出或凭据。相关项目：[LangExtract](https://github.com/google/langextract)、已有的 [JevExtract](https://github.com/gabazureus/jevextract)。本项目独立实现，没有直接包含它们的代码。
 
 当前未添加许可证，也未发布到 PyPI；公开可读不代表已授予开源许可。
+
+
+## dev17 离线验收
+
+在仓库根目录运行以下命令，只使用合成材料和历史回放，不读取密钥、不调用模型。每次使用新输出目录。
+
+```powershell
+$acceptanceOutput = Join-Path (Split-Path (Get-Location) -Parent) ('attestextract-check-' + [guid]::NewGuid().ToString('N'))
+& '.\.venv\Scripts\python.exe' -X utf8 '.\scripts\protocol_evidence_smoke.py' --output-dir $acceptanceOutput
+if ($LASTEXITCODE -ne 0) { throw '离线验收失败，请检查终端错误。' }
+Get-Content -LiteralPath (Join-Path $acceptanceOutput 'summary.json') -Raw -Encoding utf8
+```
+
+该验收检查范围两端单位、共享单位、混合单位复核、独立数值、档案往返，以及旧格式必须显式离线选择。新诊断的 `output-protocol.json` 记录回答协议，`normalized/` 保存转换后的内部结构，`responses/` 继续保存原始回答。它不证明未来模型生成一定成功。
+
+旧回答回放使用 `ReplayBackend(responses, output_protocol="native-v1")`；默认回放和真实调用均为 flat-v1。不要把历史原始回答当作新回答，也不要自动修补失败 JSON。升级版本后新建运行，旧 dev16 检查点须使用原版本继续。

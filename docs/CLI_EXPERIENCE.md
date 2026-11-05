@@ -1,4 +1,4 @@
-# CLI 默认值与验收（dev16）
+# CLI 默认值与验收（dev17）
 
 这是正式包入口的行为，不依赖论文启动脚本。密钥配置一次；用户主要填写模型、输入和任务。`.env` 明确通过 `--env-file` 读取；已有进程环境变量仍优先。
 
@@ -57,7 +57,7 @@ TLS 是 HTTPS 加密连接的协议，`1.2` 是协议版本，不是模型版本
 
 ## JSON 错误：看见原因，保留证据
 
-例如 `"fields":{"first":{...},{"second":{...}}}` 不合法：对象逗号后需要下一个属性名，不能出现匿名 `{`。提示词现在明确要求字段是同一 `fields` 对象中的并列属性；已有任务示例继续提供合法完整结构。
+例如 `"fields":{"first":{...},{"second":{...}}}` 不合法：对象逗号后需要下一个属性名，不能出现匿名 `{`。dev17 新请求改用 values/quotes 映射；原始语法位置和结构诊断仍保留，已有任务示例同步提供新结构。
 
 框架不删括号、不补引文、不接受部分 JSON。失败终端直接给出原始响应路径和校验文件路径。`responses/chunk-0001.txt` 保留原响应（已知凭据仍脱敏）；`validation/chunk-0001.errors.json` 记录解析器原因及位置：
 
@@ -86,3 +86,5 @@ python -m pytest -q tests/test_cli_experience.py tests/test_model_selection_cli.
 覆盖最小调用生成三类产物、模型切换、JSON 原样保留及坐标、显式重生成、进度与静默、心跳退出、TLS 验证与脱敏、服务端不支持 Schema 时明确失败。`scripts/model_selection_smoke.py` 在安装后的 wheel 上再检查 Python／显式 CLI／最小 CLI 切换，以及零网络的 `--check`。
 
 需要验收 `json_schema` 时显式添加 `--structured-output json_schema`。检查诊断目录的 `schema/*.request.json`（是否发送）和 `schema/*.compliance.json`（返回文本是否合规）；HTTP 200 不等于服务端严格执行 Schema。服务端不支持则保留错误，不自动退回 `json_object`。
+
+新调用固定使用 flat-v1，启动摘要及 `--check` 显示 output_protocol；用户无需额外选择。旧 native-v1 只可通过内置 ReplayBackend 显式离线回放。报告中的范围绑定展示全部端点及单位位置，候选仍不自动接受。

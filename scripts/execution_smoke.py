@@ -40,10 +40,10 @@ def main():
         body = json.loads(request.content)
         chunk = json.loads(body["messages"][-1]["content"])["source"]
         observed.append(chunk)
-        records = [{"record_type": "reading", "fields": {
-            "subject": {"value": match[1], "quote": match[0]},
-            "amount": {"value": int(match[2]), "quote": match[0]},
-        }} for match in re.finditer(r"Item ([A-Z]) reads (\d+)\.", chunk)]
+        records = [{"record_type": "reading",
+                    "values": {"subject": match[1], "amount": int(match[2])},
+                    "quotes": {"subject": match[0], "amount": match[0]}}
+                   for match in re.finditer(r"Item ([A-Z]) reads (\d+)\.", chunk)]
         content = truncated if len(observed) == 1 else json.dumps({"records": records})
         return httpx.Response(200, json={"model": "synthetic", "usage": {"total_tokens": 10},
             "choices": [{"finish_reason": "length" if len(observed) == 1 else "stop",

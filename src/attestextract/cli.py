@@ -262,6 +262,7 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
                 "model_id": args.model_id,
                 "selection_mode": "preset" if args.model_id is not None else "profile" if args.profile else "legacy",
                 "structured_output": config.structured_output,
+                "output_protocol": "flat-v1",
                 "structured_output_capability": capability,
                 "format_retries": config.format_retries,
                 "generation": config.generation.model_dump(mode="json"),
@@ -269,6 +270,7 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
                 "tls_mode": config.tls_mode,
             })
             trace.event("configuration", "completed", model=config.model,
+                        output_protocol="flat-v1",
                         structured_output=config.structured_output,
                         max_output_tokens=config.generation.max_output_tokens,
                         max_attempts=config.max_attempts, format_retries=config.format_retries)
@@ -282,7 +284,7 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
                     "execution": session.summary(), "execution_options": execution.model_dump(mode="json"),
                     "max_http_attempts_upper_bound": (session.state.max_model_calls * backend.max_attempts
                                                       if hasattr(backend, "max_attempts") else None),
-                    "structured_output": config.structured_output, "tls_mode": config.tls_mode,
+                    "structured_output": config.structured_output, "output_protocol": "flat-v1", "tls_mode": config.tls_mode,
                     "structured_output_capability": capability,
                     "timeout": config.timeout, "max_attempts": config.max_attempts,
                     "format_retries": config.format_retries,

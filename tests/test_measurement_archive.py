@@ -50,9 +50,17 @@ def response(*, parameter="厚度", quantity="17.5", unit="m", condition=None, g
 def run(*, source="样品甲厚度17.5 m。", record=None, grouped=True):
     document = Document.from_text(source, source_name="synthetic.txt")
     result = extract(document, task(grouped=grouped), backend=ReplayBackend([
-        {"records": [record or response(grouped=grouped)]},
+        {"records": [flat_record(record or response(grouped=grouped))]},
     ]))
     return document, result
+
+
+def flat_record(record):
+    payload = deepcopy(record)
+    fields = payload.pop("fields")
+    payload["values"] = {name: field["value"] for name, field in fields.items()}
+    payload["quotes"] = {name: field["quote"] for name, field in fields.items()}
+    return payload
 
 
 def accept(result):
@@ -81,9 +89,9 @@ def test_all_missing_optional_fields_cannot_be_accepted_as_an_observation():
     document = Document.from_text("No measurement is supplied in this synthetic source.")
     result = extract(document, {"name": "Optional note", "record_types": {"entry": {
         "fields": {"note": {"type": "string"}},
-    }}}, backend=ReplayBackend([{"records": [{"record_type": "entry", "fields": {
-        "note": {"value": None, "quote": ""},
-    }}]}]))
+    }}}, backend=ReplayBackend([{"records": [{"record_type": "entry",
+        "values": {"note": None}, "quotes": {"note": ""},
+    }]}]))
     with pytest.raises(ValueError, match="required-field"):
         create_archive(document, result, reviews=accept(result))
 
@@ -182,7 +190,7 @@ def test_links_do_not_accept_candidates_and_cannot_name_undeclared_fields():
     document = Document.from_text("样品甲厚度17.5 m。样品乙厚度18.5 m。")
     second = response(quantity="18.5")
     second["fields"]["subject"] = {"value": "样品乙", "quote": "样品乙"}
-    result = extract(document, task(), backend=ReplayBackend([{"records": [response(), second]}]))
+    result = extract(document, task(), backend=ReplayBackend([{"records": [flat_record(response()), flat_record(second)]}]))
     result.links = [CandidateLink(kind="possible_repeat", candidate_ids=[x.candidate_id for x in result.candidates],
                                   compared_fields=["quantity"])]
     assert create_archive(document, result).records == []

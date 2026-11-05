@@ -302,9 +302,7 @@ SYNTHETIC_TASK = {"name": "synthetic power", "record_types": {"power": {
     "fields": {"watts": {"type": "integer", "required": True}},
 }}}
 SYNTHETIC_TEXT = "Lamp A uses 8 W."
-SYNTHETIC_RECORDS = {"records": [{"record_type": "power", "fields": {
-    "watts": {"value": 8, "quote": SYNTHETIC_TEXT},
-}}]}
+SYNTHETIC_RECORDS = {"records": [{"record_type": "power", "values": {"watts": 8}, "quotes": {"watts": SYNTHETIC_TEXT}}]}
 
 
 def persistent_run(directory, *, handler, resume=None, key="synthetic-first-key", **options):

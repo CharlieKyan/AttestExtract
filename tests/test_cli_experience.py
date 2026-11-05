@@ -22,8 +22,8 @@ from attestextract.transport import tls_context
 TASK = {"name": "Synthetic lamp", "record_types": {"power": {
     "fields": {"value": {"type": "integer", "required": True}, "unit": {"type": "string"}},
 }}}
-VALID = '{"records":[{"record_type":"power","fields":{"value":{"value":8,"quote":"8"},"unit":{"value":"W","quote":"W"}}}]}'
-INVALID = '{"records":[{"record_type":"power","fields":{"value":{"value":8,"quote":"8"},{"unit":{"value":"W","quote":"W"}}}}]}'
+VALID = '{"records":[{"record_type":"power","values":{"value":8,"unit":"W"},"quotes":{"value":"8","unit":"W"}}]}'
+INVALID = '{"records":[{"record_type":"power","values":{"value":8,{"unit":"W"}},"quotes":{"value":"8","unit":"W"}}]}'
 
 
 def arguments(tmp_path):

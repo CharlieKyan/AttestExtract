@@ -61,7 +61,7 @@ New-Item -ItemType Directory -Force -Path $probe | Out-Null
 | HTTP 200，compliance `passed` | 只证明这一份输出符合本次 Schema，不证明服务端强制约束，也不证明语义或证据正确。 |
 | compliance `not_evaluated` | 没有目标 Schema，或检查器不支持该自定义 Schema；不能按通过处理。 |
 | `schema_sent: false` | 本次为 `off` 或 `json_object`，未发送任务 Schema。仍可对照目标 Schema 观察输出质量。 |
-| 本地候选保留成功，但 compliance `failed` | 本地契约允许部分缺失信息进入复核；严格请求 Schema 则要求完整包装。这两种检查用途不同。 |
+| 本地候选保留成功，但 compliance `failed` | 本地契约允许部分缺失信息进入复核；严格请求 Schema 则要求 values/quotes 中的全部声明键及声明的测量组。这两种检查用途不同。 |
 
 检查器覆盖程序生成的 `type/properties/required/additionalProperties/enum/items/anyOf`
 子集；新增不支持的 Schema 约束会明确标记 `not_evaluated`，不会假装完整验证。Markdown

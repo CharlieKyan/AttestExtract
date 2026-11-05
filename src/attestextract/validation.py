@@ -58,8 +58,9 @@ def contract_details(error: ValidationError, payload: Any, *, allowed_keys: set[
     errors = []
     for entry in error.errors(include_input=False, include_url=False):
         location = entry["loc"]
-        if (len(location) >= 2 and location[-2] == "value"
-                and location[-1] in {"str", "int", "float", "bool"}):
+        if (location and location[-1] in {"str", "int", "float", "bool"}
+                and ((len(location) >= 2 and location[-2] == "value")
+                     or (len(location) == 5 and location[0] == "records" and location[2] == "values"))):
             # These labels describe Pydantic union branches, not input keys.
             location = location[:-1]
         value = payload
@@ -77,11 +78,13 @@ def contract_details(error: ValidationError, payload: Any, *, allowed_keys: set[
             class_name = entry.get("ctx", {}).get("class_name")
             expected = {
                 "_RawResponse": "object with a records array",
+                "_FlatResponse": "object with a records array",
+                "_FlatRecord": "record object with record_type, values and quotes",
                 "_RawRecord": "record object with record_type and fields",
                 "_RawField": "field object with value and quote",
             }.get(class_name, "object")
         if allowed_keys is not None:
-            safe = allowed_keys | {"records", "record_type", "fields", "value", "quote", "measurements",
+            safe = allowed_keys | {"records", "record_type", "fields", "values", "quotes", "value", "quote", "measurements",
                                    "context_quote", "value_text", "unit_text", "unit_quote"}
             location = tuple(part if isinstance(part, int) or part in safe else "<undeclared>" for part in location)
         errors.append(issue(location, code, expected, value,

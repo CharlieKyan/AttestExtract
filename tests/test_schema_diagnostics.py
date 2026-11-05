@@ -29,7 +29,10 @@ def read(path):
 
 
 def output(fields):
-    return json.dumps({"records": [{"record_type": "reading", "fields": fields}]})
+    return json.dumps({"records": [{"record_type": "reading",
+        "values": {name: field["value"] for name, field in fields.items()},
+        "quotes": {name: field["quote"] for name, field in fields.items() if "quote" in field},
+    }]})
 
 
 def envelope(content, finish="stop"):
@@ -58,7 +61,7 @@ def test_http_200_can_violate_requested_schema_without_dropping_candidate(tmp_pa
     assert diagnostic["schema_sent"] is (mode == "json_schema")
     assert diagnostic["server_enforcement"] == "not_verified"
     assert {error["path"] for error in diagnostic["errors"]} == {
-        "records[0].fields.amount.quote", "records[0].fields.note",
+        "records[0].quotes.amount", "records[0].values.note", "records[0].quotes.note",
     }
     expected = hashlib.sha256(json.dumps(build_output_schema(TASK), sort_keys=True,
                                         ensure_ascii=False, allow_nan=False).encode()).hexdigest()
@@ -118,7 +121,7 @@ def test_unknown_constraints_and_absent_schema_never_claim_pass():
 def test_errors_are_bounded():
     text = json.dumps({"records": [{}] * 100})
     result = assess_schema_compliance(text, build_output_schema(TASK), "json_schema")
-    assert result["error_count"] == 200
+    assert result["error_count"] == 300
     assert result["truncated"] is True
     assert len(result["errors"]) == 50
 

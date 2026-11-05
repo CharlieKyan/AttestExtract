@@ -8,7 +8,7 @@ dev7 将“引文在原文中出现”和“数值、单位在指定测量片段
 
 以合成句子“样品甲位于井段 3100–3117.5 m，厚度 17.5 m”为例：
 
-- `fields.value.quote` 与 `fields.unit.quote` 都应是“厚度 17.5 m”。
+- 模型回答的 `quotes.value` 与 `quotes.unit` 都应是“厚度 17.5 m”。
 - `measurements.reading.context_quote` 也使用“厚度 17.5 m”。
 - `value_text` 为 `17.5`，`unit_text` 为 `m`，`unit_quote` 为空字符串。
 - `conditions` 单独保存“井段 3100–3117.5 m”及对应原文引文。
@@ -19,8 +19,8 @@ dev7 将“引文在原文中出现”和“数值、单位在指定测量片段
 
 如果同一句出现厚度和深度，要提供两个不同的最小测量表达式。如果无法明确分开，
 保留候选并复核。程序不会自动选择“最近的”或“看上去最合适的”单位。
-`measurement_multiple_values` 是保守提示：上下文里还有数字需要人工看，
-它不证明那里一定是另一项测量，也可能是未分开的条件或标识符。
+`measurement_multiple_values` 是保守提示：上下文里还有未能解释为明确标识符／下标的数字需要人工看，
+它不证明那里一定是另一项测量，也可能是未分开的条件或损坏的 OCR。旧 0.1/0.2 档案仍按原有规则读取。
 
 表格没有逐行写单位时，`unit_quote` 可以引用原始表头。程序检查数值和单位是否位于
 同一张简单管道表格的同一列，保留 `unit_context` 表头引文；列关联不通过时不会给单位
@@ -162,7 +162,20 @@ New-Item -ItemType Directory -Force -Path $runDir | Out-Null
 LaTeX 命令、表头列映射、关键空条件、重复和冲突线索，不调用付费模型。
 JSON Schema 的接口问题另见 [诊断说明](SCHEMA_DIAGNOSTICS.md)。
 
-新结果使用 `schema_version: "0.2"`，仍能读取旧 `0.1` 结果。旧结果未存储的新检查
+新结果使用 `schema_version: "0.3"`，仍能读取旧 `0.1/0.2` 结果，使用各自的 ID 序列化和机械检查规则。旧结果未存储的新检查
 不会凭空出现，报告对未记录的字段状态会标注“旧结果”。新增测量证据或模型返回字段的
 变化可能导致重新抽取时的候选 ID 与旧版本不同；不能按候选序号或旧 ID 强行对齐。
 对比时以原文、主体、参数、情景与出处为依据，保存旧文件，不覆盖历史输出。
+
+
+## dev17：范围绑定与保守数字检查
+
+以合成原文 `X2 content 11%\~24%` 为例，模型仍只给出原有 context_quote/value_text/unit_text/unit_quote。框架根据原文计算 `range_binding`：`endpoints` 两处数值、`separator` 连接符、`units` 一到两处单位，以及 `unit_layout`（shared/per_endpoint/table_header）。所有片段都是原始 Unicode 的精确位置，不增加模型的输出负担。
+
+- 两个 `%` 的 `unit.status` 仍为 ambiguous；有效的逐端绑定解除 measurement_unit_unresolved，不猜选一个位置。
+- 范围支持有符号整数、小数、e/E 科学计数法和 `~`、`\~`、`–`、`—`、`-`、`至`；必须完整匹配。单位可重复、尾部共享，或来自已验证同列的表头。
+- `X2` 或合法 LaTeX 下标不单独触发多值；`x_2=8` 中的 8 仍需检查，不整体忽略公式区块。
+- `2 m–4 cm`、`11%,24%`、数字内部 OCR 空格等不能当作同单位简单范围；新增 measurement_value_structure_unresolved 说明多数字结构未确定。未匹配上下文、额外量和不明 OCR 数字继续复核。
+- 字段、引文、条件和原文完全保留；不换算单位、不把结构通过标为 accepted，semantic_status 仍为 not_verified。
+
+报告展示端点、连接符及全部单位位置。新档案在其他复核项仍存在时也验证绑定；篡改单位位置或关系不能借助待复核状态绕过校验。历史候选不会在读取时被新规则重新裁定。

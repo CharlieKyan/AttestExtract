@@ -69,7 +69,16 @@ def record(context="厚度17.5 m", value="17.5", unit="m", *,
 
 
 def run(task, source, *records):
-    return extract(source, task, backend=ReplayBackend([{"records": list(records)}]))
+    return extract(source, task, backend=ReplayBackend([{"records": [flat_record(item) for item in records]}]))
+
+
+def flat_record(record):
+    """Keep evidence fixture mutations readable while emitting the new wire shape."""
+    payload = deepcopy(record)
+    fields = payload.pop("fields")
+    payload["values"] = {name: field["value"] for name, field in fields.items()}
+    payload["quotes"] = {name: field["quote"] for name, field in fields.items()}
+    return payload
 
 
 def assert_exact_span(evidence, source, token, start):
@@ -231,7 +240,7 @@ def test_table_header_unit_maps_to_original_header_in_later_chunk(task):
     source = header + "\n| --- | --- | --- |\n| 样品甲 | 9 | 25 |\n" + row + "\n"
     response = record(row, subject="样品乙", unit_quote=header)
     chunks = chunk_document(source, table_rows_per_chunk=1)
-    responses = [{"records": [response]} if row in chunk.text else {"records": []} for chunk in chunks]
+    responses = [{"records": [flat_record(response)]} if row in chunk.text else {"records": []} for chunk in chunks]
     result = extract(source, task, backend=ReplayBackend(responses), table_rows_per_chunk=1)
     measurement = result.candidates[0].measurements["reading"]
     assert measurement.unit_source == "table_header"
@@ -449,7 +458,7 @@ def test_malformed_unknown_measurement_names_are_absent_from_error_diagnostics(t
 
 def test_duplicate_measurement_token_has_precise_safe_path_and_retry_feedback(task):
     source = "样品甲厚度17.5 m。"
-    corrected = {"records": [record()]}
+    corrected = {"records": [flat_record(record())]}
     private_value = "synthetic-private-raw-value"
     malformed = json.dumps(corrected, ensure_ascii=False).replace(
         '"value_text": "17.5"',

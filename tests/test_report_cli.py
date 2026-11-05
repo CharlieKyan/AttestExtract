@@ -48,7 +48,7 @@ def configured_backend(monkeypatch, *, quote="12", failure=False):
             if failure:
                 raise BackendError("Synthetic failure")
             return BackendResponse(text=json.dumps({"records": [{
-                "record_type": "entry", "fields": {"amount": {"value": 12, "quote": quote}},
+                "record_type": "entry", "values": {"amount": 12}, "quotes": {"amount": quote},
             }]}))
 
     monkeypatch.setattr("attestextract.backends.OpenAICompatibleBackend", OfflineBackend)

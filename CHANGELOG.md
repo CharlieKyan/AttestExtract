@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.0.dev17
+
+- Use flat-v1 (`values`/`quotes`, with task-declared measurements) for all new model calls, schemas, examples, retries and cached response parsing. Keep native-v1 only as an explicit built-in offline ReplayBackend option; never auto-detect, repair, or fall back to legacy model output.
+- Preserve original responses separately from normalized internal records; record protocol in requests, run metadata, CLI checks and checkpoint identity. Package/protocol changes require a new run. Provider structured-output modes remain independent of extraction protocol.
+- Emit result schema 0.3 with exact, locally derived range endpoint/separator/unit bindings. Resolve repeated units only for a fully recognized same-unit range; retain review for mixed units, lists, damaged OCR and independent quantities. Classify clear identifier/subscript digits without discarding mathematical expressions.
+- Preserve 0.1/0.2 archive identity/check semantics. New bindings are validated on archive load even when other review issues remain. Reports expose each original span and unit relationship; mechanical checks never accept facts.
+- Add synthetic offline protocol/evidence package acceptance and regression tests. Historical saved responses may be replayed separately; no new paid model calls or universal live-format guarantee accompany this release.
+
 ## 0.1.0.dev16
 
 - Roll back the CLI default format regeneration from one to zero after saved live failures showed no recovery in the observed attempts. Keep explicit CLI/profile one, Python behavior, per-chunk reservations and strict failures unchanged; this limited evidence does not establish that regeneration never helps.

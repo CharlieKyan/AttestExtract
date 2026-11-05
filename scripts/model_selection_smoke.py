@@ -49,7 +49,7 @@ def main():
         observed.append({"model": body["model"], "host": request.url.host})
         return httpx.Response(200, json={"model": body["model"], "choices": [{
             "finish_reason": "stop", "message": {"content": json.dumps({"records": [{
-                "record_type": "power", "fields": {"value": {"value": 8, "quote": "8"}},
+                "record_type": "power", "values": {"value": 8}, "quotes": {"value": "8"},
             }]})},
         }]})
 

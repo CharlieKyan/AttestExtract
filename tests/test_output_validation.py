@@ -1,4 +1,4 @@
-"""Output failures explain every invalid field without exposing model inputs."""
+"""Legacy offline output failures explain every invalid field without exposing model inputs."""
 
 from __future__ import annotations
 
@@ -11,7 +11,10 @@ from attestextract.backends import ReplayBackend
 from attestextract.diagnostics import RunTrace
 from attestextract.errors import InvalidResponseError
 from attestextract.models import BackendResponse
-from attestextract.pipeline import _parse_response
+from functools import partial
+from attestextract.pipeline import _parse_response as _parser
+
+_parse_response = partial(_parser, output_protocol="native-v1")
 
 
 TASK = {
@@ -44,7 +47,7 @@ def trace_failure(tmp_path, raw, *, secret=None):
     directory = tmp_path / "trace"
     trace = RunTrace(directory, secrets=[secret] if secret else [])
     with pytest.raises(InvalidResponseError) as caught:
-        extract("Synthetic source only.", TASK, backend=ReplayBackend([raw]), trace=trace)
+        extract("Synthetic source only.", TASK, backend=ReplayBackend([raw], output_protocol="native-v1"), trace=trace)
     exc = caught.value
     assert isinstance(exc.validation_details, dict)
     assert exc.validation_artifact is not None
@@ -146,7 +149,7 @@ def test_correct_field_wrapper_with_missing_quote_is_preserved_for_review(tmp_pa
             "subject": {"value": "Sample A", "quote": "Sample A"},
             "value": {"value": 12},
         },
-    }]}]), trace=trace)
+    }]}], output_protocol="native-v1"), trace=trace)
     trace.finish(result.model_dump(mode="json"))
 
     assert len(result.candidates) == 1
@@ -228,7 +231,7 @@ def test_cli_masks_raw_and_json_escaped_secrets_in_error_paths_and_every_trace_a
 
         def generate(self, request):
             return BackendResponse(text=json.dumps({"records": [{
-                "record_type": "entry", "fields": {secret: "bare synthetic value"},
+                "record_type": "entry", "values": {secret: "bare synthetic value"}, "quotes": {},
             }]}))
 
     monkeypatch.setattr("attestextract.backends.OpenAICompatibleBackend", OfflineBackend)

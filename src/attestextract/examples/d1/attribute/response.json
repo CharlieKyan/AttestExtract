@@ -2,18 +2,28 @@
   "records": [
     {
       "record_type": "product_attribute",
-      "fields": {
-        "product": {"value": "云杉灯", "quote": "产品云杉灯的额定功率为8 W。"},
-        "rated_power": {"value": 8, "quote": "产品云杉灯的额定功率为8 W。"},
-        "power_unit": {"value": "W", "quote": "产品云杉灯的额定功率为8 W。"}
+      "values": {
+        "product": "云杉灯",
+        "rated_power": 8,
+        "power_unit": "W"
+      },
+      "quotes": {
+        "product": "产品云杉灯的额定功率为8 W。",
+        "rated_power": "产品云杉灯的额定功率为8 W。",
+        "power_unit": "产品云杉灯的额定功率为8 W。"
       }
     },
     {
       "record_type": "product_attribute",
-      "fields": {
-        "product": {"value": "云杉灯", "quote": "产品云杉灯的额定功率为8 W。"},
-        "rated_power": {"value": 80, "quote": "产品云杉灯的额定功率为80 W。"},
-        "power_unit": {"value": "W", "quote": "产品云杉灯的额定功率为8 W。"}
+      "values": {
+        "product": "云杉灯",
+        "rated_power": 80,
+        "power_unit": "W"
+      },
+      "quotes": {
+        "product": "产品云杉灯的额定功率为8 W。",
+        "rated_power": "产品云杉灯的额定功率为80 W。",
+        "power_unit": "产品云杉灯的额定功率为8 W。"
       }
     }
   ]

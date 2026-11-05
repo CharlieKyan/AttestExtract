@@ -3,8 +3,8 @@
 Dev9 adds provider/model selection on top of the dev8 profiles and registry.
 Configure credentials once, then change one model identifier in Python or CLI.
 No provider SDK or LangExtract dependency is needed. Existing backend injection,
-profiles, legacy CLI environment configuration, result schema 0.2 (including
-reading 0.1), evidence rules, and opt-in format regeneration remain available.
+profiles, legacy CLI environment configuration, result schema 0.3 (including
+reading 0.1/0.2), evidence rules, and opt-in format regeneration remain available.
 The [D2 acceptance checklist](D2_ACCEPTANCE.md) records the verification scope.
 
 Dev10 makes CLI output/report/diagnostic paths optional as a group and adds concise progress plus local-only `--check`. See [CLI experience](CLI_EXPERIENCE.md) for defaults, TLS compatibility and JSON error handling.
@@ -273,7 +273,7 @@ do not trigger local format regeneration.
 
 Trace paths and `trace_schema_version: "0.3"` remain unchanged; response metadata
 and errors gain additive fields. A replay/unified-request artifact also gains
-`generation`. Result schema stays 0.2. These logs may contain private source/model
+`generation`. Result schema is 0.3. These logs may contain private source/model
 text and belong outside the public repository.
 
 ## Reproducible acceptance
@@ -306,3 +306,5 @@ Offline/mock acceptance and live acceptance must always be reported separately.
 ## Execution policy and recovery (dev12)
 
 The CLI now uses output-aware planning and bounded truncation subdivision. The generation-call budget includes format regeneration, parent/child calls and saved reservations from the selected recovery chain. HTTP retries remain adapter-controlled. Python opts in with `ExecutionOptions`; custom persistent backends require an explicit non-secret `backend_identity` binding all output-affecting configuration. The framework also rejects normalized non-stop completions before parsing records. See [execution and recovery](EXECUTION.md) for exact defaults, resume identity, observed cumulative usage and offline acceptance.
+
+Dev17 fixes the new-call wire protocol to flat-v1 independently of provider selection and structured_output. Only the built-in ReplayBackend can explicitly decode historical native-v1 responses offline. Custom backends must return flat; mode/name attributes cannot select the legacy protocol.

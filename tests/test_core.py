@@ -47,7 +47,7 @@ def replay(*responses: dict | str) -> ReplayBackend:
     return ReplayBackend([
         json.dumps(item, ensure_ascii=False) if isinstance(item, dict) else item
         for item in responses
-    ])
+    ], output_protocol="native-v1")
 
 
 def test_unicode_offsets_round_trip_to_the_original_source(task):
@@ -66,7 +66,7 @@ def test_unicode_offsets_round_trip_to_the_original_source(task):
     assert candidate.fields["subject"].evidence.start == len("前置🙂\n\n")
     assert result.source.character_count == len(text)
     assert result.source.name == "中文.md"
-    assert result.schema_version == "0.2"
+    assert result.schema_version == "0.3"
     assert result.run.mode == "replay"
     assert result.run.candidate_count == 1
 

@@ -2,22 +2,36 @@
   "records": [
     {
       "record_type": "flow_observation",
-      "fields": {
-        "sample": {"value": "试样青禾", "quote": "试样青禾在18 °C下的通量为7 L/h。"},
-        "flow": {"value": 7, "quote": "试样青禾在18 °C下的通量为7 L/h。"},
-        "flow_unit": {"value": "L/h", "quote": "试样青禾在18 °C下的通量为7 L/h。"},
-        "temperature": {"value": 18, "quote": "试样青禾在18 °C下的通量为7 L/h。"},
-        "temperature_unit": {"value": "°C", "quote": "试样青禾在18 °C下的通量为7 L/h。"}
+      "values": {
+        "sample": "试样青禾",
+        "flow": 7,
+        "flow_unit": "L/h",
+        "temperature": 18,
+        "temperature_unit": "°C"
+      },
+      "quotes": {
+        "sample": "试样青禾在18 °C下的通量为7 L/h。",
+        "flow": "试样青禾在18 °C下的通量为7 L/h。",
+        "flow_unit": "试样青禾在18 °C下的通量为7 L/h。",
+        "temperature": "试样青禾在18 °C下的通量为7 L/h。",
+        "temperature_unit": "试样青禾在18 °C下的通量为7 L/h。"
       }
     },
     {
       "record_type": "flow_observation",
-      "fields": {
-        "sample": {"value": "试样青禾", "quote": "试样青禾在36 °C下的通量为7 L/h。"},
-        "flow": {"value": 7, "quote": "试样青禾在36 °C下的通量为7 L/h。"},
-        "flow_unit": {"value": "L/h", "quote": "试样青禾在36 °C下的通量为7 L/h。"},
-        "temperature": {"value": 36, "quote": "试样青禾在36 °C下的通量为7 L/h。"},
-        "temperature_unit": {"value": "°C", "quote": "试样青禾在36 °C下的通量为7 L/h。"}
+      "values": {
+        "sample": "试样青禾",
+        "flow": 7,
+        "flow_unit": "L/h",
+        "temperature": 36,
+        "temperature_unit": "°C"
+      },
+      "quotes": {
+        "sample": "试样青禾在36 °C下的通量为7 L/h。",
+        "flow": "试样青禾在36 °C下的通量为7 L/h。",
+        "flow_unit": "试样青禾在36 °C下的通量为7 L/h。",
+        "temperature": "试样青禾在36 °C下的通量为7 L/h。",
+        "temperature_unit": "试样青禾在36 °C下的通量为7 L/h。"
       }
     }
   ]

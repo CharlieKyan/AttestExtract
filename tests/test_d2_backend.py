@@ -14,7 +14,7 @@ from attestextract.pipeline import extract
 
 
 TASK = {"name": "synthetic", "record_types": {"item": {"fields": {"name": {"type": "string"}}}}}
-RECORDS = '{"records":[{"record_type":"item","fields":{"name":{"value":"A","quote":"A"}}}]}'
+RECORDS = '{"records":[{"record_type":"item","values":{"name":"A"},"quotes":{"name":"A"}}]}'
 
 
 def request():

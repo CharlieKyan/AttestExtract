@@ -16,8 +16,9 @@ from pydantic import Field, ValidationError
 from .diagnostics import RunTrace
 from .errors import BackendError, ConfigurationError, InvalidResponseError
 from .models import (BackendResponse, ContractModel, DocumentChunk, ExecutionOptions,
-                     GenerationOptions, SourceSpan, TaskSpec)
+                     GenerationOptions, OutputProtocol, SourceSpan, TaskSpec)
 from .planning import plan_chunks, split_chunk
+from .output_protocol import output_protocol_for_backend
 # Hold the concrete built-in type, not a mutable registry/factory replacement.
 from .backends import OpenAICompatibleBackend as _CompatibleBackend
 from .responses_backend import DeepSeekResponsesBackend as _ResponsesBackend
@@ -65,6 +66,7 @@ class _Node(ContractModel):
 class _State(ContractModel):
     checkpoint_version: Literal["2"] = "2"
     fingerprint: str
+    output_protocol: OutputProtocol = "native-v1"
     roots: list[str]
     nodes: dict[str, _Node]
     max_model_calls: int = Field(gt=0)
@@ -129,14 +131,15 @@ def _resume_directories(resume_from: str | Path) -> list[Path]:
 class ExecutionSession:
     def __init__(self, text: str, chunks: list[DocumentChunk], options: ExecutionOptions,
                  fingerprint: str, *, trace: RunTrace | None = None,
-                 resume_from: str | Path | None = None, format_retries: int = 0) -> None:
+                 resume_from: str | Path | None = None, format_retries: int = 0,
+                 output_protocol: OutputProtocol = "flat-v1") -> None:
         if resume_from is not None and trace is not None and trace.directory is not None:
             check_resume_paths(resume_from, [trace.directory])
         self.text, self.options, self.trace = text, options, trace
         self.chunks = {chunk.chunk_id: chunk for chunk in chunks}
         self.cached: dict[str, BackendResponse] = {}
         self.reused = 0
-        self.state = _State(fingerprint=fingerprint, roots=list(self.chunks),
+        self.state = _State(fingerprint=fingerprint, output_protocol=output_protocol, roots=list(self.chunks),
                             nodes={chunk.chunk_id: _Node(segments=chunk.segments, depth=0) for chunk in chunks},
                             max_model_calls=options.max_model_calls or max(1, 3 * len(chunks)),
                             format_retries=format_retries)
@@ -166,8 +169,9 @@ class ExecutionSession:
         try:
             envelope = json.loads(path.read_bytes().decode("utf-8"))
             state = _read_state(envelope)
-            if state.fingerprint != self.state.fingerprint or state.roots != self.state.roots:
-                raise ConfigurationError("Resume identity mismatch: use the same source, task, package version, model, endpoint and generation/planning settings. Only the total call budget and format-retry allowance may change; consumed allowances are retained.")
+            if (state.fingerprint != self.state.fingerprint or state.roots != self.state.roots
+                    or state.output_protocol != self.state.output_protocol):
+                raise ConfigurationError("Resume identity mismatch: use the same source, task, package version, output protocol, model, endpoint and generation/planning settings. Only the total call budget and format-retry allowance may change; consumed allowances are retained.")
             pending = [(self.chunks[key], 0) for key in state.roots]
             visited = set()
             while pending:
@@ -365,11 +369,12 @@ def prepare_execution(text: str, task: TaskSpec, backend: Any, generation: Gener
     if not isinstance(backend_identity, str) or not backend_identity:
         raise ConfigurationError("backend_identity must be a nonempty string; do not include credentials.")
     chunks = plan_chunks(text, task, generation, options, max_chars=max_chars, table_rows_per_chunk=table_rows_per_chunk)
-    fingerprint = digest({"package_version": __version__, "source": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+    output_protocol = output_protocol_for_backend(backend)
+    fingerprint = digest({"package_version": __version__, "output_protocol": output_protocol, "source": hashlib.sha256(text.encode("utf-8")).hexdigest(),
                           "source_name": source_name, "task": task.model_dump(mode="json"),
                           "backend": backend_identity, "backend_name": backend.name,
                           "generation": generation.model_dump(mode="json"),
                           "policy": options.model_dump(exclude={"max_model_calls"}),
                           "max_chars": max_chars, "table_rows_per_chunk": table_rows_per_chunk})
     return ExecutionSession(text, chunks, options, fingerprint, trace=trace, resume_from=resume_from,
-                            format_retries=format_retries)
+                            format_retries=format_retries, output_protocol=output_protocol)

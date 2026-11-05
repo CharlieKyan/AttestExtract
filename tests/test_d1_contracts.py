@@ -44,7 +44,7 @@ def make_result(*, text=TEXT, changes=None):
     document = Document.from_text(text, source_name="synthetic.txt")
     result = extract(
         document, TASK,
-        backend=ReplayBackend([{"records": [{"record_type": "observation", "fields": fields}]}]),
+        backend=ReplayBackend([{"records": [{"record_type": "observation", "fields": fields}]}], output_protocol="native-v1"),
     )
     return document, result
 
@@ -113,7 +113,7 @@ def test_extract_accepts_document_and_keeps_string_api_compatible():
         evidence = field.evidence
         assert TEXT[evidence.start:evidence.end] == evidence.quote
     response = {"records": []}
-    string_result = extract(TEXT, TASK, backend=ReplayBackend([response]))
+    string_result = extract(TEXT, TASK, backend=ReplayBackend([response], output_protocol="native-v1"))
     assert string_result.source.sha256 == result.source.sha256
 
 

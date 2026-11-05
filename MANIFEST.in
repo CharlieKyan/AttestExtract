@@ -6,4 +6,5 @@ include scripts/model_selection_smoke.py
 include scripts/execution_smoke.py
 include scripts/format_recovery_smoke.py
 include scripts/structured_output_smoke.py
+include scripts/protocol_evidence_smoke.py
 recursive-include docs *.md

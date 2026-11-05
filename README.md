@@ -2,7 +2,7 @@
 
 Schema-driven extraction from text and tables, with source-linked evidence and pluggable decision backends.
 
-**Early prototype · `0.1.0.dev16` · Python 3.11+**
+**Early prototype · `0.1.0.dev17` · Python 3.11+**
 
 Dev16 rolls back the CLI's automatic format regeneration default to zero; explicit `--format-retries 1` and profile settings remain supported. Saved live failures show that switching to Responses Schema did not prevent malformed JSON. The adapter and diagnostics remain available, without claiming a format-reliability fix. Shape guidance is appended only when a specific hint exists. See [observed limits](docs/STRUCTURED_OUTPUT.md).
 
@@ -149,13 +149,13 @@ from the task and sends `response_format` with `type: "json_schema"` and
 `strict: true`. The Python backend equivalent is
 `OpenAICompatibleBackend(..., structured_output="json_schema")`.
 
-In strict mode, every declared field has a required `{ "value": ..., "quote": ... }` wrapper. The task's scalar type constrains the **inner `value`**, and `quote` remains a string. For an unreported field, return `value: null` and `quote: ""`; the existing review rules apply, and this does not create an accepted record. With structured output off, optional unreported fields may still be omitted.
+New model calls use **flat-v1**: each record has `record_type`, `values`, `quotes`, and task-declared `measurements`. `values` maps field names to their declared scalar types; `quotes` maps the same names to verbatim source strings. Strict schemas require all declared keys: missing information uses a null value and empty quote. Missing evidence still enters review; schema diagnostics and candidate acceptance are separate. This wire protocol is independent of the service structured-output mode and cannot be switched to the old format for live calls.
 
 The provider/model must support this schema format. HTTP 400/422 failures stop the run; AttestExtract does not silently fall back to unstructured output or issue a format retry for HTTP errors. Normal transient-network retry rules still apply. [Wenwen's structured-output documentation](https://wenwen-ai.apifox.cn/305807074e0) shows this request format; support must be checked on the actual provider/model route. Local validation remains mandatory even when the endpoint accepts the parameter.
 
 ### Bounded format regeneration
 
-Prompts require unique keys in each JSON object, the declared scalar types, and exactly one `value` and one `quote` per supplied field wrapper. A nested `fields.value.value` is valid; two `value` keys in the same object are rejected, even when their values agree. The parser also rejects non-finite numbers. Diagnostics identify `duplicate_key` and `non_finite_number` paths, masking undeclared key names; ordinary JSON syntax errors retain line and column information. Nothing is silently repaired or overwritten.
+Prompts require unique keys in each JSON object and declared scalar types. `values.value` is the scalar for a task field named value; `quotes.value` contains its source quotation. Duplicate keys are rejected even when their values agree. The parser also rejects non-finite numbers. Diagnostics identify `duplicate_key` and `non_finite_number` paths, masking undeclared key names; ordinary JSON syntax errors retain line and column information. Nothing is silently repaired or overwritten.
 
 CLI `extract --format-retries 0|1` defaults to `0`. With an explicit CLI/profile setting of `1`, a local JSON, record-contract, or task-schema failure allows **one new generation for that chunk** using the same source, task, and schema plus bounded validation feedback. The new response must pass structural validation and undergo the usual evidence checks. Earlier successful chunks are not rerun. Python retains its default `0`; opt in with `extract(text, task, backend=backend, format_retries=1)`.
 
@@ -301,10 +301,10 @@ A task declares record types, scalar fields, and optional identity/condition fie
 }
 ```
 
-Types are `string`, `integer`, `number`, and `boolean`; booleans do not count as integers. These types apply to the inner `value`, not to its field wrapper; `quote` must always be a string. For the synthetic source `Sample A measured 12 bar at 20 °C.`, a complete completion for the task above is:
+Types are `string`, `integer`, `number`, and `boolean`; booleans do not count as integers. They constrain the entries in `values`; entries in `quotes` must be strings. For the synthetic source `Sample A measured 12 bar at 20 °C.`, a complete completion for the task above is:
 
 ```json
-{"records": [{"record_type": "measurement", "fields": {"subject": {"value": "Sample A", "quote": "Sample A measured 12 bar at 20 °C."}, "value": {"value": 12, "quote": "Sample A measured 12 bar at 20 °C."}, "condition": {"value": "20 °C", "quote": "Sample A measured 12 bar at 20 °C."}}}]}
+{"records": [{"record_type": "measurement", "values": {"subject": "Sample A", "value": 12, "condition": "20 °C"}, "quotes": {"subject": "Sample A measured 12 bar at 20 °C.", "value": "Sample A measured 12 bar at 20 °C.", "condition": "Sample A measured 12 bar at 20 °C."}}]}
 ```
 
 Only declared record types and fields are accepted. Invalid JSON, unknown fields, and wrong scalar types fail explicitly. Missing/null/blank required, identity, or condition fields enter the review queue. Optional missing values produce informational items; empty records still require review. Outside strict structured mode, omitting an optional field is allowed. `not_applicable_when` classifies missing values only; an explicitly reported unit such as `%` remains reported even for a dimensionless parameter.
@@ -364,7 +364,7 @@ If no explicit review is supplied, candidates become `unreviewed`, or `needs_rev
 - Input is a UTF-8 `.txt` or `.md` document. Paragraphs and simple pipe tables are chunked, preserving original source segments; later table batches repeat their original headers. The default target is 6,000 characters and at most 12 rows per table batch. A header or row is atomic and may exceed the character target. Convert PDFs externally with a tool such as MinerU before extraction.
 - Each candidate retains field values, quoted evidence, a stable ID, chunk IDs, and structural/evidence checks. Conditions remain ordinary schema fields. Half-open `start`/`end` offsets count Unicode characters in the decoded input string, not UTF-8 bytes or UTF-16 code units: `text[start:end] == quote` for uniquely matched evidence.
 - Evidence for reported values must match exactly within the current chunk's original source segments. Missing, absent, or ambiguous quotes require review; ambiguous matches have no guessed `start`/`end`. Optional null/blank/omitted fields produce one `info` item rather than two review failures. Task-declared critical conditions remain blocking. Only identical candidates grounded at the same source locations are deduplicated. Equal values from different locations or conditions remain separate.
-- New result JSON uses `schema_version: "0.2"`, with `package_version`, `task`, `source`, `candidates`, `review`, `links`, and `run`. The reader still accepts `0.1`; older readers need upgrading for `0.2`. Review items have `severity: "review" | "info"`. Candidate `field_status` distinguishes reported, not reported by the model, task-declared not applicable, and required missing. Configured `measurements` keep shared context and exact token spans; their `semantic_status` remains `not_verified`. New identity rules for optional missing values and measurement metadata can change candidate IDs; do not reuse earlier review decisions without checking provenance. Run information includes backend, `live`/`replay` mode, model, counts, attempts, usage if reported, and elapsed time. A successful empty extraction has no candidates; failures raise exceptions instead.
+- New result JSON uses `schema_version: "0.3"`, with `package_version`, `task`, `source`, `candidates`, `review`, `links`, and `run`. The reader still accepts `0.1` and `0.2`; older readers need upgrading for `0.3`. Review items have `severity: "review" | "info"`. Candidate `field_status` distinguishes reported, not reported by the model, task-declared not applicable, and required missing. Configured `measurements` keep shared context and exact token spans; their `semantic_status` remains `not_verified`. New identity rules for optional missing values and measurement metadata can change candidate IDs; do not reuse earlier review decisions without checking provenance. Run information includes backend, `live`/`replay` mode, model, counts, attempts, usage if reported, and elapsed time. A successful empty extraction has no candidates; failures raise exceptions instead.
 - A matched quote proves that text occurs at a location. It **does not prove that the extracted value is supported or factually correct**. This version has no semantic support verification, factual adjudication, entity resolution, full PDF parsing, or complete replacement for the original CCUS workflow's Stage2.5/Stage3.
 
 `ExtractionBackend` defines the generation boundary. `ReplayBackend` is available for explicit offline replay and tests. `DecisionBackend`, `DecisionTask`, and `DecisionResult` reserve a separate decision boundary: `validate_decision` allows selecting only a supplied candidate, rejecting, or requesting review. Decisions cannot invent a replacement candidate. The extraction pipeline does not yet call a decision backend.
@@ -384,3 +384,20 @@ Next steps are a Jev-style bounded decision adapter, conflict handling and suppo
 Related work: [LangExtract](https://github.com/google/langextract) and the existing [JevExtract](https://github.com/gabazureus/jevextract) project. AttestExtract is a separate early project and does not vendor either implementation.
 
 No license has been added to this early repository. Public availability does not grant an open-source license. This version is not published to PyPI.
+
+
+### Flat protocol and range evidence (dev17)
+
+The internal candidate/archive format still uses `fields`. Model text is saved separately from `normalized/<stem>.json`; `output-protocol.json` records the selected extraction protocol. An HTTP `responses/<stem>.protocol.json` describes the provider envelope and has a different purpose. New extraction metadata records `run.output_protocol`.
+
+For explicit historical offline replay only, use `ReplayBackend(responses, output_protocol="native-v1")`. The default replay format is flat, as are all new live requests and examples. There is no protocol auto-detection or fallback. Keep old raw files: invalid legacy JSON still fails. Missing quote keys produce missing evidence rather than invented quotes; quote-only keys fail.
+
+Result schema 0.3 adds local `range_binding` evidence: two exact endpoints, a separator, unit positions and their shared/per-endpoint/table-header relationship. Repeated unit strings keep their original ambiguous match list while a valid range binding resolves their relationship. Clear identifier/subscript digits are distinguished from independent quantities; malformed OCR and mixed units stay in review. Old archives keep their legacy identity and check semantics. Package/protocol changes require a new run; old checkpoints are not migrated.
+
+See [measurement review](docs/MEASUREMENT_REVIEW.md) for boundaries. To verify an installed package with synthetic material and no network calls:
+
+```powershell
+python scripts/protocol_evidence_smoke.py --output-dir outputs/protocol-evidence-check
+```
+
+Use a fresh output directory. This acceptance checks software behavior, not a new model success rate.

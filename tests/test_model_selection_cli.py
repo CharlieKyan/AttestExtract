@@ -13,7 +13,7 @@ TEXT = "Lamp A uses 8 W."
 TASK = {"name": "synthetic-power", "record_types": {"power": {
     "fields": {"value": {"type": "integer", "required": True}},
 }}}
-RESPONSE = '{"records":[{"record_type":"power","fields":{"value":{"value":8,"quote":"8"}}}]}'
+RESPONSE = '{"records":[{"record_type":"power","values":{"value":8},"quotes":{"value":"8"}}]}'
 
 
 @pytest.fixture(autouse=True)

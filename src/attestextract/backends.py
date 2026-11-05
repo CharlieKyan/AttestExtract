@@ -472,7 +472,11 @@ class ReplayBackend:
     name = "replay"
     mode = "replay"
 
-    def __init__(self, responses: Sequence[str | dict[str, Any]]) -> None:
+    def __init__(self, responses: Sequence[str | dict[str, Any]], *,
+                 output_protocol: Literal["flat-v1", "native-v1"] = "flat-v1") -> None:
+        if output_protocol not in ("flat-v1", "native-v1"):
+            raise ConfigurationError("Replay output_protocol must be flat-v1 or native-v1.")
+        self.output_protocol = output_protocol
         if isinstance(responses, (str, bytes)) or not isinstance(responses, Sequence):
             raise ConfigurationError("Replay responses must be a sequence of strings or objects.")
         self._responses = list(responses)

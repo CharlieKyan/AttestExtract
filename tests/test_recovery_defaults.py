@@ -16,7 +16,7 @@ from attestextract.providers import resolve_model_config
 TASK = {"name": "Synthetic power", "record_types": {"power": {
     "fields": {"value": {"type": "integer", "required": True}},
 }}}
-VALID = '{"records":[{"record_type":"power","fields":{"value":{"value":8,"quote":"8"}}}]}'
+VALID = '{"records":[{"record_type":"power","values":{"value":8},"quotes":{"value":"8"}}]}'
 
 
 @pytest.fixture(autouse=True)

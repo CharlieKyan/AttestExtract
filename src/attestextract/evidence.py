@@ -11,6 +11,7 @@ from .models import (
     Candidate, CandidateLink, DocumentChunk, EvidenceRef, FieldValue,
     MeasurementEvidence, MeasurementInput, MeasurementSpec, Scalar, SourceSpan, TaskSpec,
 )
+from .measurement_syntax import bind_range, numeric_tokens
 
 
 def ground_quote(text: str, chunk: DocumentChunk, quote: str) -> EvidenceRef:
@@ -112,7 +113,8 @@ def _table_column(text: str, span: EvidenceRef) -> tuple[int, int, int] | None:
 
 
 def check_measurement(text: str, chunk: DocumentChunk, raw: MeasurementInput,
-                      spec: MeasurementSpec, fields: dict[str, FieldValue]) -> MeasurementEvidence:
+                      spec: MeasurementSpec, fields: dict[str, FieldValue], *,
+                      schema_version: str = "0.3") -> MeasurementEvidence:
     context = ground_quote(text, chunk, raw.context_quote)
     value = _token(text, context, raw.value_text)
     unit_context = ground_quote(text, chunk, raw.unit_quote) if raw.unit_quote else context
@@ -149,16 +151,41 @@ def check_measurement(text: str, chunk: DocumentChunk, raw: MeasurementInput,
             end = text.find("\n", row[1])
             pipes = [row[1] + match.start() for match in re.finditer(r"\|", text[row[1]:end if end >= 0 else len(text)])]
             scope_start, scope_end = pipes[row[2]] + 1, pipes[row[2] + 1]
+    binding = None
+    if schema_version == "0.3" and context.status == value.status == "matched":
+        binding, simple_range = bind_range(text, context, value, unit,
+                                          table_header=bool(raw.unit_quote))
+        if binding is not None and "measurement_header_mismatch" not in issues:
+            issues = [code for code in issues if code != "measurement_unit_unresolved"]
+        else:
+            binding = None
+        # Do not hide several quantities merely because the entire value string
+        # was located. Unit exponents are not additional measured quantities.
+        value_without_units = "".join(
+            " " if any(span.start <= index < span.end for span in unit.matches) else text[index]
+            for index in range(value.start, value.end)
+        )
+        if len(numeric_tokens(value_without_units)) > 1 and not simple_range:
+            issues.append("measurement_value_structure_unresolved")
     if context.status == value.status == "matched":
         excluded = [value] + ([unit] if not raw.unit_quote and unit.status == "matched" else [])
-        remainder = "".join(text[index] for index in range(scope_start, scope_end)
-                            if not any(item.start <= index < item.end for item in excluded))
-        if re.search(r"\d", remainder):
+        # Keep removed positions as spaces in the new checker: concatenating
+        # either side can manufacture an identifier that was never in the source.
+        if schema_version == "0.3":
+            remainder = "".join(" " if any(item.start <= index < item.end for item in excluded)
+                                else text[index] for index in range(scope_start, scope_end))
+            extra_numbers = bool(numeric_tokens(remainder))
+        else:
+            remainder = "".join(text[index] for index in range(scope_start, scope_end)
+                                if not any(item.start <= index < item.end for item in excluded))
+            extra_numbers = bool(re.search(r"\d", remainder))
+        if extra_numbers:
             issues.append("measurement_multiple_values")
     return MeasurementEvidence(context=context, value=value, unit=unit,
                                unit_context=unit_context if raw.unit_quote else None,
                                unit_source="table_header" if raw.unit_quote else "context",
-                               condition_fields=spec.condition_fields, issues=issues)
+                               condition_fields=spec.condition_fields, issues=issues,
+                               range_binding=binding)
 
 
 def link_candidates(candidates: list[Candidate], task: TaskSpec) -> list[CandidateLink]:

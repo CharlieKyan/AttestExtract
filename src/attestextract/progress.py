@@ -55,6 +55,7 @@ class ConsoleProgress:
         prefix = f"[{self.current}/{self.total}]"
         if stage == "configuration" and kind == "completed":
             self._write(f"Model: {event.get('model', '?')} | output: {event.get('structured_output', '?')} | "
+                        f"protocol: {event.get('output_protocol', 'flat-v1')} | "
                         f"token limit: {event.get('max_output_tokens') or 'provider default'} | "
                         f"HTTP attempts: {event.get('max_attempts', '?')} | format retries: {event.get('format_retries', '?')}")
         elif stage == "document" and kind == "completed":

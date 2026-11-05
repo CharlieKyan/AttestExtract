@@ -33,10 +33,8 @@ TASK = {
 def record(subject="Sample A", amount=12, quote=QUOTE):
     return {
         "record_type": "measurement",
-        "fields": {
-            "subject": {"value": subject, "quote": quote},
-            "amount": {"value": amount, "quote": quote},
-        },
+        "values": {"subject": subject, "amount": amount},
+        "quotes": {"subject": quote, "amount": quote},
     }
 
 
@@ -46,11 +44,10 @@ def encoded(*records):
 
 def duplicate_amount(second_value):
     return (
-        '{"records":[{"record_type":"measurement","fields":{'
-        '"subject":{"value":"Sample A","quote":"Sample A amount 12."},'
-        '"amount":{"value":12,"quote":"Sample A amount 12.",'
-        f'"value":{second_value}'
-        '}}}]}'
+        '{"records":[{"record_type":"measurement","values":{'
+        '"subject":"Sample A","amount":12,'
+        f'"amount":{second_value}'
+        '},"quotes":{"subject":"Sample A amount 12.","amount":"Sample A amount 12."}}]}'
     )
 
 
@@ -91,7 +88,7 @@ def test_format_retry_setting_is_strict_and_checked_before_model_calls(invalid):
     pytest.param('{"records":[ invalid-private-output', id="json-syntax"),
     pytest.param(json.dumps({"records": [{"record_type": "measurement", "fields": {"subject": "invalid-private-output"}}]}), id="records-contract"),
     pytest.param(encoded(record(amount="invalid-private-output")), id="task-schema"),
-    pytest.param(encoded(record()).replace('"value": 12', '"value": NaN'), id="non-finite-number"),
+    pytest.param(encoded(record()).replace('"amount": 12', '"amount": NaN'), id="non-finite-number"),
 ])
 def test_one_regeneration_preserves_source_task_schema_and_counts_all_replies(bad):
     backend = RecordingBackend(
@@ -139,7 +136,7 @@ def test_unknown_output_keys_and_values_are_not_recycled_into_retry_instructions
     unknown_key = "UNKNOWN-MODEL-PRIVATE-FIELD-MARKER"
     private_value = "untrusted-output-only-value"
     bad_record = record()
-    bad_record["fields"][unknown_key] = (
+    bad_record["values"][unknown_key] = (
         {"value": private_value, "quote": QUOTE} if wrapped else private_value
     )
     backend = RecordingBackend(encoded(bad_record), encoded(record()))
@@ -224,9 +221,9 @@ def test_regeneration_preserves_same_values_at_different_source_positions():
 def test_evidence_problems_stay_reviewable_without_format_regeneration(regenerate, quote, status):
     response = record()
     if quote is None:
-        del response["fields"]["amount"]["quote"]
+        del response["quotes"]["amount"]
     else:
-        response["fields"]["amount"]["quote"] = quote
+        response["quotes"]["amount"] = quote
     replies = (["not JSON"] if regenerate else []) + [encoded(response), encoded(record())]
     backend = RecordingBackend(*replies)
     result = extract(QUOTE + " Another reading is 12.", TASK, backend=backend, format_retries=1)

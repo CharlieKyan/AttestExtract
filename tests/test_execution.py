@@ -35,10 +35,9 @@ def read(path):
 def output(source):
     records = []
     for match in re.finditer(r"Item ([A-Z]) reads (\d+)\.", source):
-        records.append({"record_type": "reading", "fields": {
-            "subject": {"value": "Item " + match[1], "quote": match[0]},
-            "amount": {"value": int(match[2]), "quote": match[0]},
-        }})
+        records.append({"record_type": "reading",
+                        "values": {"subject": "Item " + match[1], "amount": int(match[2])},
+                        "quotes": {"subject": match[0], "amount": match[0]}})
     return json.dumps({"records": records})
 
 
@@ -227,7 +226,7 @@ def test_corrupt_checkpoint_is_rejected_before_any_new_calls(tmp_path, damage):
         envelope["sha256"] = digest(envelope["state"])
     else:
         payload = read(cache)
-        payload["text"] = '{"records":[{"record_type":"undeclared","fields":{}}]}'
+        payload["text"] = '{"records":[{"record_type":"undeclared","values":{},"quotes":{}}]}'
         cache.write_text(json.dumps(payload), encoding="utf-8")
         envelope["state"]["nodes"]["chunk-0003"]["cache_hash"] = digest(payload)
         # Earlier leaf pending, later cache invalid: all caches must be checked first.

@@ -17,6 +17,7 @@ def can_ground_fields(fields: dict[str, FieldValue]) -> bool:
 def grounded_candidate_id(
     source_sha256: str, record_type: str, fields: dict[str, FieldValue],
     measurements: dict[str, MeasurementEvidence] | None = None,
+    *, schema_version: str = "0.3",
 ) -> str:
     """Identify a candidate whose every field has one exact original span."""
     identity = {
@@ -24,6 +25,8 @@ def grounded_candidate_id(
         "fields": {name: value.model_dump() for name, value in sorted(fields.items())},
     }
     if measurements:
-        identity["measurements"] = {name: group.model_dump() for name, group in sorted(measurements.items())}
+        excluded = {"range_binding"} if schema_version in {"0.1", "0.2"} else set()
+        identity["measurements"] = {name: group.model_dump(exclude=excluded)
+                                    for name, group in sorted(measurements.items())}
     encoded = json.dumps(identity, sort_keys=True, ensure_ascii=False, allow_nan=False)
     return "candidate-" + hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:24]

@@ -96,7 +96,7 @@ def test_extract_reads_utf8_and_uses_the_configured_backend(extension, newline, 
         def generate(self, request):
             assert json.loads(request.messages[-1]["content"])["source"] == text
             return BackendResponse(text=json.dumps({
-                "records": [{"record_type": "purchase", "fields": {"amount": {"value": 120, "quote": "120"}}}]
+                "records": [{"record_type": "purchase", "values": {"amount": 120}, "quotes": {"amount": "120"}}]
             }))
 
     monkeypatch.setattr("attestextract.backends.OpenAICompatibleBackend", FakeBackend)

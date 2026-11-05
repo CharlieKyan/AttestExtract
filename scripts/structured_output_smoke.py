@@ -23,13 +23,12 @@ TASK = {"name": "Synthetic Schema acceptance", "record_types": {"reading": {
     "fields": {"subject": {"type": "string", "required": True},
                "amount": {"type": "number", "required": True}},
 }}}
-GOOD = json.dumps({"records": [{"record_type": "reading", "fields": {
-    "subject": {"value": "Sample A", "quote": TEXT},
-    "amount": {"value": 12, "quote": TEXT},
-}}]})
-BAD = ('{"records":[{"record_type":"reading","fields":{"subject":'
-       '{"value":"SYNTHETIC-PRIVATE-VALUE","quote":"SYNTHETIC-PRIVATE-QUOTE"},'
-       '{"amount":{"value":12,"quote":"Sample A reads 12."}}}}]}')
+GOOD = json.dumps({"records": [{"record_type": "reading",
+    "values": {"subject": "Sample A", "amount": 12}, "quotes": {"subject": TEXT, "amount": TEXT},
+}]})
+BAD = ('{"records":[{"record_type":"reading","values":{"subject":'
+       '"SYNTHETIC-PRIVATE-VALUE",{"amount":12}},'
+       '"quotes":{"subject":"SYNTHETIC-PRIVATE-QUOTE","amount":"Sample A reads 12."}}]}')
 
 
 def read(path):
@@ -62,7 +61,7 @@ def main(argv=None):
             else:
                 feedback = body["messages"][0]["content"]
                 assert '"unexpected_object_in_object"' in feedback
-                assert '"records[0].fields"' in feedback and '"correct_shape"' in feedback
+                assert '"records[0].values"' in feedback and '"correct_shape"' in feedback
                 assert "SYNTHETIC-PRIVATE" not in feedback
                 content = GOOD
             return httpx.Response(200, json={"choices": [{"finish_reason": "stop", "message": {"content": content}}]})
@@ -112,7 +111,7 @@ def main(argv=None):
     chat = invoke("deepseek:deepseek-flash", extra=("--format-retries", "1"))
     assert len(calls) == 2
     hint = read(chat / "diagnostics/validation/chunk-0001.errors.json")["errors"][0]["structure"]
-    assert hint["path"] == "records[0].fields"
+    assert hint["path"] == "records[0].values"
     assert (chat / "diagnostics/responses/chunk-0001.txt").read_text(encoding="utf-8") == BAD
     schema = invoke("deepseek-responses:deepseek-flash")
     assert len(calls) == 3

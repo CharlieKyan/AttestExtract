@@ -24,9 +24,8 @@ _TASK = {"name": "Synthetic format recovery", "record_types": {"reading": {
 }}}
 # An object closes too early, leaving a field at the wrong structural level.
 # This reproduces the failure shape without including any research material.
-_BAD_JSON = ('{"records":[{"record_type":"reading","fields":{"subject":'
-             '{"value":"Item B","quote":"Item B reads 22."}},"amount":'
-             '{"value":22,"quote":"Item B reads 22."}},"value":{"value":22}}]}')
+_BAD_JSON = ('{"records":[{"record_type":"reading","values":{"subject":'
+             '"Item B"}},"amount":22},"quotes":{"subject":"Item B reads 22."}}]}')
 
 
 def _read(path):
@@ -39,10 +38,10 @@ def _hashes(directory):
 
 
 def _good_json(source):
-    records = [{"record_type": "reading", "fields": {
-        "subject": {"value": "Item " + match[1], "quote": match[0]},
-        "amount": {"value": int(match[2]), "quote": match[0]},
-    }} for match in re.finditer(r"Item ([A-Z]) reads (\d+)\.", source)]
+    records = [{"record_type": "reading",
+                "values": {"subject": "Item " + match[1], "amount": int(match[2])},
+                "quotes": {"subject": match[0], "amount": match[0]}}
+               for match in re.finditer(r"Item ([A-Z]) reads (\d+)\.", source)]
     return json.dumps({"records": records})
 
 

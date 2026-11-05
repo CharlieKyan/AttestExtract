@@ -127,7 +127,7 @@ def test_cli_uses_registered_adapter_and_profile_credentials_without_global_cont
         def generate(self, request):
             assert request.generation.max_output_tokens == 80
             assert request.generation.temperature == 0.0
-            return BackendResponse(text='{"records":[{"record_type":"power","fields":{"value":{"value":8,"quote":"8"}}}]}')
+            return BackendResponse(text='{"records":[{"record_type":"power","values":{"value":8},"quotes":{"value":"8"}}]}')
 
     def factory(*, config, api_key, trace):
         seen.append((config, api_key))

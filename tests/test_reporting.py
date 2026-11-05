@@ -26,7 +26,7 @@ def response(**fields):
 
 
 def run(text, *records):
-    return extract(text, TASK, backend=ReplayBackend([{"records": list(records)}]), source_name="合成🙂.md")
+    return extract(text, TASK, backend=ReplayBackend([{"records": list(records)}], output_protocol="native-v1"), source_name="合成🙂.md")
 
 
 def test_unicode_report_keeps_both_observations_and_original_offsets_without_mutation():

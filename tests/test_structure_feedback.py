@@ -18,13 +18,11 @@ TASK = {"name": "Synthetic structural feedback", "record_types": {"reading": {
     "fields": {"subject": {"type": "string", "required": True},
                "amount": {"type": "number", "required": True}},
 }}}
-BAD = ('{"records":[{"record_type":"reading","fields":{"subject":'
-       '{"value":"PRIVATE-SYNTHETIC-VALUE","quote":"PRIVATE-SYNTHETIC-QUOTE"},'
-       '{"amount":{"value":12,"quote":"Sample A reads 12."}}}}]}')
-GOOD = json.dumps({"records": [{"record_type": "reading", "fields": {
-    "subject": {"value": "Sample A", "quote": TEXT},
-    "amount": {"value": 12, "quote": TEXT},
-}}]})
+BAD = ('{"records":[{"record_type":"reading","values":{"subject":'
+       '"PRIVATE-SYNTHETIC-VALUE",'
+       '{"amount":12}},"quotes":{"subject":"PRIVATE-SYNTHETIC-QUOTE","amount":"Sample A reads 12."}}]}')
+GOOD = json.dumps({"records": [{"record_type": "reading", "values": {"subject": "Sample A", "amount": 12},
+                               "quotes": {"subject": TEXT, "amount": TEXT}}]})
 
 
 class Backend:
@@ -64,17 +62,17 @@ def test_retry_contains_specific_redacted_shape_and_preserves_original_outputs(t
     diagnostic = read(tmp_path / "run/validation/chunk-0001.errors.json")["errors"][0]
     hint = diagnostic["structure"]
     assert diagnostic["code"] == "invalid_json"
-    assert hint["path"] == "records[0].fields"
+    assert hint["path"] == "records[0].values"
     assert hint["wrong_shape"] == '{"subject": <value>, {"amount": <value>}}'
     assert hint["correct_shape"] == '{"subject": <value>, "amount": <value>}'
     system = backend.requests[1].messages[0]["content"]
-    assert '"unexpected_object_in_object"' in system and '"records[0].fields"' in system
+    assert '"unexpected_object_in_object"' in system and '"records[0].values"' in system
     assert "PRIVATE-SYNTHETIC" not in system
     assert backend.requests[1].messages[1:] == backend.requests[0].messages[1:]
     assert (tmp_path / "run/responses/chunk-0001.txt").read_text(encoding="utf-8") == BAD
     assert (tmp_path / "run/responses/chunk-0001.format-2.txt").read_text(encoding="utf-8") == GOOD
     console = stream.getvalue()
-    assert "records[0].fields; expected a named property, found anonymous '{'" in console
+    assert "records[0].values; expected a named property, found anonymous '{'" in console
     assert "PRIVATE-SYNTHETIC" not in console
 
 
@@ -85,7 +83,7 @@ def test_budget_pause_preserves_structural_feedback_for_one_resumed_regeneration
     assert caught.value.code == "call_budget_exhausted"
     old = (tmp_path / "first/execution/checkpoint.json").read_bytes()
     saved = read(tmp_path / "first/execution/checkpoint.json")["state"]["nodes"]["chunk-0001"]
-    assert saved["format_feedback"][0]["structure"]["path"] == "records[0].fields"
+    assert saved["format_feedback"][0]["structure"]["path"] == "records[0].values"
     assert saved["format_retries_reserved"] == 0
     resumed = Backend(GOOD)
     result = run(tmp_path / "second", resumed, budget=2, resume=tmp_path / "first")
@@ -122,7 +120,7 @@ def test_fenced_unicode_offsets_and_structure_path_are_independent():
     with pytest.raises(InvalidResponseError) as caught:
         _parse_response(fenced, allowed_keys={"subject", "amount"})
     error = caught.value.validation_details["errors"][0]
-    assert error["structure"]["path"] == "records[0].fields"
+    assert error["structure"]["path"] == "records[0].values"
     assert error["offset"] == bad.index('{"amount"')
     assert error["raw_offset"] == fenced.index('{"amount"')
     assert error["raw_line"] == 3

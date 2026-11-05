@@ -13,9 +13,8 @@ TASK = {"name": "Synthetic syntax guidance", "record_types": {"reading": {
     "fields": {"amount": {"type": "integer", "required": True}},
 }}}
 SOURCE = "Sample reads 12."
-GOOD = json.dumps({"records": [{"record_type": "reading", "fields": {
-    "amount": {"value": 12, "quote": SOURCE},
-}}]})
+GOOD = json.dumps({"records": [{"record_type": "reading", "values": {"amount": 12},
+                               "quotes": {"amount": SOURCE}}]})
 
 
 @pytest.mark.parametrize("bad", [

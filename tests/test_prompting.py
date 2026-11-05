@@ -1,4 +1,4 @@
-"""Task-aware prompting uses complete wrappers without mixing example and source."""
+"""Task-aware flat prompting keeps examples separate from the actual source."""
 
 from __future__ import annotations
 
@@ -59,20 +59,16 @@ def test_schema_supports_multiple_record_types_without_extra_properties(task):
     assert json.loads(json.dumps(schema)) == schema
 
 
-def test_schema_types_apply_to_inner_values_in_nullable_field_wrappers(task):
-    schema = build_output_schema(task)
-    branch = schema["properties"]["records"]["items"]["anyOf"][0]
-    fields = branch["properties"]["fields"]
+def test_schema_types_apply_to_flat_values_with_parallel_quotes(task):
+    branch = build_output_schema(task)["properties"]["records"]["items"]["anyOf"][0]
+    assert "fields" not in branch["properties"]
+    values = branch["properties"]["values"]
+    quotes = branch["properties"]["quotes"]
     for name, spec in task.record_types["measurement"].fields.items():
-        wrapper = fields["properties"][name]
-        assert wrapper["type"] == "object"
-        assert set(wrapper["properties"]) == {"value", "quote"}
-        assert set(wrapper["required"]) == {"value", "quote"}
-        assert wrapper["properties"]["value"]["type"] == [spec.type, "null"]
-        assert wrapper["properties"]["quote"] == {"type": "string"}
-    assert fields["properties"]["value"]["properties"]["value"]["type"] == ["number", "null"]
-    assert "count" in fields["required"]  # Strict provider schemas require optional task wrappers too.
-    assert fields["properties"]["subject"]["description"] == "Observed item"
+        assert values["properties"][name]["type"] == [spec.type, "null"]
+        assert quotes["properties"][name] == {"type": "string"}
+    assert set(values["required"]) == set(quotes["required"]) == set(task.record_types["measurement"].fields)
+    assert values["properties"]["subject"]["description"] == "Observed item"
 
 
 def test_single_record_schema_has_one_direct_record_contract():
@@ -92,11 +88,10 @@ def test_complete_example_covers_all_types_and_every_quote_is_unique_in_its_sour
     types = {"string": str, "number": float, "integer": int, "boolean": bool}
     for record in records:
         spec = task.record_types[record["record_type"]]
-        assert set(record["fields"]) == set(spec.fields)
-        for name, wrapper in record["fields"].items():
-            assert set(wrapper) == {"value", "quote"}
-            assert type(wrapper["value"]) is types[spec.fields[name].type]
-            assert example["source"].count(wrapper["quote"]) == 1
+        assert set(record["values"]) == set(record["quotes"]) == set(spec.fields)
+        for name, value in record["values"].items():
+            assert type(value) is types[spec.fields[name].type]
+            assert example["source"].count(record["quotes"][name]) == 1
 
 
 def test_generated_example_runs_through_the_actual_parser_and_source_grounding(task):
@@ -125,10 +120,10 @@ def test_messages_keep_actual_ocr_latex_text_separate_from_synthetic_guidance(ta
     instructions = messages[0]["content"]
     assert "SYNTHETIC FORMAT GUIDANCE ONLY" in instructions
     assert "Never extract or copy" in instructions
-    assert "fields.value.value" in instructions
-    assert "inner value" in instructions
-    assert '{"value":null,"quote":""}' in instructions
-    assert "bare null" in instructions
+    assert "fields.value.value" not in instructions
+    assert "values maps each field name directly" in instructions
+    assert "quotes maps the SAME field names" in instructions
+    assert "use null and an empty quote" in instructions
     assert "OCR" in instructions and "LaTeX" in instructions and "all spaces" in instructions
     assert "Each key may occur only once within the same object" in instructions
     assert "even when the repeated values would be identical" in instructions

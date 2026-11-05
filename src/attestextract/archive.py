@@ -84,11 +84,19 @@ def _validate_measurements(document: Document, extraction: ExtractionResult, can
     if candidate.measurements.keys() - spec.measurement_groups.keys():
         raise ValueError("Measurements must reference declared task groups")
     for name, measurement in candidate.measurements.items():
+        if extraction.schema_version != "0.3" and measurement.range_binding is not None:
+            raise ValueError("Range bindings require extraction schema version 0.3")
         contexts = [measurement.context]
         if measurement.unit_context is not None:
             contexts.append(measurement.unit_context)
         for evidence in [*contexts, measurement.value, measurement.unit]:
             _validate_evidence(document, evidence)
+        if measurement.range_binding is not None:
+            binding = measurement.range_binding
+            for evidence in [*binding.endpoints, binding.separator, *binding.units]:
+                _validate_evidence(document, evidence)
+                if evidence.status != "matched":
+                    raise ValueError("Range bindings require exact matched source positions")
         if measurement.condition_fields != spec.measurement_groups[name].condition_fields:
             raise ValueError("Measurement conditions must preserve their task-declared references")
         if (measurement.unit_source == "table_header") != (measurement.unit_context is not None):
@@ -99,7 +107,7 @@ def _validate_measurements(document: Document, extraction: ExtractionResult, can
                 context.status != "matched" or not context.start <= token.start < token.end <= context.end
             ):
                 raise ValueError("Measurement tokens must lie within their exact context")
-        if not measurement.issues:
+        if not measurement.issues or measurement.range_binding is not None:
             # Recheck the recorded contexts only; archive loading must not relocate
             # tokens to another occurrence elsewhere in the document.
             chunk = DocumentChunk(chunk_id="archive", text="", segments=[
@@ -110,8 +118,10 @@ def _validate_measurements(document: Document, extraction: ExtractionResult, can
                 unit_text=measurement.unit.quote,
                 unit_quote=measurement.unit_context.quote if measurement.unit_context else "",
             )
-            checked = check_measurement(document.text, chunk, raw, spec.measurement_groups[name], candidate.fields)
-            if checked.model_dump() != measurement.model_dump():
+            checked = check_measurement(document.text, chunk, raw, spec.measurement_groups[name], candidate.fields,
+                                        schema_version=extraction.schema_version)
+            if (not measurement.issues and checked.model_dump() != measurement.model_dump()
+                    or measurement.range_binding != checked.range_binding):
                 raise ValueError("Measurement evidence does not pass its recorded mechanical checks")
 
 
@@ -127,11 +137,12 @@ def _validate_candidate(document: Document, extraction: ExtractionResult, candid
     if candidate.field_status.keys() - spec.fields.keys():
         raise ValueError("Field statuses must reference declared task fields")
     _validate_measurements(document, extraction, candidate)
-    grounded = can_ground_fields(candidate.fields) if extraction.schema_version == "0.2" else (
+    grounded = can_ground_fields(candidate.fields) if extraction.schema_version in {"0.2", "0.3"} else (
         bool(candidate.fields) and all(field.evidence.status == "matched" for field in candidate.fields.values())
     )
     if grounded:
-        expected_id = grounded_candidate_id(document.text_sha256, candidate.record_type, candidate.fields, candidate.measurements)
+        expected_id = grounded_candidate_id(document.text_sha256, candidate.record_type, candidate.fields,
+                                            candidate.measurements, schema_version=extraction.schema_version)
         if candidate.candidate_id != expected_id:
             raise ValueError("Candidate content changed; create a new candidate and review it separately")
 

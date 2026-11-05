@@ -14,7 +14,7 @@ SOURCE = "Lamp A uses 8 W."
 TASK = {"name": "power", "record_types": {"power": {"fields": {
     "value": {"type": "integer", "required": True},
 }}}}
-COMPLETION = '{"records":[{"record_type":"power","fields":{"value":{"value":8,"quote":"8"}}}]}'
+COMPLETION = '{"records":[{"record_type":"power","values":{"value":8},"quotes":{"value":"8"}}]}'
 
 
 @pytest.fixture(autouse=True)

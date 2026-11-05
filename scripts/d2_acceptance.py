@@ -54,9 +54,8 @@ def mock_envelope(name):
         records = [("supply_relation", "岚桥工厂供应霁灯组件。",
                     {"subject": "岚桥工厂", "relation": "供应", "object": "霁灯组件"})]
     text = json.dumps({"records": [
-        {"record_type": record_type, "fields": {
-            key: {"value": value, "quote": quote} for key, value in values.items()
-        }} for record_type, quote, values in records
+        {"record_type": record_type, "values": values,
+         "quotes": {key: quote for key in values}} for record_type, quote, values in records
     ]}, ensure_ascii=False)
     return {"status": "completed", "deployment": "synthetic-observed-model", "id": "synthetic-request",
             "output": {"text": text}, "metrics": {"input_tokens": 11, "output_tokens": 7, "total_tokens": 18}}

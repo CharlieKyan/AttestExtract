@@ -11,6 +11,7 @@ from pydantic import (
 
 
 Scalar = StrictStr | StrictInt | StrictFloat | StrictBool | None
+OutputProtocol = Literal["flat-v1", "native-v1"]
 
 
 class ContractModel(BaseModel):
@@ -118,6 +119,7 @@ class ExtractionRequest(ContractModel):
     messages: list[dict[str, str]]
     chunk_id: str
     output_schema: dict[str, Any] | None = None
+    output_protocol: OutputProtocol = "flat-v1"
     format_attempt: int = Field(default=1, ge=1, le=2)
     generation: GenerationOptions = Field(default_factory=GenerationOptions)
 
@@ -164,6 +166,15 @@ class MeasurementInput(ContractModel):
     unit_quote: str = ""
 
 
+class RangeBinding(ContractModel):
+    """Locally derived range syntax; every component retains its exact source span."""
+
+    endpoints: list[EvidenceRef] = Field(min_length=2, max_length=2)
+    separator: EvidenceRef
+    units: list[EvidenceRef] = Field(min_length=1, max_length=2)
+    unit_layout: Literal["shared", "per_endpoint", "table_header"]
+
+
 class MeasurementEvidence(ContractModel):
     context: EvidenceRef
     value: EvidenceRef
@@ -173,6 +184,7 @@ class MeasurementEvidence(ContractModel):
     condition_fields: list[str]
     issues: list[str] = Field(default_factory=list)
     semantic_status: Literal["not_verified"] = "not_verified"
+    range_binding: RangeBinding | None = None
 
 
 class CheckResult(ContractModel):
@@ -218,6 +230,7 @@ class SourceInfo(ContractModel):
 class RunInfo(ContractModel):
     backend: str
     mode: Literal["live", "replay"]
+    output_protocol: OutputProtocol = "native-v1"
     chunk_count: int
     response_count: int
     candidate_count: int
@@ -234,7 +247,7 @@ def _package_version() -> str:
 
 
 class ExtractionResult(ContractModel):
-    schema_version: Literal["0.1", "0.2"] = "0.2"
+    schema_version: Literal["0.1", "0.2", "0.3"] = "0.3"
     package_version: str = Field(default_factory=_package_version)
     task: TaskSpec
     source: SourceInfo

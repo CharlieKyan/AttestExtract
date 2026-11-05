@@ -57,6 +57,7 @@ def render_markdown_report(result: ExtractionResult, *, secrets: Iterable[str] =
         f"- 任务：{cell(result.task.name)}",
         f"- 程序版本：{cell(result.package_version)}；结果格式：{cell(result.schema_version)}",
         f"- 模型：{cell(result.run.model or '未报告')}；模式：{cell(result.run.mode)}",
+        f"- 模型回答协议：{cell(result.run.output_protocol)}",
         f"- 分块：{result.run.chunk_count}；模型响应：{result.run.response_count}；HTTP/后端尝试：{result.run.request_attempts}",
         f"- 候选：{len(result.candidates)}；待复核候选：{pending}；复核项：{len(result.review)}",
         f"- 需复核问题：{blocking}；信息提示：{len(result.review) - blocking}（信息提示本身不阻止候选通过程序检查）",
@@ -122,6 +123,22 @@ def render_markdown_report(result: ExtractionResult, *, secrets: Iterable[str] =
                 cells = (role, evidence.quote, evidence.status, _location(evidence))
                 lines.append("| " + " | ".join(cell(item) for item in cells) + " |")
             lines.append("")
+            if measurement.range_binding is not None:
+                binding = measurement.range_binding
+                layouts = {"shared": "范围共享单位", "per_endpoint": "两个端点分别绑定单位",
+                           "table_header": "范围使用同列表头单位"}
+                lines += [f"- 范围关系：{layouts[binding.unit_layout]}（程序语法检查，不是事实确认）", "",
+                          "| 范围组成 | 原文 | 字符位置 |", "| --- | --- | --- |"]
+                components = [("端点 1", binding.endpoints[0]), ("连接符", binding.separator),
+                              ("端点 2", binding.endpoints[1])]
+                components.extend((f"单位 {index}", unit) for index, unit in enumerate(binding.units, 1))
+                for role, evidence in components:
+                    lines.append("| " + " | ".join(cell(item) for item in
+                                                  (role, evidence.quote, _location(evidence))) + " |")
+                if measurement.unit.status == "ambiguous":
+                    lines.append("")
+                    lines.append("单位字符串存在多个原文位置；上述绑定说明它们与范围端点的关系，未合并或猜选位置。")
+                lines.append("")
             for code in measurement.issues:
                 lines.append(f"- 测量检查问题：{cell(code)}")
         for check in candidate.checks:

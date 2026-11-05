@@ -21,6 +21,7 @@ TASK = {
     "record_types": {"purchase": {"fields": {"amount": {"type": "number", "required": True}}}},
 }
 RECORD = {"record_type": "purchase", "fields": {"amount": {"value": 120, "quote": "120"}}}
+FLAT_RECORD = {"record_type": "purchase", "values": {"amount": 120}, "quotes": {"amount": "120"}}
 
 
 def read_json(path):
@@ -37,10 +38,10 @@ def all_artifact_text(directory):
 
 def test_offline_trace_keeps_all_pipeline_artifacts_and_original_unicode_offsets(tmp_path):
     raw = " \n" + json.dumps({"records": [RECORD, RECORD]}, ensure_ascii=False) + "\n "
-    plain = extract(TEXT, TASK, backend=ReplayBackend([raw]), source_name="采购.txt")
+    plain = extract(TEXT, TASK, backend=ReplayBackend([raw], output_protocol="native-v1"), source_name="采购.txt")
     directory = tmp_path / "diagnostics"
     trace = RunTrace(directory)
-    result = extract(TEXT, TASK, backend=ReplayBackend([raw]), source_name="采购.txt", trace=trace)
+    result = extract(TEXT, TASK, backend=ReplayBackend([raw], output_protocol="native-v1"), source_name="采购.txt", trace=trace)
     trace.finish(result.model_dump(mode="json"))
 
     assert result.candidates == plain.candidates
@@ -68,7 +69,8 @@ def test_offline_trace_keeps_all_pipeline_artifacts_and_original_unicode_offsets
     assert chunk["text"] == TEXT
     request = read_json(directory / "requests" / f"{chunk_id}.request.json")
     assert json.loads(request["messages"][-1]["content"])["source"] == TEXT
-    assert set(request) == {"messages", "chunk_id", "output_schema", "format_attempt", "generation"}
+    assert set(request) == {"messages", "chunk_id", "output_schema", "format_attempt", "generation", "output_protocol"}
+    assert request["output_protocol"] == "native-v1"
     assert manifest["artifact_roles"][f"requests/{chunk_id}.request.json"] == "extraction_request"
     assert any(item.get("kind") == "extraction_request" for item in events(directory))
     assert read_json(directory / "responses" / f"{chunk_id}.meta.json")["attempts"] == 1
@@ -86,7 +88,7 @@ def test_invalid_json_keeps_raw_completion_and_identifies_validation_failure(tmp
     directory = tmp_path / "invalid-output"
     trace = RunTrace(directory)
     with pytest.raises(InvalidResponseError):
-        extract(TEXT, TASK, backend=ReplayBackend([raw]), trace=trace)
+        extract(TEXT, TASK, backend=ReplayBackend([raw], output_protocol="native-v1"), trace=trace)
 
     responses = list((directory / "responses").glob("*.txt"))
     assert len(responses) == 1
@@ -132,7 +134,7 @@ def test_pipeline_redacts_secrets_in_source_request_response_and_candidate_logs(
     }]})
     directory = tmp_path / "redacted-pipeline"
     trace = RunTrace(directory, secrets=[secret])
-    result = extract(text, task, backend=ReplayBackend([raw]), trace=trace)
+    result = extract(text, task, backend=ReplayBackend([raw], output_protocol="native-v1"), trace=trace)
     trace.finish(result.model_dump(mode="json"))
 
     field = result.candidates[0].fields["text"]
@@ -217,7 +219,7 @@ def test_cli_env_file_and_log_directory_produce_result_without_live_api(tmp_path
 
         def generate(self, request):
             assert json.loads(request.messages[-1]["content"])["source"] == TEXT
-            return BackendResponse(text=json.dumps({"records": [RECORD]}))
+            return BackendResponse(text=json.dumps({"records": [FLAT_RECORD]}))
 
     monkeypatch.setattr("attestextract.backends.OpenAICompatibleBackend", OfflineBackend)
     status = cli.main([
@@ -293,7 +295,7 @@ def test_http_trace_records_rate_limit_retry_without_recording_error_body(tmp_pa
         if len(received) == 1:
             return httpx.Response(429, json={"error": {"message": "Synthetic rate limit.", "debug": private_body}})
         return httpx.Response(200, json={
-            "choices": [{"message": {"content": json.dumps({"records": [RECORD]})}, "finish_reason": "stop"}],
+            "choices": [{"message": {"content": json.dumps({"records": [FLAT_RECORD]})}, "finish_reason": "stop"}],
         })
 
     backend = OpenAICompatibleBackend(
