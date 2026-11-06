@@ -15,7 +15,7 @@ from pydantic import Field, ValidationError
 
 from .diagnostics import RunTrace
 from .errors import BackendError, ConfigurationError, InvalidResponseError
-from .models import (BackendResponse, ContractModel, DocumentChunk, ExecutionOptions,
+from .models import (BackendResponse, ContextOptions, ContractModel, DocumentChunk, ExecutionOptions,
                      GenerationOptions, OutputProtocol, SourceSpan, TaskSpec)
 from .planning import plan_chunks, split_chunk
 from .output_protocol import output_protocol_for_backend
@@ -52,6 +52,7 @@ class _FormatFeedback(ContractModel):
 
 class _Node(ContractModel):
     segments: list[SourceSpan]
+    body_segments: list[SourceSpan] = Field(default_factory=list)
     depth: int = Field(ge=0)
     status: Literal["pending", "in_flight", "failed", "split", "completed"] = "pending"
     children: list[str] = Field(default_factory=list)
@@ -132,15 +133,16 @@ class ExecutionSession:
     def __init__(self, text: str, chunks: list[DocumentChunk], options: ExecutionOptions,
                  fingerprint: str, *, trace: RunTrace | None = None,
                  resume_from: str | Path | None = None, format_retries: int = 0,
-                 output_protocol: OutputProtocol = "flat-v1") -> None:
+                 output_protocol: OutputProtocol = "flat-v1", structure=None) -> None:
         if resume_from is not None and trace is not None and trace.directory is not None:
             check_resume_paths(resume_from, [trace.directory])
         self.text, self.options, self.trace = text, options, trace
+        self.structure = structure
         self.chunks = {chunk.chunk_id: chunk for chunk in chunks}
         self.cached: dict[str, BackendResponse] = {}
         self.reused = 0
         self.state = _State(fingerprint=fingerprint, output_protocol=output_protocol, roots=list(self.chunks),
-                            nodes={chunk.chunk_id: _Node(segments=chunk.segments, depth=0) for chunk in chunks},
+                            nodes={chunk.chunk_id: _Node(segments=chunk.segments, body_segments=chunk.body_segments, depth=0) for chunk in chunks},
                             max_model_calls=options.max_model_calls or max(1, 3 * len(chunks)),
                             format_retries=format_retries)
         if resume_from is not None:
@@ -178,7 +180,8 @@ class ExecutionSession:
                 chunk, depth = pending.pop(0)
                 key = chunk.chunk_id
                 node = state.nodes[key]
-                if key in visited or node.depth != depth or node.segments != chunk.segments:
+                if (key in visited or node.depth != depth or node.segments != chunk.segments
+                        or node.body_segments != chunk.body_segments):
                     raise ValueError("chunk tree")
                 if node.status in {"completed", "split", "in_flight"} and node.calls < 1:
                     raise ValueError("missing call reservation")
@@ -191,7 +194,7 @@ class ExecutionSession:
                 visited.add(key)
                 self.chunks[key] = chunk
                 if node.status == "split":
-                    children = split_chunk(self.text, chunk, min_chars=self.options.min_chunk_chars)
+                    children = split_chunk(self.text, chunk, min_chars=self.options.min_chunk_chars, structure=self.structure)
                     if depth >= self.options.max_split_depth or not children or node.children != [c.chunk_id for c in children]:
                         raise ValueError("split tree")
                     pending[0:0] = [(child, depth + 1) for child in children]
@@ -336,7 +339,7 @@ class ExecutionSession:
     def subdivide(self, chunk_id: str) -> list[str]:
         node = self.state.nodes[chunk_id]
         children = [] if node.depth >= self.options.max_split_depth else split_chunk(
-            self.text, self.chunks[chunk_id], min_chars=self.options.min_chunk_chars)
+            self.text, self.chunks[chunk_id], min_chars=self.options.min_chunk_chars, structure=self.structure)
         if not children:
             self.event("unsplittable", chunk_id=chunk_id, depth=node.depth)
             return []
@@ -344,7 +347,7 @@ class ExecutionSession:
         node.children = [child.chunk_id for child in children]
         for child in children:
             self.chunks[child.chunk_id] = child
-            self.state.nodes[child.chunk_id] = _Node(segments=child.segments, depth=node.depth + 1)
+            self.state.nodes[child.chunk_id] = _Node(segments=child.segments, body_segments=child.body_segments, depth=node.depth + 1)
         self.save()
         self.event("split", chunk_id=chunk_id, children=node.children, leaf_chunks=len(self.leaves()))
         return node.children
@@ -354,7 +357,8 @@ def prepare_execution(text: str, task: TaskSpec, backend: Any, generation: Gener
                       options: ExecutionOptions, *, max_chars: int = 6000,
                       table_rows_per_chunk: int = 12, format_retries: int = 0,
                       source_name: str | None = None, backend_identity: str | None = None,
-                      trace: RunTrace | None = None, resume_from: str | Path | None = None) -> ExecutionSession:
+                      trace: RunTrace | None = None, resume_from: str | Path | None = None,
+                      context: ContextOptions | None = None, structure=None) -> ExecutionSession:
     from . import __version__
 
     if backend_identity is None:
@@ -368,13 +372,16 @@ def prepare_execution(text: str, task: TaskSpec, backend: Any, generation: Gener
             backend_identity = backend.name
     if not isinstance(backend_identity, str) or not backend_identity:
         raise ConfigurationError("backend_identity must be a nonempty string; do not include credentials.")
-    chunks = plan_chunks(text, task, generation, options, max_chars=max_chars, table_rows_per_chunk=table_rows_per_chunk)
+    chunks = plan_chunks(text, task, generation, options, max_chars=max_chars, table_rows_per_chunk=table_rows_per_chunk,
+                         context=context, structure=structure)
     output_protocol = output_protocol_for_backend(backend)
     fingerprint = digest({"package_version": __version__, "output_protocol": output_protocol, "source": hashlib.sha256(text.encode("utf-8")).hexdigest(),
                           "source_name": source_name, "task": task.model_dump(mode="json"),
                           "backend": backend_identity, "backend_name": backend.name,
                           "generation": generation.model_dump(mode="json"),
                           "policy": options.model_dump(exclude={"max_model_calls"}),
-                          "max_chars": max_chars, "table_rows_per_chunk": table_rows_per_chunk})
+                          "max_chars": max_chars, "table_rows_per_chunk": table_rows_per_chunk,
+                          "context": (context or ContextOptions()).model_dump(),
+                          "structure": structure.model_dump(mode="json") if structure is not None else None})
     return ExecutionSession(text, chunks, options, fingerprint, trace=trace, resume_from=resume_from,
-                            format_retries=format_retries, output_protocol=output_protocol)
+                            format_retries=format_retries, output_protocol=output_protocol, structure=structure)

@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 import unicodedata
 
-from .models import DocumentChunk, SourceSpan
+from .models import ContextOptions, DocumentChunk, SourceSpan
 
 
 _SEPARATOR = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$")
@@ -132,7 +132,8 @@ def _is_table_start(lines: list[tuple[int, int, str]], index: int) -> bool:
 
 
 def chunk_document(
-    text: str, *, max_chars: int = 6000, table_rows_per_chunk: int = 12
+    text: str, *, max_chars: int = 6000, table_rows_per_chunk: int = 12,
+    context: ContextOptions | None = None, structure=None,
 ) -> list[DocumentChunk]:
     """Split without rewriting source text; repeated table headers retain origins.
 
@@ -145,6 +146,10 @@ def chunk_document(
         raise ValueError("Chunk size and table row count must be positive")
     if not text.strip():
         return []
+    if structure is not None or context is not None and context.mode != "none":
+        from .contextual_chunking import structured_chunks
+        return structured_chunks(text, max_chars=max_chars, table_rows_per_chunk=table_rows_per_chunk,
+                                 context=context or ContextOptions(), structure=structure)
     covered, blocked = _protected_positions(text)
     lines: list[tuple[int, int, str]] = []
     pos = 0

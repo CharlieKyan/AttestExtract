@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.0.dev19
+
+- Add optional source-indexed Markdown/MinerU HTML structure, table grids and explicit header hints; fix escaped-pipe column misbinding and support pipe tables without outer delimiters.
+- Add opt-in structure and neighboring-paragraph context, explicit body ownership, source coverage diagnostics, and context-preserving truncation/resume. Keep context `none` by default while quality benefits remain unproven.
+- Emit result schema 0.4 with conservative normalized-search source mappings, cell references and supplied context passages. Normalized evidence always requires review; no OCR correction, unit conversion or LaTeX equivalence is inferred. Preserve historical archive and decision-material identities.
+- Add offline D4 installation acceptance and a frozen four-arm context experiment. The authorized small real-endpoint pilot does not establish population-level accuracy or a general net benefit from added context; see the experiment documentation.
+
 ## 0.1.0.dev18
 
 - Treat different identities or unresolved conditions/evidence as insufficient context for equal-value associations. Preserve all candidates and old saved links; this is not comprehensive different-value conflict detection.

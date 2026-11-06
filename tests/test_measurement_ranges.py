@@ -177,8 +177,13 @@ def test_old_accepted_archive_keeps_id_and_historical_checks():
     # Build the old serialized identity independently; absence of new metadata
     # must not be interpreted as a different observation on archive loading.
     old_measurement = candidate.measurements["range"].model_dump(exclude={"range_binding"})
+    for role in ("context", "value", "unit", "unit_context"):
+        if old_measurement[role] is not None:
+            old_measurement[role].pop("source_matches")
+            old_measurement[role].pop("table_refs")
     identity = {"source": document.text_sha256, "record_type": "reading",
-                "fields": {name: field.model_dump() for name, field in candidate.fields.items()},
+                "fields": {name: field.model_dump(exclude={"evidence": {"source_matches", "table_refs"}})
+                           for name, field in candidate.fields.items()},
                 "measurements": {"range": old_measurement}}
     old_id = "candidate-" + hashlib.sha256(json.dumps(identity, sort_keys=True,
                           ensure_ascii=False, allow_nan=False).encode()).hexdigest()[:24]

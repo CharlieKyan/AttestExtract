@@ -47,7 +47,7 @@ def main(argv=None):
         result = extract(document, TASK, backend=ReplayBackend([response(source, value, unit)]))
         measurement = result.candidates[0].measurements["reading"]
         assert measurement.issues == expected, (name, measurement.issues)
-        assert result.schema_version == "0.3" and result.run.output_protocol == "flat-v1"
+        assert result.schema_version == "0.4" and result.run.output_protocol == "flat-v1"
         assert measurement.semantic_status == "not_verified"
         archive = create_archive(document, result)
         assert archive.records == []

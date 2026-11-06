@@ -27,8 +27,13 @@ def _cell(value: str, secrets: Iterable[str]) -> str:
 
 
 def _location(evidence: EvidenceRef) -> str:
-    if evidence.status == "matched" and evidence.start is not None and evidence.end is not None:
+    if evidence.status in {"matched", "normalized"} and evidence.start is not None and evidence.end is not None:
         return f"[{evidence.start}, {evidence.end})"
+    if evidence.source_matches:
+        locations = "; ".join(f"[{match.span.start}, {match.span.end})" for match in evidence.source_matches[:5])
+        if len(evidence.source_matches) > 5:
+            locations += f"；共 {len(evidence.source_matches)} 处（完整位置见 JSON）"
+        return "多个规范化检索位置：" + locations
     if evidence.matches:
         locations = "; ".join(f"[{span.start}, {span.end})" for span in evidence.matches[:5])
         if len(evidence.matches) > 5:
@@ -48,6 +53,19 @@ def render_markdown_report(result: ExtractionResult, *, secrets: Iterable[str] =
     def cell(value: str) -> str:
         return _cell(value, secrets)
 
+    def evidence_details(label: str, evidence: EvidenceRef) -> list[str]:
+        details = []
+        if evidence.source_matches:
+            details += [f"- {cell(label)}：规范化检索仅提供待复核位置；模型引文未改写。"]
+            for match in evidence.source_matches[:5]:
+                details.append(f"- 原文精确片段：{cell(match.source_quote)}；位置 "
+                               f"[{match.span.start}, {match.span.end})；规则：{cell(', '.join(match.rules))}")
+        for reference in evidence.table_refs:
+            details.append(f"- {cell(label)}单元格：{cell(reference.table_id)} / {cell(reference.cell_id)}；"
+                           f"行 {reference.row + 1}，列 {reference.column + 1}；"
+                           f"跨 {reference.rowspan} 行、{reference.colspan} 列；角色：{cell(reference.role)}")
+        return details
+
     pending = sum(candidate.needs_review for candidate in result.candidates)
     blocking = sum(item.severity == "review" for item in result.review)
     lines = [
@@ -64,6 +82,7 @@ def render_markdown_report(result: ExtractionResult, *, secrets: Iterable[str] =
         f"- 输入字符数：{result.source.character_count}；SHA-256：{cell(result.source.sha256)}", "",
         "位置使用原始输入的 Unicode 字符偏移，采用左闭右开区间 `[start, end)`；片段输入的位置相对于片段。",
         "字段表中的位置覆盖整条引文；测量证据表另列数值和单位片段的位置。matched 仅代表原文定位成功，不代表字段归属或计算情景已经核验。", "",
+        "normalized 表示通过保守规范化找到了原文位置，仍须复核；不代表引文逐字匹配或事实已核验。", "",
         "字段状态：reported＝已报告；not_reported＝未报告；not_applicable＝任务声明不适用；required_missing＝必要信息缺失。", "",
         "关联检查仅覆盖任务配置的相同比较值，尚未实现完整的不同值矛盾检测；没有关联不表示没有冲突。", "",
     ]
@@ -107,6 +126,19 @@ def render_markdown_report(result: ExtractionResult, *, secrets: Iterable[str] =
                      candidate.field_status.get(name, "未记录（旧结果）"))
             lines.append("| " + " | ".join(cell(item) for item in cells) + " |")
         lines.append("")
+        for name, field in candidate.fields.items():
+            lines.extend(evidence_details(name, field.evidence))
+        if candidate.source_context:
+            roles = {"heading": "章节标题", "table_header": "列标题行", "table_row_header": "行标题",
+                     "table_caption": "表题", "table_footnote": "表注",
+                     "neighbor_before": "前邻段", "neighbor_after": "后邻段"}
+            lines += ["", "### 实际提供的上下文", "",
+                      "以下片段曾提供给模型；它们用于人工核对，不代表对象、条件或单位归属已核验。", "",
+                      "| 角色 | 原文片段 | 原文位置 |", "| --- | --- | --- |"]
+            for passage in candidate.source_context:
+                cells = (roles[passage.role], passage.quote, f"[{passage.span.start}, {passage.span.end})")
+                lines.append("| " + " | ".join(cell(item) for item in cells) + " |")
+            lines.append("")
         for name, status in candidate.field_status.items():
             if name not in candidate.fields:
                 lines.append(f"- 未提供字段：{cell(name)}；状态：{cell(status)}")
@@ -124,6 +156,8 @@ def render_markdown_report(result: ExtractionResult, *, secrets: Iterable[str] =
                 cells = (role, evidence.quote, evidence.status, _location(evidence))
                 lines.append("| " + " | ".join(cell(item) for item in cells) + " |")
             lines.append("")
+            for role, evidence in fragments:
+                lines.extend(evidence_details(role, evidence))
             if measurement.range_binding is not None:
                 binding = measurement.range_binding
                 layouts = {"shared": "范围共享单位", "per_endpoint": "两个端点分别绑定单位",

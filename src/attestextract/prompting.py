@@ -192,6 +192,30 @@ def build_messages(task: TaskSpec, chunk: DocumentChunk, *, output_protocol: Out
     )
     example = json.dumps(build_example(task, output_protocol=output_protocol), ensure_ascii=False, allow_nan=False)
     payload = {"task": task.model_dump(mode="json"), "source": chunk.text}
+    if chunk.context_policy is not None and chunk.context_policy.mode != "none":
+        def source_piece(span):
+            parts = []
+            cursor = 0
+            for segment in chunk.segments:
+                left, right = max(span.start, segment.start), min(span.end, segment.end)
+                if left < right:
+                    parts.append(chunk.text[cursor + left - segment.start:cursor + right - segment.start])
+                cursor += segment.end - segment.start
+            value = "".join(parts)
+            if len(value) != span.end - span.start:
+                raise ValueError("Prompt source role is outside its original chunk segments")
+            return value
+        payload["source"] = ([{"role": "body", "text": source_piece(span)} for span in chunk.body_segments]
+                             + [{"role": item.role, "text": source_piece(item.span)} for item in chunk.context_segments])
+        instructions += (
+            "Actual source passages have roles. Extract observations/events ONLY from body passages. "
+            "Other passages are auxiliary context: use their explicit headings, table headers, captions, "
+            "footnotes or neighboring statements only when they identify the SAME subject and conditions. "
+            "Do not extract separate observations from auxiliary passages, join passages into one quote, "
+            "or transfer a neighbor's subject/condition merely because values are equal. "
+            "If an association is unclear, leave the field unreported. HTML table markup is original source; "
+            "quote its source text exactly, and do not decode entities or rewrite formulas.\n"
+        )
     return [
         {"role": "system", "content": instructions + example},
         {"role": "user", "content": json.dumps(payload, ensure_ascii=False, allow_nan=False)},

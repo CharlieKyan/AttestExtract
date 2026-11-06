@@ -15,7 +15,7 @@ from .documents import Document
 from .evidence import link_candidates
 from .execution import _read_state, _State, digest
 from .identity import can_ground_fields
-from .models import (Candidate, CandidateLink, ContractModel, DocumentChunk,
+from .models import (Candidate, CandidateLink, ContextSegment, ContractModel, DocumentChunk,
                      EvidenceRef, ExtractionResult, SourceSpan, TaskSpec)
 from .storage import _load, _reject_constant, _unique_object
 
@@ -41,6 +41,8 @@ class DecisionBatch(ContractModel):
     batch_id: str
     chunk_id: str
     segments: list[SourceSpan]
+    body_segments: list[SourceSpan] = Field(default_factory=list)
+    context_segments: list[ContextSegment] = Field(default_factory=list)
     candidate_ids: list[str]
     task_ids: list[str]
 
@@ -87,23 +89,53 @@ def _evidence_in(value: Any):
             yield from _evidence_in(item)
 
 
-def _verify_candidate_scope(candidate: Candidate, chunks: dict[str, list[SourceSpan]]) -> None:
+def _verify_candidate_scope(candidate: Candidate, chunks: dict[str, list[SourceSpan]],
+                            scoped: dict[str, tuple[list[SourceSpan], list[ContextSegment]]]) -> None:
     if (not candidate.chunk_ids or len(set(candidate.chunk_ids)) != len(candidate.chunk_ids)
             or any(key not in chunks for key in candidate.chunk_ids)):
         raise ValueError("Every candidate must reference unique final leaf chunks")
     if len(candidate.chunk_ids) > 1 and not can_ground_fields(candidate.fields):
         raise ValueError("Unresolved candidates cannot have been deduplicated across chunks")
     for key in candidate.chunk_ids:
-        spans = _intervals(chunks[key])
+        body, context = scoped.get(key, ([], []))
+        spans = ([(span.start, span.end) for span in [*body, *(item.span for item in context)]]
+                 if body else _intervals(chunks[key]))
         for evidence in _evidence_in(candidate):
-            for match in evidence.matches:
+            for match in [*evidence.matches, *(item.span for item in evidence.source_matches)]:
                 if not any(start <= match.start and match.end <= end for start, end in spans):
                     raise ValueError("Candidate evidence must be inside every associated final leaf chunk")
+    context_union = [item for key in candidate.chunk_ids for item in scoped.get(key, ([], []))[1]]
+    if any(not any(passage.role == item.role and passage.span == item.span for item in context_union)
+           for passage in candidate.source_context):
+        raise ValueError("Candidate context must have been supplied in an associated final leaf chunk")
+
+
+def _source_payload(document: Document, extraction: ExtractionResult) -> tuple[dict, dict]:
+    source, result = document.model_dump(), extraction.model_dump()
+    if extraction.schema_version != "0.4":
+        source.pop("structure", None)
+        for candidate in result["candidates"]:
+            candidate.pop("source_context", None)
+        def old_evidence(value):
+            if isinstance(value, dict):
+                if "quote" in value and "matches" in value:
+                    value.pop("source_matches", None)
+                    value.pop("table_refs", None)
+                for child in value.values():
+                    old_evidence(child)
+            elif isinstance(value, list):
+                for child in value:
+                    old_evidence(child)
+        old_evidence(result)
+    return source, result
 
 
 def _materials(document: Document, extraction: ExtractionResult,
-               chunks: list[tuple[str, list[SourceSpan]]]) -> tuple[list[DecisionBatch], list[PreparedDecisionTask]]:
-    seed = digest({"document": document.model_dump(), "extraction": extraction.model_dump()})
+               chunks: list[tuple[str, list[SourceSpan]]],
+               scoped: dict[str, tuple[list[SourceSpan], list[ContextSegment]]] | None = None,
+               ) -> tuple[list[DecisionBatch], list[PreparedDecisionTask]]:
+    source, result = _source_payload(document, extraction)
+    seed = digest({"document": source, "extraction": result})
     batches, tasks = [], []
     assigned: set[str] = set()
     for chunk_id, segments in chunks:
@@ -123,6 +155,8 @@ def _materials(document: Document, extraction: ExtractionResult,
                 batch_id=batch_id, kind="empty_chunk_review", candidate_ids=[], allowed_actions=["review"],
             ))
         batches.append(DecisionBatch(batch_id=batch_id, chunk_id=chunk_id, segments=segments,
+                                     body_segments=(scoped or {}).get(chunk_id, ([], []))[0],
+                                     context_segments=(scoped or {}).get(chunk_id, ([], []))[1],
                                      candidate_ids=candidate_ids, task_ids=[item.task_id for item in local_tasks]))
         tasks.extend(local_tasks)
         assigned.update(owned)
@@ -146,28 +180,42 @@ class DecisionBundle(ContractModel):
 
     @model_validator(mode="after")
     def verify_materials(self) -> DecisionBundle:
-        if self.extraction.schema_version != "0.3":
-            raise ValueError("Decision bundle 0.1 supports extraction schema 0.3 only")
+        if self.extraction.schema_version not in {"0.3", "0.4"}:
+            raise ValueError("Decision bundle 0.1 supports extraction schema 0.3 and 0.4")
         # This verifies source identity, every original quote, field contracts,
         # candidate IDs, measurements and review references; accepts no facts.
         create_archive(self.document, self.extraction)
         chunks = {batch.chunk_id: batch.segments for batch in self.batches}
+        scoped = {batch.chunk_id: (batch.body_segments, batch.context_segments) for batch in self.batches}
         if len(chunks) != len(self.batches) or len(chunks) != self.extraction.run.chunk_count:
             raise ValueError("Final leaf chunks must be unique and agree with the extraction run")
         for segments in chunks.values():
             _verify_segments(segments, self.document.character_count)
-        coverage = _intervals([span for segments in chunks.values() for span in segments])
+        for batch in self.batches:
+            if batch.context_segments and not batch.body_segments:
+                raise ValueError("Context batches require separately recorded body ownership")
+            if batch.body_segments:
+                _verify_segments(batch.body_segments, self.document.character_count)
+                if _intervals([*batch.body_segments, *(item.span for item in batch.context_segments)]) != _intervals(batch.segments):
+                    raise ValueError("Body and context roles must reconstruct the batch scope")
+        coverage = _intervals([span for batch in self.batches for span in (batch.body_segments or batch.segments)])
         expected_coverage = [(0, self.document.character_count)] if self.document.character_count else []
         if coverage != expected_coverage:
             raise ValueError("Final leaf chunks must cover the complete original document")
         for candidate in self.extraction.candidates:
-            _verify_candidate_scope(candidate, chunks)
-        expected_batches, expected_tasks = _materials(self.document, self.extraction, list(chunks.items()))
+            _verify_candidate_scope(candidate, chunks, scoped)
+        expected_batches, expected_tasks = _materials(self.document, self.extraction, list(chunks.items()), scoped)
         if self.batches != expected_batches or self.tasks != expected_tasks:
             raise ValueError("Decision batches and tasks must cover each candidate once and every empty chunk")
         if self.analysis_links != link_candidates(self.extraction.candidates, self.extraction.task):
             raise ValueError("Analysis links must be derived from the unchanged extraction snapshot")
-        expected_id = "decision-bundle-" + digest(self.model_dump(exclude={"bundle_id"}))[:24]
+        payload = self.model_dump(exclude={"bundle_id"})
+        if self.extraction.schema_version != "0.4":
+            payload["document"], payload["extraction"] = _source_payload(self.document, self.extraction)
+            for batch in payload["batches"]:
+                batch.pop("body_segments", None)
+                batch.pop("context_segments", None)
+        expected_id = "decision-bundle-" + digest(payload)[:24]
         if self.bundle_id != expected_id:
             raise ValueError("Decision bundle content checksum does not match its ID")
         return self
@@ -178,6 +226,8 @@ class _PlannedChunk(ContractModel):
     character_count: int = Field(ge=0)
     character_target_exceeded: bool
     segments: list[SourceSpan]
+    body_segments: list[SourceSpan] = Field(default_factory=list)
+    context_segments: list[ContextSegment] = Field(default_factory=list)
 
 
 class _ChunkPlan(ContractModel):
@@ -223,11 +273,12 @@ def _final_leaves(state: _State, plan: _ChunkPlan, length: int) -> list[str]:
                     or node.children != [f"{key}.{number}" for number in range(1, len(node.children) + 1)]
                     or any(child not in state.nodes for child in node.children)):
                 raise ValueError("Checkpoint split parent has invalid children")
-            children = [span for child in node.children for span in state.nodes[child].segments]
-            if _intervals(children) != _intervals(node.segments):
+            children = [span for child in node.children for span in (state.nodes[child].body_segments or state.nodes[child].segments)]
+            parent_spans = node.body_segments or node.segments
+            if _intervals(children) != _intervals(parent_spans):
                 raise ValueError("Checkpoint children must preserve all parent source positions")
-            parent_size = sum(span.end - span.start for span in node.segments)
-            if any(sum(span.end - span.start for span in state.nodes[child].segments) >= parent_size
+            parent_size = sum(span.end - span.start for span in parent_spans)
+            if any(sum(span.end - span.start for span in (state.nodes[child].body_segments or state.nodes[child].segments)) >= parent_size
                    for child in node.children):
                 raise ValueError("Checkpoint split children must be smaller than their parent")
             pending[0:0] = [(child, depth + 1) for child in node.children]
@@ -284,21 +335,29 @@ def _prepare_decision_bundle(run_dir: str | Path) -> DecisionBundle:
             or state.model != extraction.run.model):
         raise ValueError("Checkpoint completion ledger and extraction run disagree")
     chunks = []
+    scoped = {}
     for key in leaves:
         relative = f"chunks/{key}.json"
         if relative not in manifest["artifacts"]:
             raise ValueError("The run manifest is missing a completed leaf chunk")
         chunk = DocumentChunk.model_validate(_read_json(_source_file(directory, relative)))
         if (chunk.chunk_id != key or chunk.segments != state.nodes[key].segments
+                or chunk.body_segments != state.nodes[key].body_segments
                 or chunk.text != "".join(document.text[span.start:span.end] for span in chunk.segments)):
             raise ValueError("Saved leaf chunk must match checkpoint positions and exact original text")
         chunks.append((key, chunk.segments))
-    batches, tasks = _materials(document, extraction, chunks)
+        scoped[key] = (chunk.body_segments, chunk.context_segments)
+    batches, tasks = _materials(document, extraction, chunks, scoped)
+    source_payload, result_payload = _source_payload(document, extraction)
     payload = {"decision_bundle_version": "0.1", "analysis_package_version": __version__,
-               "document": document.model_dump(),
-               "extraction": extraction.model_dump(), "batches": [batch.model_dump() for batch in batches],
+               "document": source_payload,
+               "extraction": result_payload, "batches": [batch.model_dump() for batch in batches],
                "tasks": [task.model_dump() for task in tasks],
                "analysis_links": [link.model_dump() for link in link_candidates(extraction.candidates, extraction.task)]}
+    if extraction.schema_version != "0.4":
+        for batch in payload["batches"]:
+            batch.pop("body_segments", None)
+            batch.pop("context_segments", None)
     payload["bundle_id"] = "decision-bundle-" + digest(payload)[:24]
     return DecisionBundle.model_validate(payload)
 

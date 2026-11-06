@@ -92,10 +92,31 @@ class SourceSpan(ContractModel):
         return self
 
 
+class ContextOptions(ContractModel):
+    """Explicit context policy; none preserves the pre-D4 request scope."""
+
+    mode: Literal["none", "structure", "neighbors"] = "none"
+    neighbor_chars: int = Field(default=500, ge=0, le=5000)
+
+
+class ContextSegment(ContractModel):
+    role: Literal["heading", "table_header", "table_row_header", "table_caption", "table_footnote",
+                  "neighbor_before", "neighbor_after"]
+    span: SourceSpan
+
+
+class ContextPassage(ContextSegment):
+    quote: str
+
+
 class DocumentChunk(ContractModel):
     chunk_id: str
     text: str
     segments: list[SourceSpan]
+    body_segments: list[SourceSpan] = Field(default_factory=list)
+    context_segments: list[ContextSegment] = Field(default_factory=list)
+    context_policy: ContextOptions | None = None
+    context_diagnostics: list[str] = Field(default_factory=list)
 
 
 class GenerationOptions(ContractModel):
@@ -146,12 +167,33 @@ class ExtractionBackend(Protocol):
     def generate(self, request: ExtractionRequest) -> BackendResponse: ...
 
 
+class EvidenceMatch(ContractModel):
+    """An exact source slice retrieved through a conservative search view."""
+
+    source_quote: str
+    span: SourceSpan
+    method: Literal["normalized"] = "normalized"
+    rules: list[Literal["whitespace", "punctuation"]] = Field(min_length=1)
+
+
+class TableReference(ContractModel):
+    table_id: str
+    cell_id: str
+    row: int = Field(ge=0)
+    column: int = Field(ge=0)
+    rowspan: int = Field(ge=1)
+    colspan: int = Field(ge=1)
+    role: Literal["header", "row_header", "data"]
+
+
 class EvidenceRef(ContractModel):
     quote: str
-    status: Literal["matched", "ambiguous", "unmatched", "missing"]
+    status: Literal["matched", "normalized", "ambiguous", "unmatched", "missing"]
     start: int | None = None
     end: int | None = None
     matches: list[SourceSpan] = Field(default_factory=list)
+    source_matches: list[EvidenceMatch] = Field(default_factory=list)
+    table_refs: list[TableReference] = Field(default_factory=list)
 
 
 class FieldValue(ContractModel):
@@ -202,6 +244,7 @@ class Candidate(ContractModel):
     needs_review: bool
     field_status: dict[str, Literal["reported", "not_reported", "not_applicable", "required_missing"]] = Field(default_factory=dict)
     measurements: dict[str, MeasurementEvidence] = Field(default_factory=dict)
+    source_context: list[ContextPassage] = Field(default_factory=list)
 
 
 class ReviewItem(ContractModel):
@@ -247,7 +290,7 @@ def _package_version() -> str:
 
 
 class ExtractionResult(ContractModel):
-    schema_version: Literal["0.1", "0.2", "0.3"] = "0.3"
+    schema_version: Literal["0.1", "0.2", "0.3", "0.4"] = "0.4"
     package_version: str = Field(default_factory=_package_version)
     task: TaskSpec
     source: SourceInfo

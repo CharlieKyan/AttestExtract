@@ -6,28 +6,83 @@ from itertools import combinations
 import json
 import re
 import unicodedata
+from typing import TYPE_CHECKING
 
 from .models import (
-    Candidate, CandidateLink, DocumentChunk, EvidenceRef, FieldValue,
+    Candidate, CandidateLink, DocumentChunk, EvidenceMatch, EvidenceRef, FieldValue,
     MeasurementEvidence, MeasurementInput, MeasurementSpec, Scalar, SourceSpan, TaskSpec,
+    TableReference,
 )
 from .measurement_syntax import bind_range, numeric_tokens
+from .normalization import latex_spans, normalized_view
+
+if TYPE_CHECKING:
+    from .structure import DocumentStructure
 
 
-def ground_quote(text: str, chunk: DocumentChunk, quote: str) -> EvidenceRef:
+def _with_table_refs(evidence: EvidenceRef, structure: DocumentStructure | None) -> EvidenceRef:
+    if structure is None:
+        return evidence
+    spans = evidence.matches + [match.span for match in evidence.source_matches]
+    for table in structure.tables:
+        for cell in table.cells:
+            if any(cell.span.start < span.end and span.start < cell.span.end for span in spans):
+                role = ("header" if cell.row in table.header_rows else
+                        "row_header" if cell.column in table.row_header_columns else
+                        "header" if cell.is_header else "data")
+                evidence.table_refs.append(TableReference(
+                    table_id=table.table_id, cell_id=cell.cell_id,
+                    row=cell.row, column=cell.column, rowspan=cell.rowspan, colspan=cell.colspan,
+                    role=role,
+                ))
+    return evidence
+
+
+def ground_quote(text: str, chunk: DocumentChunk, quote: str, *, normalize: bool = False,
+                 structure: DocumentStructure | None = None) -> EvidenceRef:
     if not quote.strip():
         return EvidenceRef(quote=quote, status="missing")
+    # Enriched chunks may split overlapping passages for text reconstruction.
+    # Search the full passages actually displayed, without joining scopes.
+    scopes = (chunk.body_segments + [item.span for item in chunk.context_segments]
+              if chunk.context_policy is not None else chunk.segments)
     found: set[tuple[int, int]] = set()
-    for segment in chunk.segments:
+    for segment in scopes:
         start = segment.start
         while (index := text.find(quote, start, segment.end)) >= 0:
             found.add((index, index + len(quote)))
             start = index + 1
     spans = [SourceSpan(start=start, end=end) for start, end in sorted(found)]
     if len(spans) == 1:
-        return EvidenceRef(quote=quote, status="matched", start=spans[0].start,
-                           end=spans[0].end, matches=spans)
-    return EvidenceRef(quote=quote, status="ambiguous" if spans else "unmatched", matches=spans)
+        return _with_table_refs(EvidenceRef(quote=quote, status="matched", start=spans[0].start,
+                                           end=spans[0].end, matches=spans), structure)
+    if spans or not normalize:
+        return _with_table_refs(EvidenceRef(quote=quote, status="ambiguous" if spans else "unmatched",
+                                           matches=spans), structure)
+    query = normalized_view(quote)
+    source_matches = {}
+    math_spans = latex_spans(text)
+    for segment in scopes:
+        source_segment = text[segment.start:segment.end]
+        view = normalized_view(source_segment, offset=segment.start)
+        cursor = 0
+        while (index := view.text.find(query.text, cursor)) >= 0:
+            start, end = view.origins[index][0], view.origins[index + len(query.text) - 1][1]
+            source_quote = text[start:end]
+            rules = sorted(set(query.rules) | set(normalized_view(source_quote).rules))
+            math_unchanged = all(start <= left and right <= end and text[left:right] in quote
+                                 for left, right in math_spans if left < end and start < right)
+            if rules and math_unchanged:
+                source_matches[(start, end)] = EvidenceMatch(
+                    source_quote=source_quote, span=SourceSpan(start=start, end=end), rules=rules,
+                )
+            cursor = index + 1
+    matches = [source_matches[key] for key in sorted(source_matches)]
+    evidence = EvidenceRef(quote=quote, status="normalized" if len(matches) == 1 else
+                           "ambiguous" if matches else "unmatched", source_matches=matches)
+    if len(matches) == 1:
+        evidence.start, evidence.end = matches[0].span.start, matches[0].span.end
+    return _with_table_refs(evidence, structure)
 
 
 def is_missing(value: Scalar) -> bool:
@@ -48,7 +103,8 @@ def _unit_letter(character: str) -> bool:
     return bool(character) and unicodedata.name(character, "").startswith(("LATIN", "GREEK"))
 
 
-def _token(text: str, context: EvidenceRef, token: str, *, unit: bool = False) -> EvidenceRef:
+def _token(text: str, context: EvidenceRef, token: str, *, unit: bool = False,
+           structure: DocumentStructure | None = None) -> EvidenceRef:
     if context.status != "matched":
         return EvidenceRef(quote=token, status="missing" if not token else "unmatched")
     chunk = DocumentChunk(chunk_id="scope", text=context.quote,
@@ -77,13 +133,14 @@ def _token(text: str, context: EvidenceRef, token: str, *, unit: bool = False) -
             continue
         valid.append(span)
     if len(valid) == 1:
-        return EvidenceRef(quote=token, status="matched", start=valid[0].start,
-                           end=valid[0].end, matches=valid)
-    return EvidenceRef(quote=token, status="missing" if not token else "ambiguous" if valid else "unmatched", matches=valid)
+        return _with_table_refs(EvidenceRef(quote=token, status="matched", start=valid[0].start,
+                                           end=valid[0].end, matches=valid), structure)
+    return _with_table_refs(EvidenceRef(quote=token, status="missing" if not token else
+                                       "ambiguous" if valid else "unmatched", matches=valid), structure)
 
 
-def _table_column(text: str, span: EvidenceRef) -> tuple[int, int, int] | None:
-    """Return the containing simple pipe table's header, row, and column."""
+def _legacy_table_column(text: str, span: EvidenceRef) -> tuple[int, int, int] | None:
+    """Preserve pre-0.4 archive revalidation; new extraction uses structure."""
     if span.status != "matched":
         return None
     row = text.rfind("\n", 0, span.start) + 1
@@ -112,13 +169,41 @@ def _table_column(text: str, span: EvidenceRef) -> tuple[int, int, int] | None:
     return top, row, column
 
 
+def _table_value_scope(structure: DocumentStructure, value: EvidenceRef,
+                        unit: EvidenceRef) -> SourceSpan | None:
+    if value.status != "matched" or unit.status != "matched":
+        return None
+    scopes = []
+    for table in structure.tables:
+        data = [cell for cell in table.cells
+                if cell.span.start <= value.start < value.end <= cell.span.end]
+        headers = [cell for cell in table.cells
+                   if cell.span.start <= unit.start < unit.end <= cell.span.end
+                   and cell.row in table.header_rows]
+        for cell in data:
+            for header in headers:
+                if (cell.row not in table.header_rows and cell.column not in table.row_header_columns
+                        and not cell.is_header and header.row + header.rowspan <= cell.row
+                        and header.column <= cell.column
+                        and cell.column + cell.colspan <= header.column + header.colspan):
+                    scopes.append(cell.span)
+    return scopes[0] if len(scopes) == 1 else None
+
+
 def check_measurement(text: str, chunk: DocumentChunk, raw: MeasurementInput,
                       spec: MeasurementSpec, fields: dict[str, FieldValue], *,
-                      schema_version: str = "0.3") -> MeasurementEvidence:
-    context = ground_quote(text, chunk, raw.context_quote)
-    value = _token(text, context, raw.value_text)
-    unit_context = ground_quote(text, chunk, raw.unit_quote) if raw.unit_quote else context
-    unit = _token(text, unit_context, raw.unit_text, unit=True)
+                      schema_version: str = "0.4", normalize: bool = False,
+                      structure: DocumentStructure | None = None) -> MeasurementEvidence:
+    if schema_version == "0.4" and structure is None and raw.unit_quote:
+        from .structure import build_structure
+        structure = build_structure(text)
+    if schema_version != "0.4":
+        normalize, structure = False, None
+    context = ground_quote(text, chunk, raw.context_quote, normalize=normalize, structure=structure)
+    value = _token(text, context, raw.value_text, structure=structure)
+    unit_context = (ground_quote(text, chunk, raw.unit_quote, normalize=normalize, structure=structure)
+                    if raw.unit_quote else context)
+    unit = _token(text, unit_context, raw.unit_text, unit=True, structure=structure)
     issues = []
     if context.status != "matched":
         issues.append("measurement_context_unresolved")
@@ -142,17 +227,24 @@ def check_measurement(text: str, chunk: DocumentChunk, raw: MeasurementInput,
         issues.append("measurement_unit_mismatch")
     scope_start, scope_end = context.start, context.end
     if raw.unit_quote:
-        row = _table_column(text, value)
-        header = _table_column(text, unit)
-        if not row or not header or row[0] != header[0] or header[0] != header[1] or row[1] <= header[1] or row[2] != header[2]:
+        scope = None
+        if schema_version == "0.4":
+            scope = _table_value_scope(structure, value, unit)
+        else:
+            row = _legacy_table_column(text, value)
+            header = _legacy_table_column(text, unit)
+            if (row and header and row[0] == header[0] and header[0] == header[1]
+                    and row[1] > header[1] and row[2] == header[2]):
+                end = text.find("\n", row[1])
+                pipes = [row[1] + match.start() for match in re.finditer(r"\|", text[row[1]:end if end >= 0 else len(text)])]
+                scope = SourceSpan(start=pipes[row[2]] + 1, end=pipes[row[2] + 1])
+        if scope is None:
             issues.append("measurement_header_mismatch")
             unit = EvidenceRef(quote=raw.unit_text, status="unmatched")
         else:
-            end = text.find("\n", row[1])
-            pipes = [row[1] + match.start() for match in re.finditer(r"\|", text[row[1]:end if end >= 0 else len(text)])]
-            scope_start, scope_end = pipes[row[2]] + 1, pipes[row[2] + 1]
+            scope_start, scope_end = scope.start, scope.end
     binding = None
-    if schema_version == "0.3" and context.status == value.status == "matched":
+    if schema_version in {"0.3", "0.4"} and context.status == value.status == "matched":
         binding, simple_range = bind_range(text, context, value, unit,
                                           table_header=bool(raw.unit_quote))
         if binding is not None and "measurement_header_mismatch" not in issues:
@@ -171,7 +263,7 @@ def check_measurement(text: str, chunk: DocumentChunk, raw: MeasurementInput,
         excluded = [value] + ([unit] if not raw.unit_quote and unit.status == "matched" else [])
         # Keep removed positions as spaces in the new checker: concatenating
         # either side can manufacture an identifier that was never in the source.
-        if schema_version == "0.3":
+        if schema_version in {"0.3", "0.4"}:
             remainder = "".join(" " if any(item.start <= index < item.end for item in excluded)
                                 else text[index] for index in range(scope_start, scope_end))
             extra_numbers = bool(numeric_tokens(remainder))

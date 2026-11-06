@@ -8,4 +8,6 @@ include scripts/format_recovery_smoke.py
 include scripts/structured_output_smoke.py
 include scripts/protocol_evidence_smoke.py
 include scripts/decision_bundle_smoke.py
+include scripts/d4_evidence_smoke.py
+include scripts/d4_context_experiment.py
 recursive-include docs *.md

@@ -1,6 +1,8 @@
 """Archive boundaries for synthetic grouped observations and explicit review."""
 
 from copy import deepcopy
+import hashlib
+import json
 
 import pytest
 
@@ -219,6 +221,20 @@ def test_legacy_v01_archive_loads_without_new_optional_metadata():
         field.pop("not_applicable_when")
     for item in payload["extraction"]["review"]:
         item.pop("severity")
+    for field in candidate["fields"].values():
+        field["evidence"].pop("source_matches")
+        field["evidence"].pop("table_refs")
+    identity = {"source": document.text_sha256, "record_type": candidate["record_type"],
+                "fields": candidate["fields"]}
+    old_id = "candidate-" + hashlib.sha256(json.dumps(identity, sort_keys=True, ensure_ascii=False,
+                                                       allow_nan=False).encode()).hexdigest()[:24]
+    candidate["candidate_id"] = old_id
+    for item in payload["extraction"]["review"] + payload["reviews"]:
+        item["candidate_id"] = old_id
+    record = payload["records"][0]
+    record["source_candidate_id"] = old_id
+    record["record_id"] = "record-" + hashlib.sha256(json.dumps([document.document_id, old_id]).encode()).hexdigest()[:24]
+    record["fields"] = deepcopy(candidate["fields"])
     loaded = ExtractionArchive.model_validate(payload)
     assert loaded.extraction.schema_version == "0.1"
     assert len(loaded.records) == 1

@@ -14,6 +14,7 @@ from typing import Any
 from pydantic import Field, StrictStr, ValidationError
 
 from .chunking import chunk_document
+from .contextual_chunking import coverage_report
 from .errors import BackendError, ConfigurationError, InvalidResponseError, TaskValidationError
 from .diagnostics import RunTrace
 from .documents import Document
@@ -27,7 +28,7 @@ from .output_protocol import output_protocol_for_backend
 from .schema_diagnostics import assess_schema_compliance
 from .validation import contract_details, details, error_path, issue
 from .models import (
-    BackendResponse, Candidate, CheckResult, ContractModel, DocumentChunk, EvidenceRef,
+    BackendResponse, Candidate, CheckResult, ContextOptions, ContextPassage, ContractModel, DocumentChunk, EvidenceRef,
     ExtractionBackend, ExtractionRequest, ExtractionResult, FieldValue,
     ExecutionOptions, GenerationOptions, MeasurementInput, OutputProtocol, ReviewItem, RunInfo, Scalar, SourceInfo, TaskSpec,
 )
@@ -535,6 +536,7 @@ def extract(
     execution: ExecutionOptions | None = None,
     resume_from: str | Path | None = None,
     backend_identity: str | None = None,
+    context: ContextOptions | None = None,
 ) -> ExtractionResult:
     """Extract candidates. Matching evidence does not establish factual validity.
 
@@ -554,6 +556,9 @@ def extract(
     if resume_from is not None and trace is not None and trace.directory is not None:
         check_resume_paths(resume_from, [trace.directory])
     try:
+        if context is not None and not isinstance(context, ContextOptions):
+            raise ConfigurationError("context must be a ContextOptions instance.")
+        context = ContextOptions.model_validate(context.model_dump()) if context is not None else ContextOptions()
         if resume_from is not None and execution is None:
             execution = ExecutionOptions()
         if execution is not None:
@@ -587,7 +592,7 @@ def extract(
             text, task, backend=backend, source_name=source_name,
             max_chunk_chars=max_chunk_chars, table_rows_per_chunk=table_rows_per_chunk,
             trace=trace, format_retries=format_retries, generation=options,
-            execution=execution, resume_from=resume_from, backend_identity=backend_identity,
+            execution=execution, resume_from=resume_from, backend_identity=backend_identity, context=context,
         )
     except Exception as exc:
         if trace is not None:
@@ -609,6 +614,7 @@ def _extract(
     execution: ExecutionOptions | None = None,
     resume_from: str | Path | None = None,
     backend_identity: str | None = None,
+    context: ContextOptions | None = None,
 ) -> ExtractionResult:
     started = time.perf_counter()
     output_protocol = output_protocol_for_backend(backend)
@@ -633,6 +639,10 @@ def _extract(
         )
     else:
         raise TypeError("text must be a string or Document")
+    context = context or ContextOptions()
+    from .structure import build_structure
+    structure = document.structure or build_structure(text)
+    chunk_structure = structure if document.structure is not None or context.mode != "none" else None
     if trace is not None:
         trace.write_json("document.json", document.model_dump(mode="json"))
         trace.event("document", "completed", character_count=len(text), document_id=document.document_id)
@@ -649,14 +659,21 @@ def _extract(
         session = prepare_execution(text, spec, backend, generation, execution, max_chars=max_chunk_chars,
                                     table_rows_per_chunk=table_rows_per_chunk, format_retries=format_retries,
                                     source_name=source_name, backend_identity=backend_identity, trace=trace,
-                                    resume_from=resume_from)
+                                    resume_from=resume_from, context=context, structure=chunk_structure)
         chunks = [session.chunks[key] for key in session.state.roots]
     else:
-        chunks = chunk_document(text, max_chars=max_chunk_chars, table_rows_per_chunk=table_rows_per_chunk)
+        chunks = chunk_document(text, max_chars=max_chunk_chars, table_rows_per_chunk=table_rows_per_chunk,
+                                context=context, structure=chunk_structure)
+    coverage = coverage_report(text, chunks, max_chars=max_chunk_chars)
     if trace is not None:
+        trace.write_json("structure.json", structure.model_dump(mode="json"))
+        trace.write_json("coverage.json", {"stage": "initial", **coverage})
+        trace.write_json("context-policy.json", context.model_dump(mode="json"))
         trace.write_json("chunk_plan.json", {"chunks": [
             {"chunk_id": chunk.chunk_id, "character_count": len(chunk.text),
              "character_target_exceeded": len(chunk.text) > max_chunk_chars,
+             "body_segments": [s.model_dump() for s in chunk.body_segments],
+             "context_segments": [s.model_dump() for s in chunk.context_segments],
              "segments": [segment.model_dump() for segment in chunk.segments]}
             for chunk in chunks
         ]})
@@ -689,7 +706,7 @@ def _extract(
             for name, raw_field in record.fields.items():
                 if trace is not None:
                     trace.event("validation", "field_started", chunk_id=chunk.chunk_id, ordinal=ordinal, field=name)
-                evidence = _ground_quote(text, chunk, raw_field.quote)
+                evidence = _ground_quote(text, chunk, raw_field.quote, normalize=True, structure=structure)
                 if trace is not None:
                     trace.event("grounding", "field_checked", chunk_id=chunk.chunk_id, ordinal=ordinal,
                                 field=name, status=evidence.status, matches=len(evidence.matches))
@@ -726,13 +743,33 @@ def _extract(
                     pending.append(("measurement_missing", measurement_spec.value_field,
                                     "The configured measurement group was not supplied; no token positions were inferred.", "review"))
                     continue
-                measurement = check_measurement(text, chunk, record.measurements[name], measurement_spec, fields)
+                measurement = check_measurement(text, chunk, record.measurements[name], measurement_spec, fields,
+                                                schema_version="0.4", normalize=True, structure=structure)
                 measurements[name] = measurement
                 for code in measurement.issues:
                     pending.append((code, measurement_spec.value_field,
                                     f"Measurement group {name} failed a mechanical check; inspect its context and token evidence.", "review"))
             if not any(not is_missing(field.value) for field in fields.values()):
                 pending.append(("empty_record", None, "The record contains no extracted fields.", "review"))
+            body_anchor = True
+            if chunk.context_policy is not None and chunk.context_policy.mode != "none":
+                eligible = set(fields) - set(record_spec.identity_fields) - set(record_spec.condition_fields)
+                eligible = eligible or set(fields)
+                body_anchor = any(
+                    not is_missing(fields[name].value) and any(
+                        body.start <= span.start and span.end <= body.end
+                        for span in [*fields[name].evidence.matches, *(item.span for item in fields[name].evidence.source_matches)]
+                        for body in chunk.body_segments)
+                    for name in eligible)
+                if measurements:
+                    body_anchor = body_anchor and all(any(
+                        body.start <= span.start and span.end <= body.end
+                        for span in measurement.value.matches for body in chunk.body_segments)
+                        for measurement in measurements.values())
+                checks.append(CheckResult(code="body_evidence", passed=body_anchor))
+                if not body_anchor:
+                    pending.append(("context_only_candidate", None,
+                                    "No observation evidence anchors this candidate in the owned body; auxiliary context is not an extraction target.", "review"))
             stable_fields = {
                 name: value.model_dump() for name, value in sorted(fields.items())
             }
@@ -751,6 +788,15 @@ def _extract(
                 identifier = "candidate-" + hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:24]
             if can_dedup and identifier in dedup:
                 prior = dedup[identifier]
+                for item in chunk.context_segments:
+                    passage = ContextPassage(role=item.role, span=item.span, quote=text[item.span.start:item.span.end])
+                    if passage not in prior.source_context:
+                        prior.source_context.append(passage)
+                if body_anchor and any(check.code == "body_evidence" and not check.passed for check in prior.checks):
+                    prior.checks = [check for check in prior.checks if check.code != "body_evidence"]
+                    prior.checks.append(CheckResult(code="body_evidence", passed=True))
+                    review[:] = [item for item in review if not (item.candidate_id == identifier and item.code == "context_only_candidate")]
+                    prior.needs_review = any(item.candidate_id == identifier and item.severity == "review" for item in review)
                 if chunk.chunk_id not in prior.chunk_ids:
                     prior.chunk_ids.append(chunk.chunk_id)
                 if trace is not None:
@@ -760,6 +806,8 @@ def _extract(
                 candidate_id=identifier, record_type=record.record_type, fields=fields,
                 chunk_ids=[chunk.chunk_id], checks=checks, needs_review=any(item[3] == "review" for item in pending),
                 field_status=field_status, measurements=measurements,
+                source_context=[ContextPassage(role=item.role, span=item.span, quote=text[item.span.start:item.span.end])
+                                for item in chunk.context_segments],
             )
             candidates.append(candidate)
             if can_dedup:
@@ -785,6 +833,10 @@ def _extract(
                     review_count=sum(item.severity == "review" for item in review),
                     info_count=sum(item.severity == "info" for item in review))
     if session is not None:
+        final_chunks = [session.chunks[key] for key in session.leaves()]
+        final_coverage = coverage_report(text, final_chunks, max_chars=max_chunk_chars)
+        if trace is not None:
+            trace.write_json("coverage.json", {"stage": "final", **final_coverage})
         response_count = session.state.response_count
         request_attempts = session.state.request_attempts
         usage = session.state.usage

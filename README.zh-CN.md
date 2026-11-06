@@ -2,9 +2,15 @@
 
 按任务模式从正文和表格抽取候选数据，保留原文证据，并预留可替换的决策后端。
 
-**早期原型 · `0.1.0.dev18` · Python 3.11+**
+**早期原型 · `0.1.0.dev19` · Python 3.11+**
 
-dev18 新增离线 `prepare-decisions` / `check-decisions`：完整导出成功运行的全部候选与合法空块，校验并记录模拟建议，不应用判断。同值候选的身份、条件或证据不明确时优先显示关联依据不足。抽取仍用 flat-v1、结果 schema 0.3，不增加模型调用，Jev 尚未接入。用法、返回格式和边界见[离线决策材料指南](docs/DECISION_MATERIALS.md)。
+dev19 增加 D4 结构索引、MinerU HTML 单元格引用、保守规范化定位及覆盖检查。
+`--context structure` / `--context neighbors --neighbor-chars 500` 显式启用结构或相邻段落；
+默认保持 `none`。结果格式 0.4 保留模型引文、精确原文和实际提供的上下文，规范化命中仍需复核。
+历史档案保持原身份。接口及限制见 [D4 原文与上下文](docs/D4_EVIDENCE.md)，
+实际收益和风险的证据边界见 [四臂对照实验](docs/D4_CONTEXT_EXPERIMENT.md)。
+
+dev18 新增离线 `prepare-decisions` / `check-decisions`：完整导出成功运行的全部候选与合法空块，校验并记录模拟建议，不应用判断。同值候选的身份、条件或证据不明确时优先显示关联依据不足。该版本抽取用 flat-v1、结果 schema 0.3（dev19 已升至 0.4），该离线功能不增加模型调用，Jev 尚未接入。用法、返回格式和边界见[离线决策材料指南](docs/DECISION_MATERIALS.md)。
 
 dev17 新模型调用统一使用 flat-v1：字段值放在 `values`，逐字引文放在 `quotes`，保留测量证据组。用户无需额外选择协议；旧 native-v1 仅供内置 ReplayBackend 显式离线回放。新增范围端点与单位位置绑定，区分明确下标和独立数值；混合单位、损坏 OCR 继续复核，绝不自动接受事实。结果格式升级为 0.3，旧档案按原规则读取。
 

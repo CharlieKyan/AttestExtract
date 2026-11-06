@@ -6,7 +6,7 @@ import math
 import re
 
 from .chunking import chunk_document
-from .models import DocumentChunk, ExecutionOptions, GenerationOptions, SourceSpan, TaskSpec
+from .models import ContextOptions, DocumentChunk, ExecutionOptions, GenerationOptions, SourceSpan, TaskSpec
 
 
 def estimate_output_tokens(text: str, task: TaskSpec) -> int:
@@ -48,12 +48,38 @@ def _map_spans(local: list[SourceSpan], parent: DocumentChunk) -> list[SourceSpa
 
 
 def split_chunk(text: str, parent: DocumentChunk, *, min_chars: int,
-                target_chars: int | None = None) -> list[DocumentChunk]:
+                target_chars: int | None = None, structure=None) -> list[DocumentChunk]:
     """Use the shared sentence/table splitter and require strictly smaller children.
 
     Truncation recovery defaults to half the parent size. Initial planning can
     supply an estimated target directly, avoiding repeated arbitrary halvings.
     """
+    if parent.context_policy is not None:
+        from .contextual_chunking import structured_chunks, enrich_chunk, merge_spans
+        from .structure import build_structure
+        structure = structure or build_structure(text)
+        body = parent.body_segments or parent.segments
+        body_size = sum(s.end - s.start for s in body)
+        if body_size <= min_chars:
+            return []
+        target = max(min_chars, target_chars if target_chars is not None else math.ceil(body_size / 2))
+        pieces = structured_chunks(text, max_chars=target, table_rows_per_chunk=1,
+                                   context=ContextOptions(), structure=structure)
+        children = []
+        for piece in pieces:
+            spans = merge_spans([SourceSpan(start=max(left.start, right.start), end=min(left.end, right.end))
+                                for left in body for right in piece.body_segments
+                                if max(left.start, right.start) < min(left.end, right.end)])
+            if spans:
+                base = DocumentChunk(chunk_id=f"{parent.chunk_id}.{len(children) + 1}",
+                                     text="".join(text[s.start:s.end] for s in spans),
+                                     segments=spans, body_segments=spans)
+                children.append(enrich_chunk(text, base, structure, parent.context_policy))
+        if len(children) < 2 or any(sum(s.end-s.start for s in c.body_segments) >= body_size for c in children):
+            return []
+        if merge_spans([s for c in children for s in c.body_segments]) != merge_spans(body):
+            raise ValueError("Subdivision changed body source coverage")
+        return children
     if len(parent.text) <= min_chars:
         return []
     target = max(min_chars, target_chars if target_chars is not None else math.ceil(len(parent.text) / 2))
@@ -71,8 +97,10 @@ def split_chunk(text: str, parent: DocumentChunk, *, min_chars: int,
 
 def plan_chunks(text: str, task: TaskSpec, generation: GenerationOptions,
                 options: ExecutionOptions, *, max_chars: int = 6000,
-                table_rows_per_chunk: int = 12) -> list[DocumentChunk]:
-    queue = chunk_document(text, max_chars=max_chars, table_rows_per_chunk=table_rows_per_chunk)
+                table_rows_per_chunk: int = 12, context: ContextOptions | None = None,
+                structure=None) -> list[DocumentChunk]:
+    queue = chunk_document(text, max_chars=max_chars, table_rows_per_chunk=table_rows_per_chunk,
+                           context=context, structure=structure)
     limit = generation.max_output_tokens or options.planning_output_tokens
     planned = []
     while queue:
@@ -82,7 +110,8 @@ def plan_chunks(text: str, task: TaskSpec, generation: GenerationOptions,
             estimate = estimate_output_tokens(chunk.text, task)
             if estimate > limit * 0.7:
                 target = max(1, math.floor(len(chunk.text) * limit * 0.7 / estimate))
-                children = split_chunk(text, chunk, min_chars=options.min_chunk_chars, target_chars=target)
+                children = split_chunk(text, chunk, min_chars=options.min_chunk_chars, target_chars=target,
+                                       structure=structure)
         if children:
             queue[0:0] = children
         else:

@@ -9,7 +9,7 @@ from typing import Literal
 from pydantic import Field, model_validator
 
 from .documents import Document
-from .evidence import check_measurement, is_missing, rule_matches
+from .evidence import _with_table_refs, check_measurement, ground_quote, is_missing, rule_matches
 from .identity import can_ground_fields, grounded_candidate_id
 from .models import (
     Candidate, ContractModel, DocumentChunk, EvidenceRef, ExtractionResult, FieldValue,
@@ -53,7 +53,42 @@ def _canonical(value: object) -> str:
     return json.dumps(value, sort_keys=True, ensure_ascii=False, allow_nan=False)
 
 
-def _validate_evidence(document: Document, evidence: EvidenceRef) -> None:
+def _validate_evidence(document: Document, evidence: EvidenceRef, *, schema_version: str = "0.4") -> None:
+    if schema_version != "0.4" and (evidence.source_matches or evidence.table_refs
+                                    or evidence.status == "normalized"):
+        raise ValueError("Normalized evidence and table references require schema version 0.4")
+    if evidence.source_matches:
+        if evidence.matches or evidence.status not in {"normalized", "ambiguous"}:
+            raise ValueError("Normalized source matches cannot replace exact match coordinates")
+        coordinates = [(match.span.start, match.span.end) for match in evidence.source_matches]
+        if len(coordinates) != len(set(coordinates)) or coordinates != sorted(coordinates):
+            raise ValueError("Normalized source coordinates must be unique and ordered")
+        for match in evidence.source_matches:
+            start, end = match.span.start, match.span.end
+            if not start < end <= len(document.text) or document.text[start:end] != match.source_quote:
+                raise ValueError("Normalized source coordinates must recover the unchanged source quote")
+            chunk = DocumentChunk(chunk_id="archive", text=match.source_quote, segments=[match.span])
+            checked = ground_quote(document.text, chunk, evidence.quote, normalize=True)
+            if checked.status != "normalized" or checked.source_matches != [match]:
+                raise ValueError("Normalized evidence must reproduce the recorded conservative search match")
+        if evidence.status == "normalized":
+            if coordinates != [(evidence.start, evidence.end)]:
+                raise ValueError("Normalized evidence needs exactly one consistent source location")
+        elif len(coordinates) < 2 or evidence.start is not None or evidence.end is not None:
+            raise ValueError("Ambiguous normalized evidence requires multiple locations and no selected span")
+    elif evidence.status == "normalized":
+        raise ValueError("Normalized evidence requires its original source match")
+    else:
+        _validate_exact_evidence(document, evidence)
+    if evidence.table_refs:
+        from .structure import build_structure
+        structure = document.structure or build_structure(document.text)
+        expected = _with_table_refs(evidence.model_copy(update={"table_refs": []}), structure)
+        if expected.table_refs != evidence.table_refs:
+            raise ValueError("Table references must identify the exact source cells")
+
+
+def _validate_exact_evidence(document: Document, evidence: EvidenceRef) -> None:
     coordinates = [(span.start, span.end) for span in evidence.matches]
     if len(coordinates) != len(set(coordinates)):
         raise ValueError("Evidence match coordinates must be unique")
@@ -81,20 +116,24 @@ def _validate_evidence(document: Document, evidence: EvidenceRef) -> None:
 
 def _validate_measurements(document: Document, extraction: ExtractionResult, candidate: Candidate) -> None:
     spec = extraction.task.record_types[candidate.record_type]
+    structure = None
+    if extraction.schema_version == "0.4" and candidate.measurements:
+        from .structure import build_structure
+        structure = document.structure or build_structure(document.text)
     if candidate.measurements.keys() - spec.measurement_groups.keys():
         raise ValueError("Measurements must reference declared task groups")
     for name, measurement in candidate.measurements.items():
-        if extraction.schema_version != "0.3" and measurement.range_binding is not None:
+        if extraction.schema_version not in {"0.3", "0.4"} and measurement.range_binding is not None:
             raise ValueError("Range bindings require extraction schema version 0.3")
         contexts = [measurement.context]
         if measurement.unit_context is not None:
             contexts.append(measurement.unit_context)
         for evidence in [*contexts, measurement.value, measurement.unit]:
-            _validate_evidence(document, evidence)
+            _validate_evidence(document, evidence, schema_version=extraction.schema_version)
         if measurement.range_binding is not None:
             binding = measurement.range_binding
             for evidence in [*binding.endpoints, binding.separator, *binding.units]:
-                _validate_evidence(document, evidence)
+                _validate_evidence(document, evidence, schema_version=extraction.schema_version)
                 if evidence.status != "matched":
                     raise ValueError("Range bindings require exact matched source positions")
         if measurement.condition_fields != spec.measurement_groups[name].condition_fields:
@@ -119,7 +158,8 @@ def _validate_measurements(document: Document, extraction: ExtractionResult, can
                 unit_quote=measurement.unit_context.quote if measurement.unit_context else "",
             )
             checked = check_measurement(document.text, chunk, raw, spec.measurement_groups[name], candidate.fields,
-                                        schema_version=extraction.schema_version)
+                                        schema_version=extraction.schema_version,
+                                        structure=structure)
             if (not measurement.issues and checked.model_dump() != measurement.model_dump()
                     or measurement.range_binding != checked.range_binding):
                 raise ValueError("Measurement evidence does not pass its recorded mechanical checks")
@@ -129,15 +169,21 @@ def _validate_candidate(document: Document, extraction: ExtractionResult, candid
     spec = extraction.task.record_types.get(candidate.record_type)
     if spec is None or candidate.fields.keys() - spec.fields.keys():
         raise ValueError("A candidate must use declared task record types and fields")
+    if candidate.source_context and extraction.schema_version != "0.4":
+        raise ValueError("Candidate source context requires extraction schema version 0.4")
+    for passage in candidate.source_context:
+        if (not passage.span.start < passage.span.end <= len(document.text)
+                or document.text[passage.span.start:passage.span.end] != passage.quote):
+            raise ValueError("Candidate source context must recover an exact original source passage")
     types = {"string": (str,), "integer": (int,), "number": (int, float), "boolean": (bool,)}
     for name, field in candidate.fields.items():
         if field.value is not None and type(field.value) not in types[spec.fields[name].type]:
             raise ValueError("A candidate field has an invalid task scalar type")
-        _validate_evidence(document, field.evidence)
+        _validate_evidence(document, field.evidence, schema_version=extraction.schema_version)
     if candidate.field_status.keys() - spec.fields.keys():
         raise ValueError("Field statuses must reference declared task fields")
     _validate_measurements(document, extraction, candidate)
-    grounded = can_ground_fields(candidate.fields) if extraction.schema_version in {"0.2", "0.3"} else (
+    grounded = can_ground_fields(candidate.fields) if extraction.schema_version in {"0.2", "0.3", "0.4"} else (
         bool(candidate.fields) and all(field.evidence.status == "matched" for field in candidate.fields.values())
     )
     if grounded:

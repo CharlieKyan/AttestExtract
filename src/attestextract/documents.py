@@ -9,6 +9,7 @@ from typing import Literal
 from pydantic import ConfigDict, Field, model_validator
 
 from .models import ContractModel
+from .structure import DocumentStructure, validate_structure
 
 
 class DocumentMetadata(ContractModel):
@@ -42,6 +43,7 @@ class Document(ContractModel):
     metadata: DocumentMetadata = Field(default_factory=DocumentMetadata)
     text_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     character_count: int = Field(ge=0)
+    structure: DocumentStructure | None = None
 
     @model_validator(mode="after")
     def verify_identity(self) -> Document:
@@ -50,6 +52,8 @@ class Document(ContractModel):
             raise ValueError("Document text, hash, and character count must agree")
         if self.document_id != _document_id(digest, self.representation, self.representation_version):
             raise ValueError("Document ID must identify its exact text representation")
+        if self.structure is not None:
+            validate_structure(self.text, self.structure)
         return self
 
     @classmethod
@@ -58,6 +62,7 @@ class Document(ContractModel):
         representation: Literal["text/plain", "text/markdown"] = "text/plain",
         representation_version: str = "1",
         metadata: DocumentMetadata | dict | None = None,
+        structure: DocumentStructure | dict | None = None,
     ) -> Document:
         if not isinstance(text, str):
             raise TypeError("Document text must be a string")
@@ -68,4 +73,5 @@ class Document(ContractModel):
             representation_version=representation_version,
             metadata=DocumentMetadata.model_validate(metadata or {}),
             text_sha256=digest, character_count=len(text),
+            structure=DocumentStructure.model_validate(structure) if structure is not None else None,
         )
