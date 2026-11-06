@@ -23,6 +23,10 @@ from .output_protocol import output_protocol_for_backend
 from .backends import OpenAICompatibleBackend as _CompatibleBackend
 from .responses_backend import DeepSeekResponsesBackend as _ResponsesBackend
 
+# Change this when prompts, planning, parsing, or evidence semantics change.
+# Transport-only releases deliberately retain the dev19 extraction revision.
+ENGINE_REVISION = "dev19-extraction-1"
+
 
 def digest(value: Any) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False,
@@ -65,8 +69,13 @@ class _Node(ContractModel):
 
 
 class _State(ContractModel):
-    checkpoint_version: Literal["2"] = "2"
+    checkpoint_version: Literal["2", "3"] = "3"
     fingerprint: str
+    engine_revision: str = ENGINE_REVISION
+    package_version: str | None = None
+    transport_settings: dict[str, Any] = Field(default_factory=dict)
+    transport_changes: list[dict[str, Any]] = Field(default_factory=list)
+    migrations: list[dict[str, str]] = Field(default_factory=list)
     output_protocol: OutputProtocol = "native-v1"
     roots: list[str]
     nodes: dict[str, _Node]
@@ -85,8 +94,12 @@ def _read_state(envelope: dict) -> _State:
     if (not isinstance(envelope, dict) or set(envelope) != {"state", "sha256"} or
             not isinstance(envelope["state"], dict) or digest(envelope["state"]) != envelope["sha256"]):
         raise ValueError("checksum")
-    if envelope["state"].get("checkpoint_version") != "2":
+    if envelope["state"].get("checkpoint_version") not in {"2", "3"}:
         raise ConfigurationError("This checkpoint uses an older or unsupported execution format. Start a new run; dev12 chunk plans cannot be resumed with the sentence-aware planner.")
+    if envelope["state"].get("checkpoint_version") == "3" and not {
+        "engine_revision", "package_version", "transport_settings", "transport_changes", "migrations"
+    }.issubset(envelope["state"]):
+        raise ValueError("missing v3 identity metadata")
     return _State.model_validate(envelope["state"])
 
 
@@ -133,15 +146,19 @@ class ExecutionSession:
     def __init__(self, text: str, chunks: list[DocumentChunk], options: ExecutionOptions,
                  fingerprint: str, *, trace: RunTrace | None = None,
                  resume_from: str | Path | None = None, format_retries: int = 0,
-                 output_protocol: OutputProtocol = "flat-v1", structure=None) -> None:
+                 output_protocol: OutputProtocol = "flat-v1", structure=None,
+                 transport_settings: dict[str, Any] | None = None, legacy_compatibility=None) -> None:
+        from . import __version__
         if resume_from is not None and trace is not None and trace.directory is not None:
             check_resume_paths(resume_from, [trace.directory])
         self.text, self.options, self.trace = text, options, trace
         self.structure = structure
+        self._legacy_compatibility = legacy_compatibility
         self.chunks = {chunk.chunk_id: chunk for chunk in chunks}
         self.cached: dict[str, BackendResponse] = {}
         self.reused = 0
         self.state = _State(fingerprint=fingerprint, output_protocol=output_protocol, roots=list(self.chunks),
+                            package_version=__version__, transport_settings=transport_settings or {},
                             nodes={chunk.chunk_id: _Node(segments=chunk.segments, body_segments=chunk.body_segments, depth=0) for chunk in chunks},
                             max_model_calls=options.max_model_calls or max(1, 3 * len(chunks)),
                             format_retries=format_retries)
@@ -171,9 +188,15 @@ class ExecutionSession:
         try:
             envelope = json.loads(path.read_bytes().decode("utf-8"))
             state = _read_state(envelope)
+            legacy = state.checkpoint_version == "2"
+            if legacy:
+                if self._legacy_compatibility is None:
+                    raise ConfigurationError("This v2 checkpoint cannot be verified for migration. Only supported dev19 built-in backend runs can migrate; start a new run.")
+                self._legacy_compatibility.migrate_identity(state, path, self.state)
             if (state.fingerprint != self.state.fingerprint or state.roots != self.state.roots
-                    or state.output_protocol != self.state.output_protocol):
-                raise ConfigurationError("Resume identity mismatch: use the same source, task, package version, output protocol, model, endpoint and generation/planning settings. Only the total call budget and format-retry allowance may change; consumed allowances are retained.")
+                    or state.output_protocol != self.state.output_protocol
+                    or state.engine_revision != self.state.engine_revision):
+                raise ConfigurationError("Resume identity mismatch: use the same source, task, engine revision, output protocol, model, endpoint and generation/planning settings. Connection settings, total call budget and format-retry allowance may change; consumed allowances are retained.")
             pending = [(self.chunks[key], 0) for key in state.roots]
             visited = set()
             while pending:
@@ -219,10 +242,16 @@ class ExecutionSession:
                 raise ValueError("budget ledger")
             if state.response_count > state.calls_used or state.request_attempts < state.response_count:
                 raise ValueError("response ledger")
+            if legacy:
+                self._legacy_compatibility.validate_requests(state, path, self.chunks)
         except ConfigurationError:
             raise
         except (OSError, ValueError, TypeError, KeyError, ValidationError, RecursionError):
             raise ConfigurationError("Resume checkpoint/cache is missing, damaged, redacted or incompatible; no cached result was trusted.") from None
+        if state.transport_settings != self.state.transport_settings:
+            state.transport_changes.append({"from": state.transport_settings, "to": self.state.transport_settings})
+        state.transport_settings = self.state.transport_settings
+        state.package_version = self.state.package_version
         self.state = state
         self.state.history.extend(str(directory) for directory in _resume_directories(resume_from)
                                   if str(directory) not in self.state.history)
@@ -253,7 +282,10 @@ class ExecutionSession:
                 "format_recovered_chunks": sum(n.status == "completed" and n.format_retries_reserved == 1 for n in leaves),
                 "failed_chunks": sum(n.status == "failed" for n in leaves),
                 "pending_chunks": sum(n.status in {"pending", "in_flight"} for n in leaves),
-                "policy_changes": self.state.policy_changes}
+                "policy_changes": self.state.policy_changes,
+                "transport_settings": self.state.transport_settings,
+                "transport_changes": self.state.transport_changes,
+                "migrations": self.state.migrations}
 
     def save(self) -> None:
         if self.trace is not None and self.trace.directory is not None:
@@ -359,12 +391,11 @@ def prepare_execution(text: str, task: TaskSpec, backend: Any, generation: Gener
                       source_name: str | None = None, backend_identity: str | None = None,
                       trace: RunTrace | None = None, resume_from: str | Path | None = None,
                       context: ContextOptions | None = None, structure=None) -> ExecutionSession:
-    from . import __version__
-
+    builtin = type(backend) in (_CompatibleBackend, _ResponsesBackend)
     if backend_identity is None:
-        if type(backend) in (_CompatibleBackend, _ResponsesBackend):
+        if builtin:
             backend_identity = digest({key: getattr(backend, key, None) for key in (
-                "name", "base_url", "model", "timeout", "max_attempts", "tls_mode", "structured_output",
+                "name", "base_url", "model", "structured_output",
                 "provider_options", "output_token_parameter")})
         elif resume_from is not None or trace is not None and trace.directory is not None:
             raise ConfigurationError("Persistent execution with a custom backend needs an explicit backend_identity string binding its model and configuration.")
@@ -375,13 +406,20 @@ def prepare_execution(text: str, task: TaskSpec, backend: Any, generation: Gener
     chunks = plan_chunks(text, task, generation, options, max_chars=max_chars, table_rows_per_chunk=table_rows_per_chunk,
                          context=context, structure=structure)
     output_protocol = output_protocol_for_backend(backend)
-    fingerprint = digest({"package_version": __version__, "output_protocol": output_protocol, "source": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+    identity = {"engine_revision": ENGINE_REVISION, "output_protocol": output_protocol, "source": hashlib.sha256(text.encode("utf-8")).hexdigest(),
                           "source_name": source_name, "task": task.model_dump(mode="json"),
                           "backend": backend_identity, "backend_name": backend.name,
                           "generation": generation.model_dump(mode="json"),
                           "policy": options.model_dump(exclude={"max_model_calls"}),
                           "max_chars": max_chars, "table_rows_per_chunk": table_rows_per_chunk,
                           "context": (context or ContextOptions()).model_dump(),
-                          "structure": structure.model_dump(mode="json") if structure is not None else None})
-    return ExecutionSession(text, chunks, options, fingerprint, trace=trace, resume_from=resume_from,
-                            format_retries=format_retries, output_protocol=output_protocol, structure=structure)
+                          "structure": structure.model_dump(mode="json") if structure is not None else None}
+    transport = {key: getattr(backend, key, None) for key in (
+        "timeout", "read_timeout", "tls_mode", "max_attempts")} if builtin else {}
+    legacy_compatibility = None
+    if builtin and resume_from is not None:
+        from .execution_migration import Dev19Migration
+        legacy_compatibility = Dev19Migration(backend, task, generation, identity)
+    return ExecutionSession(text, chunks, options, digest(identity), trace=trace, resume_from=resume_from,
+                            format_retries=format_retries, output_protocol=output_protocol, structure=structure,
+                            transport_settings=transport, legacy_compatibility=legacy_compatibility)

@@ -10,4 +10,6 @@ include scripts/protocol_evidence_smoke.py
 include scripts/decision_bundle_smoke.py
 include scripts/d4_evidence_smoke.py
 include scripts/d4_context_experiment.py
+include scripts/transport_recovery_smoke.py
+recursive-include tests/fixtures *.json *.md
 recursive-include docs *.md

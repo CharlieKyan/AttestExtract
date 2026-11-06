@@ -1,0 +1,13 @@
+{
+  "backend": "openai-compatible",
+  "model": "synthetic",
+  "timeout": 60.0,
+  "max_attempts": 1,
+  "tls_mode": "1.2",
+  "structured_output": "json_object",
+  "generation": {
+    "temperature": null,
+    "max_output_tokens": null
+  },
+  "output_token_parameter": "max_tokens"
+}

@@ -73,7 +73,7 @@ def _recovery_case(root, observed):
     assert _read(first / "diagnostics/error.json")["code"] == "call_budget_exhausted"
     assert not (first / "result.json").exists()
     saved = _read(first / "diagnostics/execution/checkpoint.json")["state"]
-    assert saved["checkpoint_version"] == "2" and saved["calls_used"] == 2
+    assert saved["checkpoint_version"] == "3" and saved["calls_used"] == 2
     assert saved["nodes"]["chunk-0001"]["status"] == "completed"
     assert saved["nodes"]["chunk-0002"]["format_failures"] == 1
     assert saved["nodes"]["chunk-0002"]["format_retries_reserved"] == 0

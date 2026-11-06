@@ -1,0 +1,31 @@
+{
+  "name": "Synthetic readings",
+  "description": "",
+  "record_types": {
+    "reading": {
+      "description": "",
+      "fields": {
+        "subject": {
+          "type": "string",
+          "description": "",
+          "required": true,
+          "required_when": {},
+          "not_applicable_when": {}
+        },
+        "amount": {
+          "type": "integer",
+          "description": "",
+          "required": true,
+          "required_when": {},
+          "not_applicable_when": {}
+        }
+      },
+      "identity_fields": [
+        "subject"
+      ],
+      "condition_fields": [],
+      "measurement_groups": {},
+      "comparison_fields": []
+    }
+  }
+}

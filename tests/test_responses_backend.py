@@ -346,10 +346,16 @@ def test_python_persistent_resume_reuses_completed_with_same_or_rotated_credenti
 @pytest.mark.parametrize("change", [
     {"base_url": "https://api.deepseek.com/v1"}, {"model": "deepseek-v4-pro"},
     {"structured_output": "json_object"}, {"provider_options": {"reasoning": {"effort": "none"}}},
-    {"tls_mode": "1.2"},
 ])
 def test_python_resume_rejects_changed_endpoint_or_model_settings_before_call(tmp_path, change):
     persistent_run(tmp_path / "first", handler=lambda _: httpx.Response(200, json=completion(output=[message(json.dumps(SYNTHETIC_RECORDS))])))
     with pytest.raises(ConfigurationError, match="identity mismatch"):
         persistent_run(tmp_path / "second", resume=tmp_path / "first",
                        handler=lambda _: pytest.fail("identity mismatch must fail before network"), **change)
+
+
+def test_python_resume_accepts_transport_change_without_regeneration(tmp_path):
+    persistent_run(tmp_path / "first", handler=lambda _: httpx.Response(200, json=completion(output=[message(json.dumps(SYNTHETIC_RECORDS))])))
+    result = persistent_run(tmp_path / "second", resume=tmp_path / "first", tls_mode="1.2",
+                            handler=lambda _: pytest.fail("transport change must reuse cached response"))
+    assert result.run.chunk_count == 1

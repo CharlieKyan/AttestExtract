@@ -46,6 +46,7 @@ jobs:
           protocol_script = Path("scripts/protocol_evidence_smoke.py").resolve()
           decision_script = Path("scripts/decision_bundle_smoke.py").resolve()
           d4_script = Path("scripts/d4_evidence_smoke.py").resolve()
+          transport_script = Path("scripts/transport_recovery_smoke.py").resolve()
           with tempfile.TemporaryDirectory(prefix="attestextract-smoke-") as directory:
               root = Path(directory)
               environment = root / "venv"
@@ -61,7 +62,7 @@ jobs:
               assert set(examples) == {"ccus", "procurement"}
               for name, count in (("ccus", 2), ("procurement", 3)):
                   result = examples[name]
-                  assert result["package_version"] == "0.1.0.dev19"
+                  assert result["package_version"] == "0.1.0.dev20"
                   assert result["run"]["mode"] == "replay"
                   assert len(result["candidates"]) == count
                   assert result["review"] == []
@@ -71,7 +72,7 @@ jobs:
               assert set(archives) == {"attribute", "observation", "relation"}
               for name, candidate_count, record_count in (("attribute", 2, 1), ("observation", 2, 2), ("relation", 1, 1)):
                   archive = archives[name]
-                  assert archive["extraction"]["package_version"] == "0.1.0.dev19"
+                  assert archive["extraction"]["package_version"] == "0.1.0.dev20"
                   assert archive["extraction"]["run"]["mode"] == "replay"
                   assert len(archive["extraction"]["candidates"]) == candidate_count
                   assert len(archive["records"]) == record_count
@@ -85,7 +86,7 @@ jobs:
               subprocess.run([str(python), str(copied), "--mode", "mock", "--output-dir", str(acceptance)],
                              check=True, cwd=root, env=env)
               summary = json.loads((acceptance / "summary.json").read_text(encoding="utf-8"))
-              assert summary["package_version"] == "0.1.0.dev19"
+              assert summary["package_version"] == "0.1.0.dev20"
               assert summary["passed"] and summary["real_endpoint_calls"] == 0
               assert summary["mock_http_calls"] == 3
               assert [case["candidate_count"] for case in summary["cases"]] == [1, 2, 1]
@@ -150,3 +151,12 @@ jobs:
               d4 = json.loads((d4_output / "summary.json").read_text(encoding="utf-8"))
               assert d4["passed"] and d4["real_endpoint_calls"] == 0
               assert Path(d4["module_path"]).is_relative_to(environment)
+              transport_copy = scripts / "transport_recovery_smoke.py"
+              shutil.copyfile(transport_script, transport_copy)
+              transport_output = root / "transport-recovery"
+              subprocess.run([str(python), str(transport_copy), "--output-dir", str(transport_output)],
+                             check=True, cwd=root, env=env)
+              transport = json.loads((transport_output / "summary.json").read_text(encoding="utf-8"))
+              assert transport["passed"] and transport["real_endpoint_calls"] == 0
+              assert transport["mock_http_calls"] == 17 and transport["resume_new_calls"] == 5
+              assert Path(transport["module_path"]).is_relative_to(environment)

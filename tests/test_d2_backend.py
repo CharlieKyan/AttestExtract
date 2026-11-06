@@ -120,10 +120,10 @@ def test_http_failure_codes_preserve_retry_policy(status, code, retryable):
     assert (caught.value.code, caught.value.retryable, caught.value.attempts) == (code, retryable, 1)
 
 
-@pytest.mark.parametrize(("failure", "code"), [
-    (httpx.ReadTimeout, "timeout"), (httpx.ConnectError, "transport_error"),
+@pytest.mark.parametrize(("failure", "code", "retryable"), [
+    (httpx.ReadTimeout, "timeout", False), (httpx.ConnectError, "transport_error", True),
 ])
-def test_transport_failure_has_stable_code_without_exposing_details(failure, code):
+def test_transport_failure_has_stable_code_without_exposing_details(failure, code, retryable):
     def handler(incoming):
         raise failure("private transport detail", request=incoming)
 
@@ -133,7 +133,7 @@ def test_transport_failure_has_stable_code_without_exposing_details(failure, cod
     )
     with pytest.raises(BackendError) as caught:
         backend.generate(request())
-    assert caught.value.code == code and caught.value.retryable is True
+    assert caught.value.code == code and caught.value.retryable is retryable
     assert "private" not in str(caught.value)
 
 

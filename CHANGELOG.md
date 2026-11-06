@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.0.dev20
+
+- Add Qwen's verified TLS compatibility preflight: anonymous, bounded `/models` probes may select TLS 1.2 only after recognized bad-record-MAC failures. Never replay an ambiguous generation POST to change TLS; certificate failures remain failures.
+- Default connect/read/write/pool timeouts to 15/180/30/15 seconds; preserve explicit uniform timeouts and add `read_timeout` / `--read-timeout` and `--tls-mode`. Read/write failures that may have reached the server stop even with multiple HTTP attempts configured.
+- Checkpoint v3 separates transport settings from extraction identity, records transport changes, and narrowly migrates validated dev19/v2 builtin runs. Offline `--check --resume` validates every cached response; failed runs show a shell-quoted recovery command. Preserve flat-v1 and dev19 result schema 0.4.
+- No new provider SDK, streaming, JSON repair or paid model calls. TLS probes, model POST attempts and generation reservations are separate counts; a preflight-only failure conservatively retains its generation reservation.
+
 ## 0.1.0.dev19
 
 - Add optional source-indexed Markdown/MinerU HTML structure, table grids and explicit header hints; fix escaped-pipe column misbinding and support pipe tables without outer delimiters.

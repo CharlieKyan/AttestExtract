@@ -398,6 +398,19 @@ def _validated_response(
     raise AssertionError("Unreachable format retry state")  # pragma: no cover
 
 
+def _validate_cached_responses(task: TaskSpec, session: ExecutionSession) -> dict:
+    """Check every cached response before a live resume or an offline preview."""
+    checked = {}
+    allowed_keys = {name for record in task.record_types.values()
+                    for name in (*record.fields, *record.measurement_groups)}
+    protocol = session.state.output_protocol
+    for key, response in session.cached.items():
+        raw = _parse_response(response.text, output_protocol=protocol, allowed_keys=allowed_keys)
+        _check_task_records(raw, task, trace=None, chunk_id=key, output_protocol=protocol)
+        checked[key] = raw
+    return checked
+
+
 def _responses_for_chunks(task: TaskSpec, chunks: list[DocumentChunk], backend: ExtractionBackend,
                           trace: RunTrace | None, format_retries: int, generation: GenerationOptions,
                           session: ExecutionSession | None):
@@ -410,14 +423,7 @@ def _responses_for_chunks(task: TaskSpec, chunks: list[DocumentChunk], backend: 
         return
     # Validate ALL reused content before making any new call, even when an
     # earlier pending leaf precedes a damaged cached leaf in document order.
-    checked = {}
-    allowed_keys = {name for record in task.record_types.values()
-                    for name in (*record.fields, *record.measurement_groups)}
-    for key, response in session.cached.items():
-        protocol = output_protocol_for_backend(backend)
-        raw = _parse_response(response.text, output_protocol=protocol, allowed_keys=allowed_keys)
-        _check_task_records(raw, task, trace=None, chunk_id=key, output_protocol=protocol)
-        checked[key] = raw
+    checked = _validate_cached_responses(task, session)
     session.event("started", **session.summary())
     queue = session.leaves()
     while queue:
@@ -477,7 +483,7 @@ def _selected_backend(
         raise ConfigurationError("model_options must be a mapping of backend configuration overrides.")
     overrides = dict(model_options or {})
     allowed = {
-        "base_url", "api_key_env", "timeout", "max_attempts", "structured_output",
+        "base_url", "api_key_env", "timeout", "read_timeout", "tls_mode", "max_attempts", "structured_output",
         "generation", "provider_options", "output_token_parameter",
     }
     if set(overrides) - allowed:
@@ -505,6 +511,7 @@ def _selected_backend(
         trace.write_json("backend.json", {
             "backend": backend.name, "adapter": config.adapter, "model": config.model,
             "model_id": model, "selection_mode": "preset", "timeout": config.timeout,
+            "read_timeout": config.read_timeout,
             "max_attempts": config.max_attempts, "api_key_configured": bool(key),
             "env_file_used": env_file is not None, "structured_output": config.structured_output,
             "format_retries": config.format_retries,

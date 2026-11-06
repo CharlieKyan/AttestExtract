@@ -1,0 +1,10 @@
+{
+  "text": "{\"records\":[]}",
+  "model": "synthetic",
+  "usage": {},
+  "attempts": 1,
+  "elapsed_seconds": 0.020241999998688698,
+  "finish_reason": "stop",
+  "request_id": null,
+  "reported_model": "synthetic"
+}

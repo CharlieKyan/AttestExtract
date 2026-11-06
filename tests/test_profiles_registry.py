@@ -46,7 +46,7 @@ def test_legacy_environment_and_defaults_are_preserved():
         "ATTESTEXTRACT_MODEL": "old", "ATTESTEXTRACT_BASE_URL": "https://synthetic.invalid",
     })
     assert config.model == "explicit" and config.adapter == "openai-compatible"
-    assert config.timeout == 60 and config.max_attempts == 3
+    assert config.timeout is None and config.read_timeout is None and config.max_attempts == 3
     assert config.structured_output == "off" and config.format_retries == 0
     assert config.generation.max_output_tokens is None
 

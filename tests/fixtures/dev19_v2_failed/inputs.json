@@ -1,0 +1,46 @@
+{
+  "text": "Item A reads 11.\n\nItem B reads 22.\n\nItem C reads 33.",
+  "task": {
+    "name": "Synthetic readings",
+    "record_types": {
+      "reading": {
+        "fields": {
+          "subject": {
+            "type": "string",
+            "required": true
+          },
+          "amount": {
+            "type": "integer",
+            "required": true
+          }
+        },
+        "identity_fields": [
+          "subject"
+        ]
+      }
+    }
+  },
+  "config": {
+    "adapter": "openai-compatible",
+    "base_url": "https://synthetic.invalid/v1",
+    "model": "synthetic",
+    "api_key_env": "ATTESTEXTRACT_API_KEY",
+    "timeout": 60.0,
+    "max_attempts": 1,
+    "structured_output": "json_object",
+    "format_retries": 0,
+    "tls_mode": "1.2",
+    "generation": {
+      "temperature": null,
+      "max_output_tokens": null
+    },
+    "provider_options": {},
+    "output_token_parameter": "max_tokens"
+  },
+  "max_chunk_chars": 18,
+  "execution": {
+    "adaptive_chunking": false,
+    "min_chunk_chars": 1,
+    "max_model_calls": 6
+  }
+}

@@ -48,7 +48,8 @@ def _compatible_factory(
 ) -> ExtractionBackend:
     return backends.OpenAICompatibleBackend(
         base_url=config.base_url, model=config.model, api_key=api_key,
-        timeout=config.timeout, max_attempts=config.max_attempts, trace=trace,
+        timeout=config.timeout, read_timeout=config.read_timeout,
+        max_attempts=config.max_attempts, trace=trace,
         structured_output=config.structured_output, provider_options=config.provider_options,
         output_token_parameter=config.output_token_parameter,
         tls_mode=config.tls_mode,
@@ -60,7 +61,8 @@ def _responses_factory(
 ) -> ExtractionBackend:
     return DeepSeekResponsesBackend(
         base_url=config.base_url, model=config.model, api_key=api_key,
-        timeout=config.timeout, max_attempts=config.max_attempts, trace=trace,
+        timeout=config.timeout, read_timeout=config.read_timeout,
+        max_attempts=config.max_attempts, trace=trace,
         structured_output=config.structured_output, provider_options=config.provider_options,
         output_token_parameter=config.output_token_parameter, tls_mode=config.tls_mode,
     )

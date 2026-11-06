@@ -260,11 +260,16 @@ def test_console_heartbeat_stops_and_does_not_echo_payload():
         console({"stage": "chunking", "event": "completed", "chunk_count": 1})
         console({"stage": "model_request", "event": "started", "chunk_id": "chunk-0001", "format_attempt": 1,
                  "source": "private-example"})
+        console({"stage": "http", "event": "transport_failed", "phase": "preflight", "request_outcome": "not_sent"})
+        console({"stage": "transport", "event": "tls_selected", "effective_tls_mode": "1.2", "fallback": True, "probe_requests": 2})
+        console({"stage": "http", "event": "started", "read_timeout": 180})
         assert ready.wait(2)
     finally:
         console.close()
     assert not console._thread.is_alive()
     assert "private-example" not in stream.getvalue()
+    assert "read timeout 180s" in stream.getvalue()
+    assert "compatibility fallback" in stream.getvalue()
 
 
 def test_tls_compatibility_verifies_certificates_and_is_provider_scoped(monkeypatch):
@@ -275,7 +280,7 @@ def test_tls_compatibility_verifies_certificates_and_is_provider_scoped(monkeypa
     assert context.verify_mode == ssl.CERT_REQUIRED and context.check_hostname
     assert tls_context("auto") is True
     assert resolve_model_config("deepseek:deepseek-flash", environment={}).tls_mode == "1.2"
-    assert resolve_model_config("qwen:qwen3.8-27b", environment={}).tls_mode == "auto"
+    assert resolve_model_config("qwen:qwen3.8-27b", environment={}).tls_mode == "auto_fallback"
     assert resolve_model_config("deepseek:deepseek-flash", environment={}, overrides={"tls_mode": "auto"}).tls_mode == "auto"
 
 
@@ -315,3 +320,98 @@ def test_event_only_trace_keeps_diagnostics_without_nonexistent_file_references(
         backend.generate(ExtractionRequest(chunk_id="chunk-0001", messages=[{"role": "user", "content": "synthetic"}]))
     assert caught.value.http_details is None and caught.value.http_diagnostics is not None
     assert next(e for e in events if e["event"] == "error_reported")["artifact"] is None
+
+
+@pytest.mark.parametrize("overrides, expected", [
+    ([], {"connect": 15, "read": 180, "write": 30, "pool": 15}),
+    (["--timeout", "90"], {"connect": 90, "read": 90, "write": 90, "pool": 90}),
+    (["--timeout", "90", "--read-timeout", "240"], {"connect": 90, "read": 240, "write": 90, "pool": 90}),
+])
+def test_cli_timeout_preview_remains_offline(tmp_path, monkeypatch, capsys, overrides, expected):
+    monkeypatch.setattr(httpx.Client, "send", lambda *a, **k: pytest.fail("offline preview contacted service"))
+    args = arguments(tmp_path)
+    args[-1] = "qwen:qwen3.8-27b"
+    assert cli.main(args + overrides + ["--check"]) == 0
+    preview = json.loads(capsys.readouterr().out)
+    assert preview["effective_timeouts"] == expected
+    assert preview["tls_mode"] == "auto_fallback"
+    assert preview["network_calls"] == 0
+
+
+def test_cli_resume_preview_revalidates_cache_after_transport_changes(tmp_path, monkeypatch, capsys):
+    intercept(monkeypatch, lambda _: response())
+    args = arguments(tmp_path)
+    assert cli.main(args) == 0
+    capsys.readouterr()
+    old = next((tmp_path / "outputs").iterdir())
+    before = {f.relative_to(old): f.read_bytes() for f in old.rglob("*") if f.is_file()}
+    monkeypatch.setattr(httpx.Client, "send", lambda *a, **k: pytest.fail("resume preview contacted service"))
+    assert cli.main(args + ["--resume", str(old), "--read-timeout", "240", "--tls-mode", "auto_fallback", "--check"]) == 0
+    preview = json.loads(capsys.readouterr().out)
+    assert preview["resume"] == {"requested": True, "reusable_chunks": 1, "remaining_chunks": 0, "remaining_call_budget": 2}
+    assert before == {f.relative_to(old): f.read_bytes() for f in old.rglob("*") if f.is_file()}
+    # An integrity-valid but contract-invalid cache must fail even in --check.
+    from attestextract.execution import digest
+    cache = old / "diagnostics/execution/cache/chunk-0001.json"
+    data = json.loads(cache.read_text())
+    data["text"] = '{"records":[{"record_type":"unknown","values":{},"quotes":{}}]}'
+    cache.write_text(json.dumps(data), encoding="utf-8")
+    checkpoint = old / "diagnostics/execution/checkpoint.json"
+    saved = json.loads(checkpoint.read_text())
+    saved["state"]["nodes"]["chunk-0001"]["cache_hash"] = digest(data)
+    saved["sha256"] = digest(saved["state"])
+    checkpoint.write_text(json.dumps(saved), encoding="utf-8")
+    assert cli.main(args + ["--resume", str(old), "--check"]) == 1
+    assert "undeclared" in capsys.readouterr().err.lower()
+
+
+def test_failed_read_prints_copyable_resume_without_secrets(tmp_path, monkeypatch, capsys):
+    calls = []
+    def handler(request):
+        calls.append(request)
+        raise httpx.ReadTimeout("synthetic-key must not leak", request=request)
+    intercept(monkeypatch, handler)
+    args = arguments(tmp_path)
+    assert cli.main(args + ["--max-attempts", "3"]) == 1
+    assert len(calls) == 1
+    terminal = capsys.readouterr().err
+    assert "not automatically retried" in terminal
+    assert "Resume in a new run" in terminal and "--resume" in terminal
+    assert "synthetic-key" not in terminal
+    assert "read timeout 180s" in terminal
+
+
+def test_resume_preview_http_bound_keeps_observed_old_retry_attempts(tmp_path, monkeypatch, capsys):
+    calls = []
+    def handler(request):
+        calls.append(request)
+        return response() if len(calls) == 3 else httpx.Response(503)
+    intercept(monkeypatch, handler)
+    monkeypatch.setattr(OpenAICompatibleBackend, "_pause", lambda *a: None)
+    args = arguments(tmp_path)
+    assert cli.main(args + ["--max-attempts", "3"]) == 0
+    capsys.readouterr()
+    old = next((tmp_path / "outputs").iterdir())
+    assert cli.main(args + ["--resume", str(old), "--max-attempts", "1", "--check"]) == 0
+    preview = json.loads(capsys.readouterr().out)
+    assert len(calls) == 3
+    assert preview["execution"]["calls_reserved"] == 1
+    assert preview["execution"]["request_attempts"] == 3
+    assert preview["max_http_attempts_upper_bound"] == 5  # Three observed + two remaining at one each.
+
+
+def test_resume_command_escapes_shell_arguments_and_uses_new_outputs(tmp_path):
+    import os
+    import shlex
+    args = cli._parser().parse_args(arguments(tmp_path) + ["--output", str(tmp_path / "old.json")])
+    args.input = tmp_path / "quoted' document.md"
+    command = cli._resume_command(args, tmp_path / "checkpoint.json")
+    assert "--output" not in command and "--log-dir" not in command
+    if os.name == "nt":
+        assert command.startswith("& '")
+        assert "quoted'' document.md" in command
+    else:
+        parsed = shlex.split(command)
+        assert parsed[parsed.index("--input") + 1] == str(args.input.resolve())
+    args.input = Path("unsafe\nname.md")
+    assert "unavailable" in cli._resume_command(args, tmp_path / "checkpoint.json")

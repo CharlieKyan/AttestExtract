@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import math
 import re
 import time
 from collections.abc import Callable, Sequence
@@ -18,7 +17,8 @@ from .diagnostics import RunTrace, redact_text
 from .http_diagnostics import describe_http_error
 from .models import BackendResponse, ExtractionRequest
 from .schema_diagnostics import assess_schema_compliance, schema_request_info
-from .transport import tls_context, transport_details
+from .transport import (bounded_timeout, connection_signature, safe_to_retry, timeout_phase,
+                        tls_context, tls_fallback_allowed, transport_details)
 
 _RETRYABLE_STATUS_CODES = frozenset({408, 409, 429, 500, 502, 503, 504})
 _RESERVED_OPTIONS = frozenset({
@@ -70,8 +70,8 @@ class OpenAICompatibleBackend:
 
     ``base_url`` includes the API prefix, such as ``https://host.example/v1``.
     A request makes at most ``max_attempts`` attempts, each with an HTTPX
-    timeout of at most 60 seconds. Only transport failures and designated
-    transient HTTP statuses are retried. Raw bodies and endpoint URLs are
+    bounded phase timeouts. Only safe connection failures and designated
+    transient HTTP statuses are retried; uncertain POST outcomes stop. Raw bodies and endpoint URLs are
     omitted; bounded, redacted server error fields are available separately.
     """
 
@@ -85,7 +85,7 @@ class OpenAICompatibleBackend:
         base_url: str,
         model: str,
         api_key: str | None = None,
-        timeout: float = 60,
+        timeout: float | None = None,
         max_attempts: int = 3,
         transport: httpx.BaseTransport | None = None,
         *,
@@ -94,7 +94,8 @@ class OpenAICompatibleBackend:
         structured_output: Literal["off", "json_object", "json_schema"] = "off",
         provider_options: dict[str, Any] | None = None,
         output_token_parameter: Literal["max_tokens", "max_completion_tokens"] = "max_tokens",
-        tls_mode: Literal["auto", "1.2"] = "auto",
+        tls_mode: Literal["auto", "1.2", "auto_fallback"] = "auto",
+        read_timeout: float | None = None,
     ) -> None:
         if not isinstance(base_url, str) or not base_url.strip():
             raise ConfigurationError("A nonempty HTTP(S) API base URL is required.")
@@ -123,13 +124,7 @@ class OpenAICompatibleBackend:
             or not api_key.isascii()
         ):
             raise ConfigurationError("The API key must be a nonempty ASCII string without newlines.")
-        if (
-            isinstance(timeout, bool)
-            or not isinstance(timeout, (int, float))
-            or not math.isfinite(timeout)
-            or not 0 < timeout <= 60
-        ):
-            raise ConfigurationError("The timeout must be greater than 0 and at most 60 seconds.")
+        self.effective_timeout = bounded_timeout(timeout, read_timeout)
         if (
             isinstance(max_attempts, bool)
             or not isinstance(max_attempts, int)
@@ -144,12 +139,13 @@ class OpenAICompatibleBackend:
             raise ConfigurationError(
                 "output_token_parameter must be one of: " + ", ".join(self.output_token_parameters) + "."
             )
-        if tls_mode not in ("auto", "1.2"):
-            raise ConfigurationError("tls_mode must be 'auto' or '1.2'.")
+        if tls_mode not in ("auto", "1.2", "auto_fallback"):
+            raise ConfigurationError("tls_mode must be 'auto', '1.2', or 'auto_fallback'.")
 
         self.base_url = str(url).rstrip("/")
         self.model = model
-        self.timeout = float(timeout)
+        self.timeout = float(timeout) if timeout is not None else None
+        self.read_timeout = float(read_timeout) if read_timeout is not None else None
         self.max_attempts = max_attempts
         self.structured_output = structured_output
         self.provider_options = _validate_provider_options(provider_options)
@@ -161,6 +157,10 @@ class OpenAICompatibleBackend:
         self._transport = transport
         self._sleep = sleep_fn
         self._trace = trace
+        self.effective_tls_mode: str | None = None
+        self.probe_requests = 0
+        self.last_probe_requests = 0
+        self._tls_selection: tuple[tuple, str] | None = None
         if trace is not None and api_key:
             trace.add_secrets(api_key, api_key.strip())
 
@@ -206,6 +206,54 @@ class OpenAICompatibleBackend:
             }
         return payload
 
+    def _select_tls(self, request: ExtractionRequest, started: float) -> None:
+        """Probe without credentials before a model POST; never replay a POST to switch TLS."""
+        self.last_probe_requests = 0
+        if self.tls_mode not in ("auto", "1.2", "auto_fallback"):
+            raise ConfigurationError("Unknown TLS policy.")
+        if self._transport is not None:
+            self._tls_selection = None
+            self.effective_tls_mode = None
+            return
+        if httpx.URL(self.base_url).scheme != "https":
+            self._tls_selection = None
+            self.effective_tls_mode = "not_applicable"
+            return
+        if self.tls_mode != "auto_fallback":
+            self._tls_selection = None
+            self.effective_tls_mode = self.tls_mode
+            return
+        signature = connection_signature(self.base_url, self.tls_mode, self._transport)
+        if self._tls_selection is not None and self._tls_selection[0] == signature:
+            self.effective_tls_mode = self._tls_selection[1]
+            return
+        self._tls_selection = None
+        for mode in ("auto", "1.2"):
+            self.effective_tls_mode = mode
+            self.last_probe_requests += 1
+            self.probe_requests += 1
+            try:
+                # Separate short-lived client: probe cookies cannot enter a model request.
+                with httpx.Client(timeout=5.0, verify=tls_context(mode), follow_redirects=False) as probe:
+                    with probe.stream("GET", self.base_url + "/models") as response:
+                        status = response.status_code  # Do not consume or log the response body.
+            except httpx.TransportError as exc:
+                diagnostic, artifact = self._transport_failure(exc, request, 0, started=started, preflight=True)
+                if mode == "auto" and tls_fallback_allowed(exc):
+                    continue
+                raise BackendError(
+                    "Connection probe failed before any model request was sent.", attempts=0,
+                    code="timeout" if isinstance(exc, httpx.TimeoutException) else "transport_error",
+                    retryable=False, http_diagnostics=diagnostic, http_details=artifact,
+                ) from None
+            self._tls_selection = signature, mode
+            if self._trace is not None:
+                self._trace.event("transport", "tls_selected", chunk_id=request.chunk_id,
+                                  configured_tls_mode=self.tls_mode, effective_tls_mode=mode,
+                                  fallback=mode == "1.2", probe_requests=self.last_probe_requests,
+                                  probe_http_status=status, certificate_verification=True)
+            return
+
     def generate(self, request: ExtractionRequest) -> BackendResponse:
         payload = self.prepare_payload(request)
         context = {"chunk_id": request.chunk_id, "format_attempt": request.format_attempt}
@@ -219,45 +267,42 @@ class OpenAICompatibleBackend:
         if self._api_key is not None:
             headers["Authorization"] = f"Bearer {self._api_key}"
         started = time.perf_counter()
+        self.effective_timeout = bounded_timeout(self.timeout, self.read_timeout)
+        self._select_tls(request, started)
         with httpx.Client(
-            timeout=self.timeout,
+            timeout=self.effective_timeout,
             transport=self._transport,
-            verify=tls_context(self.tls_mode) if self._transport is None else True,
+            verify=tls_context(self.effective_tls_mode) if self.effective_tls_mode in ("auto", "1.2") else True,
             follow_redirects=False,
         ) as client:
             for attempt in range(1, self.max_attempts + 1):
                 if self._trace is not None:
-                    self._trace.event("http", "started", **context, attempt=attempt)
+                    self._trace.event("http", "started", **context, attempt=attempt,
+                                      read_timeout=self.effective_timeout.read, effective_tls_mode=self.effective_tls_mode)
                 try:
                     response = client.post(
                         self.base_url + self.endpoint_path,
                         headers=headers,
                         json=payload,
                     )
-                except httpx.TimeoutException as exc:
-                    diagnostic, artifact = self._transport_failure(exc, request, attempt)
-                    if attempt == self.max_attempts:
-                        raise BackendError(
-                            f"The model request timed out after {attempt} attempt(s).",
-                            attempts=attempt,
-                            code="timeout", retryable=True,
-                            http_diagnostics=diagnostic, http_details=artifact,
-                        ) from None
-                    if self._trace is not None:
-                        self._trace.event("http", "retry", **context, attempt=attempt, reason="timeout")
-                    self._pause(attempt)
-                    continue
                 except httpx.TransportError as exc:
-                    diagnostic, artifact = self._transport_failure(exc, request, attempt)
-                    if attempt == self.max_attempts:
+                    diagnostic, artifact = self._transport_failure(exc, request, attempt, started=started)
+                    retryable = safe_to_retry(exc)
+                    timed_out = isinstance(exc, httpx.TimeoutException)
+                    if attempt == self.max_attempts or not retryable:
+                        message = (f"The model request timed out after {attempt} attempt(s)." if timed_out
+                                   else f"The model request failed in transport after {attempt} attempt(s).")
+                        if not retryable:
+                            message += " The server may have processed the request; it was not automatically retried."
                         raise BackendError(
-                            f"The model request failed in transport after {attempt} attempt(s).",
+                            message,
                             attempts=attempt,
-                            code="transport_error", retryable=True,
+                            code="timeout" if timed_out else "transport_error", retryable=retryable,
                             http_diagnostics=diagnostic, http_details=artifact,
                         ) from None
                     if self._trace is not None:
-                        self._trace.event("http", "retry", **context, attempt=attempt, reason="transport")
+                        self._trace.event("http", "retry", **context, attempt=attempt,
+                                          reason="timeout" if timed_out else "transport")
                     self._pause(attempt)
                     continue
                 except httpx.DecodingError:
@@ -319,16 +364,32 @@ class OpenAICompatibleBackend:
         raise BackendError("The model request did not complete.")  # pragma: no cover
 
     def _transport_failure(self, exc: Exception, request: ExtractionRequest,
-                           attempt: int) -> tuple[dict[str, Any], str | None]:
+                           attempt: int, *, started: float, preflight: bool = False) -> tuple[dict[str, Any], str | None]:
+        self._tls_selection = None
         diagnostic = transport_details(exc, tls_mode=self.tls_mode, attempt=attempt)
-        diagnostic["custom_transport"] = self._transport is not None
-        if self._transport is not None:
+        active_timeout = httpx.Timeout(5.0) if preflight else self.effective_timeout
+        diagnostic.update(custom_transport=self._transport is not None,
+                          effective_tls_mode=self.effective_tls_mode,
+                          phase="preflight" if preflight else timeout_phase(exc),
+                          timeout=active_timeout.as_dict(), elapsed_seconds=time.perf_counter() - started,
+                          probe_requests=self.last_probe_requests, model_post_attempts=attempt,
+                          request_outcome="not_sent" if preflight or safe_to_retry(exc) else "unknown",
+                          automatic_retry_allowed=False if preflight else safe_to_retry(exc))
+        if self._transport is not None or self.effective_tls_mode == "not_applicable":
             diagnostic["certificate_verification"] = None  # Controlled by the injected transport.
         artifact = None
         if self._trace is not None and self._trace.directory is not None:
-            artifact = f"http/{request.artifact_stem}.attempt-{attempt}.transport.json"
+            suffix = f"probe-{self.last_probe_requests}" if preflight else f"attempt-{attempt}"
+            artifact = f"http/{request.artifact_stem}.{suffix}.transport.json"
             self._trace.write_json(artifact, diagnostic)
             self._trace.describe_artifact(artifact, "transport_error_details")
+        if self._trace is not None:
+            self._trace.event("http", "transport_failed", chunk_id=request.chunk_id,
+                              format_attempt=request.format_attempt, attempt=attempt,
+                              phase=diagnostic["phase"], request_outcome=diagnostic["request_outcome"],
+                              automatic_retry_allowed=diagnostic["automatic_retry_allowed"],
+                              probe_requests=self.last_probe_requests, model_post_attempts=attempt,
+                              read_timeout=active_timeout.read, elapsed_seconds=diagnostic["elapsed_seconds"])
         return diagnostic, artifact
 
     def _pause(self, attempt: int) -> None:

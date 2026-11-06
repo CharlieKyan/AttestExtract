@@ -1,4 +1,4 @@
-# CLI 默认值与验收（dev17）
+# CLI 默认值与验收（dev20）
 
 这是正式包入口的行为，不依赖论文启动脚本。密钥配置一次；用户主要填写模型、输入和任务。`.env` 明确通过 `--env-file` 读取；已有进程环境变量仍优先。
 
@@ -14,7 +14,7 @@ attestextract extract --model-id deepseek:deepseek-flash --env-file .env --input
 | `structured_output` | `json_object`；通用性优先，本地结构和证据检查仍必须通过 |
 | `temperature` | `0`；减少采样变化，不保证重复运行完全一致 |
 | `max_output_tokens` | `8192`；由原先 `2048` 提高，给字段引文和测量证据留出空间。这是每次生成的上限，不是固定消耗；可能增加最大费用 |
-| `timeout` | `60` 秒（HTTPX 每个网络阶段的超时，并非整个文档的总时限） |
+| 超时 | 默认连接／读取／写入／连接池为 `15/180/30/15` 秒；不是整篇总时限。`--timeout` 显式覆盖全部，`--read-timeout` 单独覆盖读取；有效范围 `(0, 600]` |
 | `max_attempts` | `1`；不自动重发可能已经在服务端生成的请求 |
 | `format_retries` | CLI 与 Python 默认 `0`；显式 CLI／profile 设置为 `1` 才允许失败块重生成一次 |
 | 分块 | 优先完整句子，字符目标 `6000`，按输出复杂度进一步规划；每批最多 `12` 行简单 Markdown 表格；原子词／公式／表格行可以超出目标 |
@@ -49,9 +49,13 @@ DeepSeek当前文档说明：非思考模式不传 `max_tokens` 默认8K。因�
 
 ## TLS 兼容处理
 
-TLS 是 HTTPS 加密连接的协议，`1.2` 是协议版本，不是模型版本，也不改变 JSON 结构。dev10 针对已观察到的 TLS 记录校验失败，把 DeepSeek 预设设为经过验证的 TLS 1.2 兼容路径；Qwen 和高级配置仍自动协商。证书和主机名验证始终保留，HTTPX 的系统代理及 `SSL_CERT_FILE` / `SSL_CERT_DIR` 证书配置继续生效。没有网络预探测、关闭验证或失败后自动换 TLS 再提交 POST 的行为。
+TLS 是 HTTPS 加密连接的协议，不改变模型或抽取格式。dev20 的 Qwen 预设默认 `auto_fallback`：正式生成前，向同一地址的 `/models` 做不带密钥、论文或提示词的流式 GET 探测。收到任意 HTTP 状态仅表示 TLS 已连通，不代表鉴权、模型可用或生成成功。仅遇到已识别的 `SSLV3_ALERT_BAD_RECORD_MAC` / `DECRYPTION_FAILED_OR_BAD_RECORD_MAC` 才再探测 TLS 1.2，最多两次，每次各网络阶段 5 秒。证书、DNS 或超时错误不触发降级；不跟随重定向、不保存响应正文或把探测 cookie 带入生成。
 
-普通用户不需要 TLS 参数。高级用户可在 profile 设置 `tls_mode = "auto"` 或 `"1.2"`；Python 的 `model_options={"tls_mode": "auto"}` 可覆盖预设。注入自定义 HTTP transport 时，其连接策略由注入者控制。该兼容默认值不是所有网络错误的通用解决办法，其他网络故障仍会明确失败。
+选择只缓存在当前后端实例内；环境代理、CA、地址或策略变化后重新判断。正式 POST 的读取、写入或协议故障可能已经在服务端产生工作，因此停止且不自动换 TLS 重发，`max_attempts > 1` 也不例外。读取超时默认 180 秒，不保证所有生成都能完成；失败保留检查点，用户决定是否恢复。探测失败可能已预留一次生成预算，但实际模型 POST 为 0；这不是模型计费证据。
+
+普通用户无需 TLS 参数。高级用户可用 `--tls-mode auto|1.2|auto_fallback`、同名 profile 字段或 Python `model_options={"tls_mode": "auto_fallback", "read_timeout": 240}`。DeepSeek 保留 TLS 1.2；高级 profile 未声明时仍为 `auto`。证书和主机名验证、HTTPX 环境代理及 `SSL_CERT_FILE` / `SSL_CERT_DIR` 继续生效。自定义 transport 跳过探测，实际 TLS 和证书验证状态记为未知；HTTP 本地服务不做 TLS 探测。
+
+`timeout` 省略使用分阶段默认；老 profile 明确 `timeout=60` 仍为每阶段 60 秒。CLI `--timeout 120` 会清除继承的 profile `read_timeout`；同时指定 `--read-timeout 240` 则读取为 240 秒。终端显示读取上限、TLS 兜底、等待及恢复提示，原文和异常原始字符串不进入终端。
 
 传输失败文件保存异常类型、数字错误码和允许的 SSL 原因码，不保存可能包含密钥或地址的异常原文。依据：[HTTPX SSL](https://www.python-httpx.org/advanced/ssl/)、[HTTPX 环境变量](https://www.python-httpx.org/environment_variables/)、[Python SSLContext](https://docs.python.org/3/library/ssl.html#ssl.SSLContext)。
 
@@ -75,7 +79,7 @@ CLI 默认不格式重生成。显式设置 `--format-retries 1` 后，仅对本
 attestextract extract --model-id deepseek:deepseek-flash --env-file .env --input paper.md --task task.json --check
 ```
 
-它只检查本地配置、凭据形式、任务、输入和分块，输出 `mode: local_check`、`network_calls: 0` 和实际默认值。诊断 manifest 为 `checked`，不产生 `result.json`，不验证密钥有效性或服务端 Schema 支持。去掉 `--check` 才会调用模型。
+它只检查本地配置、凭据形式、任务、输入和分块；与 `--resume` 合用时还验证全部缓存并报告可复用块数、剩余块数和预算，输出 `mode: local_check`、`network_calls: 0` 和实际默认值。诊断 manifest 为 `checked`，不产生 `result.json`，不验证密钥有效性或服务端 Schema 支持。去掉 `--check` 才会调用模型。
 
 仓库开发环境中的合成验收命令（无需密钥，不调用真实端点）：
 

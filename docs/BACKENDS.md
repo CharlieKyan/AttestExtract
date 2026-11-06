@@ -49,7 +49,7 @@ result = extract(
 
 The three Chat presets default to `json_object` and `max_tokens: 8192`; the explicit
 Responses preset uses `json_schema` and `max_output_tokens: 8192`. All default to
-`temperature: 0`, timeout 60 seconds and one HTTP attempt. Python keeps zero format
+`temperature: 0`, connect/read/write/pool limits of 15/180/30/15 seconds and one HTTP attempt. Qwen uses `tls_mode="auto_fallback"`; DeepSeek retains verified TLS 1.2. Python keeps zero format
 regeneration; the CLI also defaults to zero. Explicit CLI/profile one remains supported. The token cap applies per chunk
 generation, not to the whole document. Explicit options override these defaults.
 Unknown provider/model identifiers fail before a model request; use a complete
@@ -151,7 +151,8 @@ An existing empty environment value does not fall back to the file.
 | `adapter` | `openai-compatible`; must be registered by application code |
 | `base_url`, `model` | Required; compatible adapter appends `/chat/completions` |
 | `api_key_env` | `ATTESTEXTRACT_API_KEY`; local unauthenticated services remain possible |
-| `timeout` | 60 seconds; HTTPX per-operation timeout, not a total wall-clock deadline |
+| `timeout` | Omitted: connect/read/write/pool 15/180/30/15 seconds; explicit value overrides all phases, range `(0, 600]` |
+| `read_timeout` | Optional read-phase override, range `(0, 600]`; never unlimited |
 | `max_attempts` | 3 HTTP attempts per generation; use 1 for bounded acceptance |
 | `tls_mode` | `auto` (HTTPX negotiation), or `1.2` with certificate/hostname validation; DeepSeek presets select `1.2`, Qwen presets use `auto` |
 | `structured_output` | `off`, `json_object`, or `json_schema`; default `off` |

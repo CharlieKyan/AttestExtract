@@ -18,11 +18,13 @@ class BackendConfig(ContractModel):
     base_url: str = Field(min_length=1, repr=False)
     model: str = Field(min_length=1)
     api_key_env: str = Field(default="ATTESTEXTRACT_API_KEY", pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
-    timeout: float = Field(default=60, gt=0, le=60)
+    # None selects finite phase defaults; it never means unlimited waiting.
+    timeout: float | None = Field(default=None, gt=0, le=600)
+    read_timeout: float | None = Field(default=None, gt=0, le=600)
     max_attempts: int = Field(default=3, ge=1)
     structured_output: Literal["off", "json_object", "json_schema"] = "off"
     format_retries: int = Field(default=0, ge=0, le=1)
-    tls_mode: Literal["auto", "1.2"] = "auto"
+    tls_mode: Literal["auto", "1.2", "auto_fallback"] = "auto"
     generation: GenerationOptions = Field(default_factory=GenerationOptions)
     provider_options: dict[str, Any] = Field(default_factory=dict, repr=False)
     output_token_parameter: Literal["max_tokens", "max_completion_tokens", "max_output_tokens"] = "max_tokens"
@@ -70,6 +72,9 @@ def resolve_backend_config(
         "base_url": environment.get("ATTESTEXTRACT_BASE_URL"),
         "model": environment.get("ATTESTEXTRACT_MODEL"),
     }
+    # An explicit uniform timeout must not retain a lower-priority read limit.
+    if overrides.get("timeout") is not None and overrides.get("read_timeout") is None:
+        values.pop("read_timeout", None)
     generation = dict(values.get("generation", {}))
     if overrides.get("generation") is not None:
         if not isinstance(overrides["generation"], Mapping):

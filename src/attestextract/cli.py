@@ -12,7 +12,8 @@ from pathlib import Path
 from uuid import uuid4
 
 from . import __version__, extract, load_task
-from .backends import ReplayBackend
+from .backends import OpenAICompatibleBackend, ReplayBackend
+from .responses_backend import DeepSeekResponsesBackend
 from .capabilities import check_structured_output
 from .config import resolve_backend_config
 from .d1_examples import d1_example_names, load_d1_example
@@ -83,7 +84,9 @@ def _parser() -> argparse.ArgumentParser:
     live.add_argument("--profile", help="Profile name in --config; explicit CLI values override it")
     live.add_argument("--adapter", help="Registered backend name (default: openai-compatible)")
     live.add_argument("--api-key-env", help="Environment variable containing the API key (default: ATTESTEXTRACT_API_KEY)")
-    live.add_argument("--timeout", type=float, help="HTTP timeout in seconds (default: 60)")
+    live.add_argument("--timeout", type=float, help="Override all HTTP phase timeouts, 0 < seconds <= 600 (defaults: connect 15, read 180, write 30, pool 15)")
+    live.add_argument("--read-timeout", type=float, help="Override only the HTTP read timeout, 0 < seconds <= 600")
+    live.add_argument("--tls-mode", choices=("auto", "1.2", "auto_fallback"), help="TLS policy (Qwen preset: verified automatic compatibility fallback)")
     live.add_argument("--max-attempts", type=int, help="Maximum HTTP attempts per generation (presets: 1; profiles/legacy: 3)")
     live.add_argument("--temperature", type=float, help="Sampling temperature (presets: 0; profiles/legacy: provider default)")
     live.add_argument("--max-output-tokens", type=_output_token_limit, metavar="N|provider",
@@ -177,6 +180,36 @@ def _check_output_paths(args: argparse.Namespace) -> None:
             raise ConfigurationError("Output files cannot be parent directories of --log-dir.")
         if target.is_dir() or not target.parent.is_dir():
             raise ConfigurationError("Output files need an existing parent directory and cannot be directories.")
+
+
+def _resume_command(args: argparse.Namespace, checkpoint: Path) -> str:
+    """Quote local arguments for the host shell; never embed credential values."""
+    import shlex
+
+    command = [str(Path(sys.executable).resolve()), "-m", "attestextract", "extract"]
+    omitted = {"command", "output", "report", "log_dir", "resume", "check"}
+    for name, value in vars(args).items():
+        if name in omitted or value is None:
+            continue
+        if isinstance(value, Path):
+            value = value.resolve()
+        command.extend(["--" + name.replace("_", "-"), str(value)])
+    command.extend(["--resume", str(checkpoint.resolve())])
+    if any(any(ord(ch) < 32 for ch in part) for part in command):
+        return "Resume command unavailable: an argument contains control characters; use the saved checkpoint path."
+    if os.name == "nt":
+        return "& " + " ".join("'" + part.replace("'", "''") + "'" for part in command)
+    return shlex.join(command)
+
+
+def _show_resume(args: argparse.Namespace, trace: RunTrace | None) -> None:
+    if trace is None or trace.directory is None:
+        return
+    checkpoint = trace.directory / "execution/checkpoint.json"
+    if checkpoint.is_file():
+        print(f"Resume checkpoint: {checkpoint}", file=sys.stderr)
+        print("Resume in a new run (may make additional model calls):", file=sys.stderr)
+        print(trace._mask_text(_resume_command(args, checkpoint)), file=sys.stderr)
 
 
 def _decision_output(output: Path | None, sibling: Path, suffix: str, protected: list[Path]) -> Path:
@@ -280,7 +313,7 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
         trace.event("configuration", "started")
         environment = load_env_file(args.env_file) if args.env_file else os.environ
         overrides = {name: getattr(args, name) for name in (
-            "adapter", "base_url", "model", "api_key_env", "timeout", "max_attempts",
+            "adapter", "base_url", "model", "api_key_env", "timeout", "read_timeout", "tls_mode", "max_attempts",
             "structured_output", "format_retries", "temperature", "max_output_tokens",
         ) if getattr(args, name) is not None}
         if overrides.get("max_output_tokens") == "provider":
@@ -332,10 +365,18 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
         backend = (registry if registry is not None else default_registry()).create(
             config.adapter, config=config, api_key=api_key, trace=trace,
         )
-        backend_identity = digest(config.model_dump(mode="json", exclude={"api_key_env", "format_retries"}))
+        if type(backend) in (OpenAICompatibleBackend, DeepSeekResponsesBackend):
+            backend_identity = None
+            # Only for verifying a dev19 CLI fingerprint; never persisted.
+            backend._legacy_cli_config = config.model_dump(
+                mode="json", exclude={"api_key_env", "format_retries", "read_timeout"})
+        else:
+            backend_identity = digest(config.model_dump(mode="json", exclude={
+                "api_key_env", "format_retries", "timeout", "read_timeout", "tls_mode", "max_attempts"}))
         if trace is not None:
             trace.write_json("backend.json", {
                 "backend": backend.name, "model": config.model, "timeout": config.timeout,
+                "read_timeout": config.read_timeout,
                 "max_attempts": config.max_attempts, "api_key_configured": bool(api_key),
                 "env_file_used": args.env_file is not None,
                 "profile": args.profile, "adapter": config.adapter,
@@ -353,23 +394,36 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
                         output_protocol="flat-v1",
                         structured_output=config.structured_output,
                         max_output_tokens=config.generation.max_output_tokens,
-                        max_attempts=config.max_attempts, format_retries=config.format_retries)
+                        max_attempts=config.max_attempts, format_retries=config.format_retries,
+                        read_timeout=config.read_timeout or config.timeout or 180,
+                        tls_mode=config.tls_mode)
         if args.check:
             session = prepare_execution(text, task, backend, config.generation, execution,
                                         max_chars=args.max_chunk_chars, format_retries=config.format_retries,
                                         source_name=args.input.name, backend_identity=backend_identity,
                                         resume_from=args.resume, context=context, structure=structure)
+            from .pipeline import _validate_cached_responses
+            _validate_cached_responses(task, session)
             plan = {"mode": "local_check", "network_calls": 0, "model": config.model,
                     "character_count": len(text), "chunk_count": len(session.leaves()),
                     "context": context.model_dump(),
                     "coverage": coverage_report(text, list(session.chunks.values()), max_chars=args.max_chunk_chars),
                     "structure_diagnostics": structure.diagnostics if structure is not None else [],
                     "execution": session.summary(), "execution_options": execution.model_dump(mode="json"),
-                    "max_http_attempts_upper_bound": (session.state.max_model_calls * backend.max_attempts
+                    "resume": {"requested": args.resume is not None, "reusable_chunks": len(session.cached),
+                               "remaining_chunks": len(session.leaves()) - len(session.cached),
+                               "remaining_call_budget": session.state.max_model_calls - session.state.calls_used},
+                    "max_http_attempts_upper_bound": (session.state.request_attempts +
+                                                      (session.state.max_model_calls - session.state.calls_used) * backend.max_attempts
                                                       if hasattr(backend, "max_attempts") else None),
+                    "http_bound_basis": "Observed prior model POST attempts plus remaining reservations times current max_attempts; excludes TLS probes and unobserved interrupted work.",
                     "structured_output": config.structured_output, "output_protocol": "flat-v1", "tls_mode": config.tls_mode,
                     "structured_output_capability": capability,
-                    "timeout": config.timeout, "max_attempts": config.max_attempts,
+                    "timeout": config.timeout, "read_timeout": config.read_timeout,
+                    "effective_timeouts": {"connect": config.timeout or 15,
+                                           "read": config.read_timeout or config.timeout or 180,
+                                           "write": config.timeout or 30, "pool": config.timeout or 15},
+                    "max_attempts": config.max_attempts,
                     "format_retries": config.format_retries,
                     "generation": config.generation.model_dump(mode="json"),
                     "output": str(args.output.resolve()), "report": str(args.report.resolve()) if args.report else None,
@@ -402,7 +456,7 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
             trace.fail(exc)
         print("attestextract: interrupted; any in-flight call keeps its budget reservation.", file=sys.stderr)
         if trace is not None and trace.directory is not None and (trace.directory / "execution/checkpoint.json").is_file():
-            print(f"Resume checkpoint: {trace.directory / 'execution/checkpoint.json'}", file=sys.stderr)
+            _show_resume(args, trace)
         else:
             print("No execution checkpoint was saved yet.", file=sys.stderr)
         return 130
@@ -414,7 +468,7 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
         if trace is not None and trace.directory is not None:
             print(f"Run diagnostics: {trace.directory}", file=sys.stderr)
             if (trace.directory / "execution/checkpoint.json").is_file():
-                print(f"Resume checkpoint: {trace.directory / 'execution/checkpoint.json'}", file=sys.stderr)
+                _show_resume(args, trace)
             if getattr(exc, "http_details", None):
                 print(f"HTTP diagnostics: {trace.directory / exc.http_details}", file=sys.stderr)
             artifact = getattr(exc, "validation_artifact", None)

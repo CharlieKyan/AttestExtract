@@ -74,7 +74,7 @@ def test_transient_status_retries_then_succeeds(status):
     assert waits == [0.5]
 
 
-@pytest.mark.parametrize("failure", [httpx.ReadTimeout, httpx.ConnectError])
+@pytest.mark.parametrize("failure", [httpx.ConnectTimeout, httpx.ConnectError])
 def test_transport_failure_has_bounded_retries_without_leaking_details(failure):
     calls = []
     waits = []
@@ -96,13 +96,13 @@ def test_transport_failure_has_bounded_retries_without_leaking_details(failure):
     assert waits == [0.5, 1.0]
 
 
-def test_timeout_can_recover():
+def test_connection_timeout_can_recover():
     calls = []
 
     def handler(incoming):
         calls.append(incoming)
         if len(calls) == 1:
-            raise httpx.ReadTimeout("private detail", request=incoming)
+            raise httpx.ConnectTimeout("private detail", request=incoming)
         return httpx.Response(200, json=completion())
 
     backend = OpenAICompatibleBackend(
@@ -233,7 +233,7 @@ def test_rejects_invalid_or_credential_bearing_urls(base_url):
     assert "secret" not in str(captured.value)
 
 
-@pytest.mark.parametrize("settings", [{"timeout": 0}, {"timeout": 61}, {"timeout": float("nan")}, {"timeout": True}, {"max_attempts": 0}, {"max_attempts": True}, {"model": ""}, {"api_key": "bad\nkey"}])
+@pytest.mark.parametrize("settings", [{"timeout": 0}, {"timeout": 601}, {"timeout": float("nan")}, {"timeout": True}, {"max_attempts": 0}, {"max_attempts": True}, {"model": ""}, {"api_key": "bad\nkey"}])
 def test_rejects_invalid_connection_settings(settings):
     config = {"base_url": "https://models.example/v1", "model": "model"}
     config.update(settings)

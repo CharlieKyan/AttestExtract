@@ -54,7 +54,8 @@ def _check_endpoint(config: BackendConfig, provider: str, *, explicit_url: bool,
     # Reuse the selected backend's URL and parameter validation without I/O.
     backend_type = DeepSeekResponsesBackend if config.adapter == "deepseek-responses" else OpenAICompatibleBackend
     backend_type(
-        config.base_url, config.model, timeout=config.timeout, max_attempts=config.max_attempts,
+        config.base_url, config.model, timeout=config.timeout, read_timeout=config.read_timeout,
+        max_attempts=config.max_attempts, tls_mode=config.tls_mode,
         structured_output=config.structured_output, provider_options=config.provider_options,
         output_token_parameter=config.output_token_parameter,
     )
@@ -111,9 +112,9 @@ def resolve_model_config(
     responses = provider == "deepseek-responses"
     values.update(
         adapter="deepseek-responses" if responses else "openai-compatible",
-        model=model, timeout=60.0, max_attempts=1,
+        model=model, max_attempts=1,
         structured_output="json_schema" if responses else "json_object", format_retries=0,
-        tls_mode="1.2" if provider in {"deepseek", "deepseek-responses"} else "auto",
+        tls_mode="1.2" if provider in {"deepseek", "deepseek-responses"} else "auto_fallback",
         output_token_parameter="max_output_tokens" if responses else "max_tokens",
         provider_options=deepcopy(_PRESETS[selector]),
     )

@@ -132,20 +132,21 @@ class DeepSeekResponsesBackend(OpenAICompatibleBackend):
 
     def __init__(
         self, base_url: str, model: str, api_key: str | None = None,
-        timeout: float = 60, max_attempts: int = 1,
+        timeout: float | None = None, max_attempts: int = 1,
         transport: httpx.BaseTransport | None = None, *,
         sleep_fn: Callable[[float], None] = time.sleep, trace: RunTrace | None = None,
         structured_output: Literal["off", "json_object", "json_schema"] = "json_schema",
         provider_options: dict[str, Any] | None = None,
         output_token_parameter: Literal["max_output_tokens"] = "max_output_tokens",
-        tls_mode: Literal["auto", "1.2"] = "auto",
+        tls_mode: Literal["auto", "1.2", "auto_fallback"] = "auto",
+        read_timeout: float | None = None,
     ) -> None:
         _validate_endpoint(base_url)
         super().__init__(
             base_url, model, api_key, timeout, max_attempts, transport,
             sleep_fn=sleep_fn, trace=trace, structured_output=structured_output,
             provider_options=_validate_options(provider_options),
-            output_token_parameter=output_token_parameter, tls_mode=tls_mode,
+            output_token_parameter=output_token_parameter, tls_mode=tls_mode, read_timeout=read_timeout,
         )
 
     def prepare_payload(self, request: ExtractionRequest) -> dict[str, Any]:

@@ -23,6 +23,8 @@ def test_selecting_a_known_model_requires_only_its_credential(selector, key, bas
     assert config.generation.max_output_tokens == 8192
     assert config.max_attempts == 1 and config.format_retries == 0
     assert config.structured_output == "json_object"
+    assert config.timeout is None and config.read_timeout is None
+    assert config.tls_mode == ("auto_fallback" if selector.startswith("qwen:") else "1.2")
     assert resolve_model_credentials(config, environment) == "synthetic-credential"
 
 

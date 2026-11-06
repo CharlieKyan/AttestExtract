@@ -22,6 +22,7 @@ class ConsoleProgress:
         self._managed_execution = False
         self._calls_reserved = 0
         self._call_limit = 0
+        self._read_timeout: float | None = None
         self._waiting_since: float | None = None
         self._lock = threading.Lock()
         self._stop = threading.Event()
@@ -37,7 +38,8 @@ class ConsoleProgress:
             with self._lock:
                 if self._waiting_since is not None:
                     elapsed = time.monotonic() - self._waiting_since
-                    self._write(f"[{self.current}/{self.total}] waiting for model; {elapsed:.0f}s elapsed")
+                    limit = f"; read timeout {self._read_timeout:g}s" if self._read_timeout is not None else ""
+                    self._write(f"[{self.current}/{self.total}] waiting for model; {elapsed:.0f}s elapsed{limit}")
 
     def close(self) -> None:
         self._stop.set()
@@ -54,10 +56,24 @@ class ConsoleProgress:
         stage, kind = event["stage"], event["event"]
         prefix = f"[{self.current}/{self.total}]"
         if stage == "configuration" and kind == "completed":
+            self._read_timeout = event.get("read_timeout")
             self._write(f"Model: {event.get('model', '?')} | output: {event.get('structured_output', '?')} | "
                         f"protocol: {event.get('output_protocol', 'flat-v1')} | "
                         f"token limit: {event.get('max_output_tokens') or 'provider default'} | "
                         f"HTTP attempts: {event.get('max_attempts', '?')} | format retries: {event.get('format_retries', '?')}")
+            if self._read_timeout is not None:
+                self._write(f"Connection: TLS policy {event.get('tls_mode', '?')}; read timeout {self._read_timeout:g}s; stop on read timeout")
+        elif stage == "transport" and kind == "tls_selected":
+            effective = event.get("effective_tls_mode") or "managed by custom transport"
+            suffix = "; compatibility fallback" if event.get("fallback") else ""
+            self._write(f"Connection: TLS {effective}{suffix}; {event.get('probe_requests', 0)} probe request(s), no generation")
+        elif stage == "http" and kind == "started":
+            self._read_timeout = event.get("read_timeout", self._read_timeout)
+            self._waiting_since = time.monotonic()
+        elif stage == "http" and kind == "transport_failed":
+            self._waiting_since = None
+            if event.get("request_outcome") == "unknown":
+                self._write(f"{prefix} {event.get('phase') or 'transport'} failure: server processing is unknown; not automatically retried; saved progress can be resumed")
         elif stage == "document" and kind == "completed":
             self._write(f"Input: {event['character_count']} characters")
         elif stage == "chunking" and kind == "completed":
@@ -70,7 +86,9 @@ class ConsoleProgress:
             self._calls_reserved = event["calls_reserved"]
             self._call_limit = event["max_model_calls"]
             self._write(f"Model-call budget: {event['calls_reserved']}/{event['max_model_calls']} reserved; "
-                        f"{event['completed_chunks']} completed chunks available for reuse")
+                        f"{event['completed_chunks']} completed chunks available for reuse; "
+                        f"{event.get('leaf_chunks', self.total) - event['completed_chunks']} remaining; "
+                        f"{event['max_model_calls'] - event['calls_reserved']} calls left")
         elif stage == "execution" and kind == "call_reserved":
             self._calls_reserved, self._call_limit = event["used"], event["limit"]
         elif stage == "execution" and kind in {"finished", "stopped"}:

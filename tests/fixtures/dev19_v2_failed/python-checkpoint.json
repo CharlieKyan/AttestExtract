@@ -1,0 +1,78 @@
+{
+  "state": {
+    "checkpoint_version": "2",
+    "fingerprint": "9677d88f5105a67c97d7f408801002530e57f7256a7fb2e3143f2bbb0c1e2dd5",
+    "output_protocol": "flat-v1",
+    "roots": [
+      "chunk-0001",
+      "chunk-0002",
+      "chunk-0003"
+    ],
+    "nodes": {
+      "chunk-0001": {
+        "segments": [
+          {
+            "start": 0,
+            "end": 18
+          }
+        ],
+        "body_segments": [],
+        "depth": 0,
+        "status": "completed",
+        "children": [],
+        "calls": 1,
+        "cache_hash": "236c383cb35ed63953db94c2503812fa235d8aa16ad79dbbcb37eb4d7eb4b576",
+        "error_code": null,
+        "format_failures": 0,
+        "format_retries_reserved": 0,
+        "format_feedback": []
+      },
+      "chunk-0002": {
+        "segments": [
+          {
+            "start": 18,
+            "end": 36
+          }
+        ],
+        "body_segments": [],
+        "depth": 0,
+        "status": "completed",
+        "children": [],
+        "calls": 1,
+        "cache_hash": "f6c2bf0887c847bc1d597b55a87d26da0b3e5745c77e642f27314151fb1eda80",
+        "error_code": null,
+        "format_failures": 0,
+        "format_retries_reserved": 0,
+        "format_feedback": []
+      },
+      "chunk-0003": {
+        "segments": [
+          {
+            "start": 36,
+            "end": 52
+          }
+        ],
+        "body_segments": [],
+        "depth": 0,
+        "status": "failed",
+        "children": [],
+        "calls": 1,
+        "cache_hash": null,
+        "error_code": "timeout",
+        "format_failures": 0,
+        "format_retries_reserved": 0,
+        "format_feedback": []
+      }
+    },
+    "max_model_calls": 6,
+    "calls_used": 3,
+    "response_count": 2,
+    "request_attempts": 3,
+    "usage": {},
+    "model": "synthetic",
+    "history": [],
+    "format_retries": 0,
+    "policy_changes": []
+  },
+  "sha256": "7457f94bd240344079e702d45a3830cf901a0ad2fa1968f62154492b55ebe862"
+}
