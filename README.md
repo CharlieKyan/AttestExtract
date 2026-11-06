@@ -2,7 +2,9 @@
 
 Schema-driven extraction from text and tables, with source-linked evidence and pluggable decision backends.
 
-**Early prototype · `0.1.0.dev17` · Python 3.11+**
+**Early prototype · `0.1.0.dev18` · Python 3.11+**
+
+dev18 adds offline `prepare-decisions` / `check-decisions`: validated successful-run materials cover every candidate and empty chunk; simulated suggestions are checked and recorded without applying them. Equal values with uncertain identity, conditions or evidence now produce insufficient-context associations. Extraction stays flat-v1 / result schema 0.3. No Jev inference or extra model calls are introduced. See [offline decision materials](docs/DECISION_MATERIALS.md).
 
 Dev16 rolls back the CLI's automatic format regeneration default to zero; explicit `--format-retries 1` and profile settings remain supported. Saved live failures show that switching to Responses Schema did not prevent malformed JSON. The adapter and diagnostics remain available, without claiming a format-reliability fix. Shape guidance is appended only when a specific hint exists. See [observed limits](docs/STRUCTURED_OUTPUT.md).
 

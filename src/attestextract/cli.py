@@ -48,6 +48,14 @@ def _parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("models", help="List built-in model selectors without network access or credentials")
 
+    prepare = commands.add_parser("prepare-decisions", help="Prepare offline decision materials from a successful checkpointed run")
+    prepare.add_argument("--run", type=Path, required=True, help="Successful run directory or its diagnostics directory")
+    prepare.add_argument("--output", type=Path, help="New output directory; default: a new sibling of the run")
+    check = commands.add_parser("check-decisions", help="Validate simulated decision suggestions without applying them")
+    check.add_argument("--bundle", type=Path, required=True, help="decision-input.json prepared offline")
+    check.add_argument("--responses", type=Path, required=True, help="JSON envelope with bundle_id and results")
+    check.add_argument("--output", type=Path, help="New output directory; default: a new sibling of the bundle directory")
+
     demo = commands.add_parser("demo", help="Replay bundled synthetic responses without a model or API key")
     demo.add_argument("--example", choices=("ccus", "procurement", "all"), default="all")
     demo.add_argument("--output", type=Path, help="Write JSON here instead of printing it")
@@ -158,12 +166,58 @@ def _check_output_paths(args: argparse.Namespace) -> None:
             raise ConfigurationError("Output files need an existing parent directory and cannot be directories.")
 
 
+def _decision_output(output: Path | None, sibling: Path, suffix: str, protected: list[Path]) -> Path:
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + uuid4().hex[:8]
+    target = (output if output is not None else sibling.with_name(f"{sibling.name}-{suffix}-{stamp}")).resolve()
+    for source in protected:
+        source = source.resolve()
+        if target == source or target.is_relative_to(source) or source.is_relative_to(target):
+            raise ValueError("Decision output must be separate from all input files and run directories.")
+    if target.exists():
+        raise ValueError("Decision output directory already exists; use a new directory.")
+    target.mkdir(parents=True, exist_ok=False)
+    return target
+
+
+def _offline_decisions(args: argparse.Namespace) -> int:
+    # Import only on these local paths; no model construction or credentials.
+    from .decision_bundle import (decision_bundle_summary, load_decision_bundle,
+                                  prepare_decision_bundle, save_decision_bundle)
+    from .decision_ledger import (check_decisions, decision_ledger_summary,
+                                  load_decision_responses, save_decision_ledger)
+    from .decision_reporting import render_decision_bundle, render_decision_ledger
+
+    if args.command == "prepare-decisions":
+        bundle = prepare_decision_bundle(args.run)
+        source = args.run.resolve()
+        if source.name == "diagnostics":
+            source = source.parent
+        directory = _decision_output(args.output, source, "decisions", [source])
+        save_decision_bundle(bundle, directory / "decision-input.json")
+        (directory / "decision-report.md").write_text(render_decision_bundle(bundle), encoding="utf-8")
+        summary = decision_bundle_summary(bundle)
+        code = 0
+    else:
+        bundle = load_decision_bundle(args.bundle)
+        ledger = check_decisions(bundle, load_decision_responses(args.responses))
+        directory = _decision_output(args.output, args.bundle.resolve().parent, "checked",
+                                     [args.bundle.resolve().parent, args.responses])
+        save_decision_ledger(ledger, directory / "decision-ledger.json")
+        (directory / "decision-report.md").write_text(render_decision_ledger(ledger), encoding="utf-8")
+        summary = decision_ledger_summary(ledger)
+        code = 0 if summary["status"] == "valid" else 2
+    print(json.dumps({**summary, "output_directory": str(directory)}, ensure_ascii=False, indent=2))
+    return code
+
+
 def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = None) -> int:
     args = _parser().parse_args(argv)
     api_key = None
     trace = None
     progress = None
     try:
+        if args.command in {"prepare-decisions", "check-decisions"}:
+            return _offline_decisions(args)
         if args.command == "models":
             print("Built-in model presets (offline list; not a live availability check):")
             for selector in available_models():

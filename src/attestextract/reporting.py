@@ -65,6 +65,7 @@ def render_markdown_report(result: ExtractionResult, *, secrets: Iterable[str] =
         "位置使用原始输入的 Unicode 字符偏移，采用左闭右开区间 `[start, end)`；片段输入的位置相对于片段。",
         "字段表中的位置覆盖整条引文；测量证据表另列数值和单位片段的位置。matched 仅代表原文定位成功，不代表字段归属或计算情景已经核验。", "",
         "字段状态：reported＝已报告；not_reported＝未报告；not_applicable＝任务声明不适用；required_missing＝必要信息缺失。", "",
+        "关联检查仅覆盖任务配置的相同比较值，尚未实现完整的不同值矛盾检测；没有关联不表示没有冲突。", "",
     ]
     if result.run.usage:
         lines += ["## 模型用量", "", "| 指标 | 数量 |", "| --- | ---: |"]

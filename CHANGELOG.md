@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.0.dev18
+
+- Treat different identities or unresolved conditions/evidence as insufficient context for equal-value associations. Preserve all candidates and old saved links; this is not comprehensive different-value conflict detection.
+- Add offline `prepare-decisions` with decision bundle 0.1: successful checkpointed runs only, verified final leaves, shared exact source/result snapshots, all candidates and review-only empty-chunk tasks, plus separate current association analysis. Never follow history paths or copy backend/request/response logs.
+- Add offline `check-decisions`: validate simulated select/reject/review suggestions, reject invalid references and duplicate returns, record missing tasks and existing blockers. Suggestions never create accepted records, clear review issues or alter source results.
+- Preserve flat-v1, result schema 0.3, extraction CLI defaults and historical archive loading. Add synthetic regression and installed-package acceptance; no real Jev, paid model calls, training, or demonstrated decision-quality/cost improvement.
+
 ## 0.1.0.dev17
 
 - Use flat-v1 (`values`/`quotes`, with task-declared measurements) for all new model calls, schemas, examples, retries and cached response parsing. Keep native-v1 only as an explicit built-in offline ReplayBackend option; never auto-detect, repair, or fall back to legacy model output.

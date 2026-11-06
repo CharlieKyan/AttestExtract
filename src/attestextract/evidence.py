@@ -217,7 +217,9 @@ def link_candidates(candidates: list[Candidate], task: TaskSpec) -> list[Candida
             differing = sorted(name for name in spec.identity_fields
                                if scalar(left, name) is not None and scalar(right, name) is not None
                                and scalar(left, name) != scalar(right, name))
-            kind = "possible_conflict" if differing else "insufficient_context" if unresolved else "possible_repeat"
+            # Equal comparison values do not establish a factual conflict when
+            # identity differs or the evidence/conditions cannot be confirmed.
+            kind = "insufficient_context" if unresolved or differing else "possible_repeat"
             links.append(CandidateLink(kind=kind, candidate_ids=[left.candidate_id, right.candidate_id],
                                        compared_fields=sorted(set(spec.comparison_fields) | compared),
                                        differing_fields=differing, unresolved_fields=unresolved))

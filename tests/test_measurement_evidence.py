@@ -417,13 +417,24 @@ def test_missing_scenario_prevents_same_fact_claim(task):
     assert "conditions" in result.links[0].unresolved_fields
 
 
-def test_same_measurement_with_different_source_identity_is_only_possible_conflict(task):
+def test_same_measurement_with_different_identity_needs_context_not_conflict(task):
     source, first, second = linked_records(second_subject="样品乙")
     result = run(task, source, first, second)
     assert len(result.candidates) == 2
     assert {candidate.fields["subject"].value for candidate in result.candidates} == {"样品甲", "样品乙"}
-    assert {link.kind for link in result.links} == {"possible_conflict"}
+    assert {link.kind for link in result.links} == {"insufficient_context"}
     assert "subject" in result.links[0].differing_fields
+
+
+def test_missing_condition_takes_priority_over_differing_identity(task):
+    source, first, second = linked_records(second_subject="样品乙", second_condition=None)
+    result = run(task, source, first, second)
+    assert len(result.candidates) == 2
+    assert len(result.links) == 1
+    link = result.links[0]
+    assert link.kind == "insufficient_context"
+    assert link.differing_fields == ["subject"]
+    assert link.unresolved_fields == ["conditions"]
 
 
 @pytest.mark.parametrize("mutation", [

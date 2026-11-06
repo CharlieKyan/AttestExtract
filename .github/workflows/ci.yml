@@ -44,6 +44,7 @@ jobs:
           format_script = Path("scripts/format_recovery_smoke.py").resolve()
           structured_script = Path("scripts/structured_output_smoke.py").resolve()
           protocol_script = Path("scripts/protocol_evidence_smoke.py").resolve()
+          decision_script = Path("scripts/decision_bundle_smoke.py").resolve()
           with tempfile.TemporaryDirectory(prefix="attestextract-smoke-") as directory:
               root = Path(directory)
               environment = root / "venv"
@@ -59,7 +60,7 @@ jobs:
               assert set(examples) == {"ccus", "procurement"}
               for name, count in (("ccus", 2), ("procurement", 3)):
                   result = examples[name]
-                  assert result["package_version"] == "0.1.0.dev17"
+                  assert result["package_version"] == "0.1.0.dev18"
                   assert result["run"]["mode"] == "replay"
                   assert len(result["candidates"]) == count
                   assert result["review"] == []
@@ -69,7 +70,7 @@ jobs:
               assert set(archives) == {"attribute", "observation", "relation"}
               for name, candidate_count, record_count in (("attribute", 2, 1), ("observation", 2, 2), ("relation", 1, 1)):
                   archive = archives[name]
-                  assert archive["extraction"]["package_version"] == "0.1.0.dev17"
+                  assert archive["extraction"]["package_version"] == "0.1.0.dev18"
                   assert archive["extraction"]["run"]["mode"] == "replay"
                   assert len(archive["extraction"]["candidates"]) == candidate_count
                   assert len(archive["records"]) == record_count
@@ -83,7 +84,7 @@ jobs:
               subprocess.run([str(python), str(copied), "--mode", "mock", "--output-dir", str(acceptance)],
                              check=True, cwd=root, env=env)
               summary = json.loads((acceptance / "summary.json").read_text(encoding="utf-8"))
-              assert summary["package_version"] == "0.1.0.dev17"
+              assert summary["package_version"] == "0.1.0.dev18"
               assert summary["passed"] and summary["real_endpoint_calls"] == 0
               assert summary["mock_http_calls"] == 3
               assert [case["candidate_count"] for case in summary["cases"]] == [1, 2, 1]
@@ -131,3 +132,12 @@ jobs:
               protocol = json.loads((protocol_output / "summary.json").read_text(encoding="utf-8"))
               assert protocol["passed"] and protocol["real_endpoint_calls"] == 0
               assert Path(protocol["module_path"]).is_relative_to(environment)
+              decision_copy = scripts / "decision_bundle_smoke.py"
+              shutil.copyfile(decision_script, decision_copy)
+              decision_output = root / "decisions"
+              subprocess.run([str(python), str(decision_copy), "--output-dir", str(decision_output)],
+                             check=True, cwd=root, env=env)
+              decision = json.loads((decision_output / "summary.json").read_text(encoding="utf-8"))
+              assert decision["passed"] and decision["real_endpoint_calls"] == 0
+              assert decision["decision_model_calls"] == 0 and decision["created_final_records"] == 0
+              assert Path(decision["module_path"]).is_relative_to(environment)
