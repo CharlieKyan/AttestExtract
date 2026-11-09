@@ -62,11 +62,21 @@ class ConsoleProgress:
                         f"token limit: {event.get('max_output_tokens') or 'provider default'} | "
                         f"HTTP attempts: {event.get('max_attempts', '?')} | format retries: {event.get('format_retries', '?')}")
             if self._read_timeout is not None:
-                self._write(f"Connection: TLS policy {event.get('tls_mode', '?')}; read timeout {self._read_timeout:g}s; stop on read timeout")
+                policy = f"TLS policy {event.get('tls_mode', '?')}; " if self.mode == "verbose" else ""
+                self._write(f"Connection: {policy}read timeout {self._read_timeout:g}s; stop on read timeout")
         elif stage == "transport" and kind == "tls_selected":
-            effective = event.get("effective_tls_mode") or "managed by custom transport"
-            suffix = "; compatibility fallback" if event.get("fallback") else ""
-            self._write(f"Connection: TLS {effective}{suffix}; {event.get('probe_requests', 0)} probe request(s), no generation")
+            suffix = "; compatibility fallback selected automatically" if event.get("fallback") else ""
+            self._write(f"Connection ready{suffix}; {event.get('probe_requests', 0)} probe request(s), no generation")
+            if self.mode == "verbose":
+                effective = event.get("effective_tls_mode") or "managed by custom transport"
+                reason = event.get("fallback_reason")
+                detail = f"; reason {reason}" if reason else ""
+                self._write(f"Selected TLS policy: {effective}{detail}; actual version is recorded with each connection")
+        elif stage == "http" and kind == "connection_observed":
+            if self.mode == "verbose":
+                self._write(f"Connection observation: TLS {event.get('actual_tls_version', 'unknown')}; "
+                            f"HTTP version {event.get('actual_http_version', 'unknown')}; "
+                            f"{event.get('request_kind', 'request')}")
         elif stage == "http" and kind == "started":
             self._read_timeout = event.get("read_timeout", self._read_timeout)
             self._waiting_since = time.monotonic()

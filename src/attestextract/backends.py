@@ -19,7 +19,7 @@ from .http_diagnostics import describe_http_error
 from .models import BackendResponse, ExtractionRequest
 from .schema_diagnostics import assess_schema_compliance, schema_request_info
 from .transport import (bounded_timeout, connection_signature, safe_to_retry, timeout_phase,
-                        tls_context, tls_fallback_allowed, transport_details)
+                        tls_context, tls_fallback_reason, transport_details)
 
 _RETRYABLE_STATUS_CODES = frozenset({408, 409, 429, 500, 502, 503, 504})
 _RESERVED_OPTIONS = frozenset({
@@ -87,7 +87,7 @@ class OpenAICompatibleBackend:
         model: str,
         api_key: str | None = None,
         timeout: float | None = None,
-        max_attempts: int = 3,
+        max_attempts: int = 1,
         transport: httpx.BaseTransport | None = None,
         *,
         sleep_fn: Callable[[float], None] = time.sleep,
@@ -95,7 +95,7 @@ class OpenAICompatibleBackend:
         structured_output: Literal["off", "json_object", "json_schema"] = "off",
         provider_options: dict[str, Any] | None = None,
         output_token_parameter: Literal["max_tokens", "max_completion_tokens"] = "max_tokens",
-        tls_mode: Literal["auto", "1.2", "auto_fallback"] = "auto",
+        tls_mode: Literal["auto", "1.2", "auto_fallback", "tls12_fallback"] = "tls12_fallback",
         read_timeout: float | None = None,
     ) -> None:
         if not isinstance(base_url, str) or not base_url.strip():
@@ -140,8 +140,8 @@ class OpenAICompatibleBackend:
             raise ConfigurationError(
                 "output_token_parameter must be one of: " + ", ".join(self.output_token_parameters) + "."
             )
-        if tls_mode not in ("auto", "1.2", "auto_fallback"):
-            raise ConfigurationError("tls_mode must be 'auto', '1.2', or 'auto_fallback'.")
+        if tls_mode not in ("auto", "1.2", "auto_fallback", "tls12_fallback"):
+            raise ConfigurationError("tls_mode must be 'auto', '1.2', 'auto_fallback', or 'tls12_fallback'.")
 
         self.base_url = str(url).rstrip("/")
         self.model = model
@@ -211,7 +211,7 @@ class OpenAICompatibleBackend:
     def _select_tls(self, request: ExtractionRequest, started: float) -> None:
         """Probe without credentials before a model POST; never replay a POST to switch TLS."""
         self.last_probe_requests = 0
-        if self.tls_mode not in ("auto", "1.2", "auto_fallback"):
+        if self.tls_mode not in ("auto", "1.2", "auto_fallback", "tls12_fallback"):
             raise ConfigurationError("Unknown TLS policy.")
         if self._transport is not None:
             self._tls_selection = None
@@ -221,7 +221,7 @@ class OpenAICompatibleBackend:
             self._tls_selection = None
             self.effective_tls_mode = "not_applicable"
             return
-        if self.tls_mode != "auto_fallback":
+        if self.tls_mode not in ("auto_fallback", "tls12_fallback"):
             self._tls_selection = None
             self.effective_tls_mode = self.tls_mode
             return
@@ -230,7 +230,9 @@ class OpenAICompatibleBackend:
             self.effective_tls_mode = self._tls_selection[1]
             return
         self._tls_selection = None
-        for mode in ("auto", "1.2"):
+        modes = ("1.2", "auto") if self.tls_mode == "tls12_fallback" else ("auto", "1.2")
+        fallback_reason = None
+        for index, mode in enumerate(modes):
             self.effective_tls_mode = mode
             self.last_probe_requests += 1
             self.probe_requests += 1
@@ -246,7 +248,9 @@ class OpenAICompatibleBackend:
                                                     request_kind="tls_probe", request_status="transport_failure")
                 diagnostic, artifact = self._transport_failure(exc, request, 0, started=started, preflight=True,
                                                               observation=observed)
-                if mode == "auto" and tls_fallback_allowed(exc):
+                reason = tls_fallback_reason(exc, policy=self.tls_mode)
+                if index == 0 and reason is not None:
+                    fallback_reason = reason
                     continue
                 raise BackendError(
                     "Connection probe failed before any model request was sent.", attempts=0,
@@ -263,7 +267,8 @@ class OpenAICompatibleBackend:
             if self._trace is not None:
                 self._trace.event("transport", "tls_selected", chunk_id=request.chunk_id,
                                   configured_tls_mode=self.tls_mode, effective_tls_mode=mode,
-                                  fallback=mode == "1.2", probe_requests=self.last_probe_requests,
+                                  fallback=index > 0, fallback_reason=fallback_reason,
+                                  probe_requests=self.last_probe_requests,
                                   probe_http_status=status, certificate_verification=True)
             return
 

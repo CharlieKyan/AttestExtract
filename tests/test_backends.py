@@ -67,7 +67,8 @@ def test_transient_status_retries_then_succeeds(status):
         return httpx.Response(200, json=completion())
 
     backend = OpenAICompatibleBackend(
-        "http://localhost/v1", "model", transport=httpx.MockTransport(handler), sleep_fn=waits.append
+        "http://localhost/v1", "model", max_attempts=3,
+        transport=httpx.MockTransport(handler), sleep_fn=waits.append
     )
     assert backend.generate(request()).attempts == 2
     assert len(calls) == 2
@@ -84,7 +85,8 @@ def test_transport_failure_has_bounded_retries_without_leaking_details(failure):
         raise failure("secret key and private URL", request=incoming)
 
     backend = OpenAICompatibleBackend(
-        "https://models.example/v1", "model", transport=httpx.MockTransport(handler), sleep_fn=waits.append
+        "https://models.example/v1", "model", max_attempts=3,
+        transport=httpx.MockTransport(handler), sleep_fn=waits.append
     )
     with pytest.raises(BackendError) as captured:
         backend.generate(request())
@@ -106,7 +108,8 @@ def test_connection_timeout_can_recover():
         return httpx.Response(200, json=completion())
 
     backend = OpenAICompatibleBackend(
-        "https://models.example/v1", "model", transport=httpx.MockTransport(handler), sleep_fn=lambda _: None
+        "https://models.example/v1", "model", max_attempts=3,
+        transport=httpx.MockTransport(handler), sleep_fn=lambda _: None
     )
     assert backend.generate(request()).attempts == 2
 

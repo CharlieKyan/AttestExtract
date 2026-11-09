@@ -300,7 +300,7 @@ def test_http_trace_records_rate_limit_retry_without_recording_error_body(tmp_pa
 
     backend = OpenAICompatibleBackend(
         base_url="https://example.invalid/v1", model="synthetic-retry-model",
-        api_key="synthetic-retry-token", transport=httpx.MockTransport(endpoint),
+        api_key="synthetic-retry-token", transport=httpx.MockTransport(endpoint), max_attempts=2,
         sleep_fn=lambda _: None, trace=trace, structured_output="json_schema",
     )
     result = extract(TEXT, TASK, backend=backend, trace=trace)

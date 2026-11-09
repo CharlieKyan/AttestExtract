@@ -27,7 +27,7 @@ def artifact_text(directory):
     return "\n".join(path.read_text(encoding="utf-8") for path in directory.rglob("*") if path.is_file())
 
 
-def run_failure(tmp_path, response, *, api_key="synthetic-http-secret", structured_output="off"):
+def run_failure(tmp_path, response, *, api_key="synthetic-http-secret", structured_output="off", max_attempts=1):
     directory = tmp_path / "http-run"
     trace = RunTrace(directory)
     requests = []
@@ -39,7 +39,7 @@ def run_failure(tmp_path, response, *, api_key="synthetic-http-secret", structur
     backend = OpenAICompatibleBackend(
         base_url="https://example.invalid/v1", model="synthetic-model", api_key=api_key,
         transport=httpx.MockTransport(endpoint), sleep_fn=lambda _: None,
-        trace=trace, structured_output=structured_output,
+        trace=trace, structured_output=structured_output, max_attempts=max_attempts,
     )
     with pytest.raises(BackendError) as caught:
         extract("Synthetic source only.", TASK, backend=backend, trace=trace)
@@ -238,7 +238,7 @@ def test_retry_success_keeps_each_failed_attempt_and_finishes_as_success(tmp_pat
 
     backend = OpenAICompatibleBackend(
         base_url="https://example.invalid/v1", model="synthetic-model",
-        transport=httpx.MockTransport(endpoint), sleep_fn=lambda _: None, trace=trace,
+        transport=httpx.MockTransport(endpoint), sleep_fn=lambda _: None, trace=trace, max_attempts=3,
     )
     result = extract("Synthetic source only.", TASK, backend=backend, trace=trace)
     trace.finish(result.model_dump(mode="json"))
@@ -288,7 +288,7 @@ def test_deeply_nested_error_json_does_not_replace_http_status_or_prevent_retry(
 
     backend = OpenAICompatibleBackend(
         base_url="https://example.invalid/v1", model="synthetic-model",
-        transport=httpx.MockTransport(endpoint), sleep_fn=lambda _: None, trace=trace,
+        transport=httpx.MockTransport(endpoint), sleep_fn=lambda _: None, trace=trace, max_attempts=3,
     )
     result = extract("Synthetic source only.", TASK, backend=backend, trace=trace)
     trace.finish(result.model_dump(mode="json"))
@@ -313,7 +313,8 @@ def test_deeply_nested_error_json_does_not_replace_http_status_or_prevent_retry(
 
 
 def test_exhausted_rate_limit_keeps_all_attempt_diagnostics(tmp_path):
-    exc, diagnostic, directory, requests = run_failure(tmp_path, httpx.Response(429, json={"error": {"code": "rate_limit_exceeded"}}))
+    exc, diagnostic, directory, requests = run_failure(
+        tmp_path, httpx.Response(429, json={"error": {"code": "rate_limit_exceeded"}}), max_attempts=3)
     assert len(requests) == exc.attempts == diagnostic["attempt"] == 3
     failures = [read_json(path) for path in sorted((directory / "http").glob("*.error.json"))]
     assert [item["attempt"] for item in failures] == [1, 2, 3]

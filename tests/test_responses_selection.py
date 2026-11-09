@@ -38,7 +38,7 @@ def test_responses_preset_is_explicit_and_keeps_existing_chat_defaults(monkeypat
     assert config.structured_output == "json_schema" and config.output_token_parameter == "max_output_tokens"
     assert config.generation.max_output_tokens == 8192 and config.generation.temperature == 0
     assert config.provider_options == {"reasoning": {"effort": "none"}}
-    assert config.max_attempts == 1 and config.format_retries == 0 and config.tls_mode == "1.2"
+    assert config.max_attempts == 1 and config.format_retries == 0 and config.tls_mode == "tls12_fallback"
     legacy = resolve_model_config("deepseek:deepseek-flash", environment={})
     assert legacy.adapter == "openai-compatible" and legacy.structured_output == "json_object"
     assert legacy.output_token_parameter == "max_tokens"
@@ -116,6 +116,10 @@ def test_registry_routes_only_to_responses_and_never_falls_back(monkeypatch, sta
 
     def send(client, request, **kwargs):
         calls.append(request)
+        if request.method == "GET":
+            assert str(request.url) == "https://api.deepseek.com/models"
+            assert "authorization" not in request.headers and not request.content
+            return httpx.Response(401, request=request)
         if status == 400:
             return httpx.Response(400, json={"error": {"message": "Synthetic unsupported schema", "type": "invalid_request_error"}}, request=request)
         return httpx.Response(200, json={"id": "synthetic-response", "object": "response", "model": "deepseek-flash", "status": "completed",
@@ -134,9 +138,10 @@ def test_registry_routes_only_to_responses_and_never_falls_back(monkeypatch, sta
         assert caught.value.code == "invalid_request" and caught.value.attempts == 1
     else:
         assert backend.generate(request).text == '{"records":[]}'
-    assert len(calls) == 1 and str(calls[0].url) == "https://api.deepseek.com/responses"
-    assert calls[0].headers["authorization"] == "Bearer synthetic-key"
-    payload = json.loads(calls[0].content)
+    assert [call.method for call in calls] == ["GET", "POST"]
+    assert str(calls[1].url) == "https://api.deepseek.com/responses"
+    assert calls[1].headers["authorization"] == "Bearer synthetic-key"
+    payload = json.loads(calls[1].content)
     assert payload["max_output_tokens"] == 8192 and payload["reasoning"] == {"effort": "none"}
     assert payload["text"]["format"]["type"] == "json_schema" and payload["text"]["format"]["schema"] == SCHEMA
     assert "response_format" not in payload and "messages" not in payload

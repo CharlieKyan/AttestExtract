@@ -1,4 +1,4 @@
-# CLI 默认值与验收（dev20）
+# CLI 默认值与验收（dev24）
 
 这是正式包入口的行为，不依赖论文启动脚本。密钥配置一次；用户主要填写模型、输入和任务。`.env` 明确通过 `--env-file` 读取；已有进程环境变量仍优先。
 
@@ -6,7 +6,7 @@
 attestextract extract --model-id deepseek:deepseek-flash --env-file .env --input paper.md --task task.json
 ```
 
-更换为 `--model-id qwen:qwen3.8-27b` 即使用 Qwen。连接及生成默认值适用于已支持的模型预设；格式重生成默认关闭，也适用于未显式设置该项的高级 profile；显式 1 保留。Python 默认保持不变。
+更换为 `--model-id qwen:qwen3.8-27b` 即使用 Qwen。地址、凭据和生成参数由已支持的模型预设提供；连接策略和一次 HTTP 尝试的默认值也适用于高级 profile 与直接创建的内置适配器。格式重生成默认关闭，显式设置仍保留。
 
 | 配置 | 默认值与原因 |
 | --- | --- |
@@ -49,15 +49,30 @@ DeepSeek当前文档说明：非思考模式不传 `max_tokens` 默认8K。因�
 
 ## TLS 兼容处理
 
-TLS 是 HTTPS 加密连接的协议，不改变模型或抽取格式。dev20 的 Qwen 预设默认 `auto_fallback`：正式生成前，向同一地址的 `/models` 做不带密钥、论文或提示词的流式 GET 探测。收到任意 HTTP 状态仅表示 TLS 已连通，不代表鉴权、模型可用或生成成功。仅遇到已识别的 `SSLV3_ALERT_BAD_RECORD_MAC` / `DECRYPTION_FAILED_OR_BAD_RECORD_MAC` 才再探测 TLS 1.2，最多两次，每次各网络阶段 5 秒。证书、DNS 或超时错误不触发降级；不跟随重定向、不保存响应正文或把探测 cookie 带入生成。
+TLS 是 HTTPS 加密连接的协议，不改变模型或抽取格式。dev24 未显式配置时，模型预设、高级 profile 和内置 Chat／Responses 适配器统一使用 `tls12_fallback`，包括用户配置的兼容端点。普通用户无需填写 TLS 参数。
 
-选择只缓存在当前后端实例内；环境代理、CA、地址或策略变化后重新判断。正式 POST 的读取、写入或协议故障可能已经在服务端产生工作，因此停止且不自动换 TLS 重发，`max_attempts > 1` 也不例外。读取超时默认 180 秒，不保证所有生成都能完成；失败保留检查点，用户决定是否恢复。探测失败可能已预留一次生成预算，但实际模型 POST 为 0；这不是模型计费证据。
+| 策略 | 行为 |
+| --- | --- |
+| `tls12_fallback`（新默认） | 先固定 TLS 1.2 探测；仅遇到白名单内的 TLS 协商／记录错误，再尝试系统自动协商 |
+| `auto` | 直接使用系统自动协商，不做兼容性探测 |
+| `1.2` | 固定 TLS 1.2，不做兼容性探测 |
+| `auto_fallback` | 保留旧行为：先自动协商探测，仅遇到已识别的 MAC 错误才探测固定 TLS 1.2 |
 
-普通用户无需 TLS 参数。高级用户可用 `--tls-mode auto|1.2|auto_fallback`、同名 profile 字段或 Python `model_options={"tls_mode": "auto_fallback", "read_timeout": 240}`。DeepSeek 保留 TLS 1.2；高级 profile 未声明时仍为 `auto`。证书和主机名验证、HTTPX 环境代理及 `SSL_CERT_FILE` / `SSL_CERT_DIR` 继续生效。自定义 transport 跳过探测，实际 TLS 和证书验证状态记为未知；HTTP 本地服务不做 TLS 探测。
+兼容性探测向同一服务地址的 `/models` 发出不带密钥、论文或提示词的 GET，最多两次，每次各网络阶段限时 5 秒。收到任意 HTTP 状态仅说明加密连接已建立，不代表凭据、模型或生成可用。不跟随重定向、不读取或保存正文、不把探测 cookie 带入生成。
 
-`timeout` 省略使用分阶段默认；老 profile 明确 `timeout=60` 仍为每阶段 60 秒。CLI `--timeout 120` 会清除继承的 profile `read_timeout`；同时指定 `--read-timeout 240` 则读取为 240 秒。终端显示读取上限、TLS 兜底、等待及恢复提示，原文和异常原始字符串不进入终端。
+新策略只接受异常链内 SSL 库提供的原因码：`TLSV1_ALERT_PROTOCOL_VERSION`、`UNSUPPORTED_PROTOCOL`、`SSLV3_ALERT_HANDSHAKE_FAILURE`、`SSLV3_ALERT_BAD_RECORD_MAC`、`DECRYPTION_FAILED_OR_BAD_RECORD_MAC`。证书错误优先阻断；DNS、代理、超时和普通 `RemoteProtocolError` 不触发切换。不会依据可能含敏感内容的异常字符串猜测原因。
 
-传输失败文件保存异常类型、数字错误码和允许的 SSL 原因码，不保存可能包含密钥或地址的异常原文。依据：[HTTPX SSL](https://www.python-httpx.org/advanced/ssl/)、[HTTPX 环境变量](https://www.python-httpx.org/environment_variables/)、[Python SSLContext](https://docs.python.org/3/library/ssl.html#ssl.SSLContext)。
+选择只缓存在当前后端实例内；环境代理、CA、地址或策略变化后重新判断。正式 POST 的读取、写入或协议故障可能已经在服务端产生工作，因此停止且不自动换 TLS 重发，`max_attempts > 1` 也不例外。所有内置入口未显式设置时只尝试一次；用户显式增加尝试次数，仍受既有可重试错误分类限制。读取超时默认 180 秒，不保证所有生成都能完成；失败保留检查点，用户决定是否恢复。探测失败可能已预留一次生成预算，但实际模型 POST 为 0；这不是模型计费证据。
+
+这是基于当前环境验证结果作出的兼容性默认取舍，不能证明 TLS 1.2 对所有用户最优。`auto` 仍可显式选择，自动协商的实际版本只有网络观测后才知道。证书和主机名验证、HTTPX 环境代理及 `SSL_CERT_FILE` / `SSL_CERT_DIR` 继续生效。自定义 transport 跳过探测，实际 TLS 和证书验证状态记为未知；HTTP 本地服务不做 TLS 探测。
+
+CLI 可使用 `--tls-mode`，配置文件使用 `tls_mode`，Python 使用 `model_options={"tls_mode": "auto", "read_timeout": 240}`；显式旧配置不会被新默认覆盖。`timeout` 省略时使用 `15/180/30/15` 秒；老 profile 明确 `timeout=60` 仍为每阶段 60 秒。CLI `--timeout 120` 清除继承的 profile `read_timeout`；同时指定 `--read-timeout 240` 则读取为 240 秒。
+
+普通终端显示连接检查完成或兼容路径切换、读取上限、等待及恢复提示；`verbose` 和诊断提供策略、探测次数和已观测的 TLS／HTTP 版本。未知版本如实显示未知。原文、密钥和异常原始字符串不进入终端。传输失败文件仅保存异常类型、数字错误码和允许的 SSL 原因码。
+
+普通 v3 检查点允许仅改变连接设置并记录差异，保留成功块和历史调用额度；改变模型、地址、生成或抽取内容设置仍拒绝复用。历史冻结实验另有严格环境身份，升级后不要改写旧实验清单，见[实验指南](PROVIDER_EXPERIMENTS.md)。
+
+依据：[HTTPX SSL](https://www.python-httpx.org/advanced/ssl/)、[HTTPX 环境变量](https://www.python-httpx.org/environment_variables/)、[Python SSLContext](https://docs.python.org/3/library/ssl.html#ssl.SSLContext)。
 
 ## JSON 错误：看见原因，保留证据
 

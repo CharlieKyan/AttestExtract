@@ -159,15 +159,17 @@ def test_frozen_legacy_resume_requests_only_remaining_leaf_and_exports_decisions
     assert len(prepare_decision_bundle(tmp_path / "new").batches) == 3
 
 
-def test_sixteen_chunks_timeout_resume_reuses_eleven_with_five_call_budget(tmp_path, monkeypatch):
+@pytest.mark.parametrize("resumed_tls", ["1.2", "tls12_fallback"])
+def test_sixteen_chunks_timeout_resume_reuses_eleven_with_five_call_budget(tmp_path, monkeypatch, resumed_tls):
     import attestextract
     text = "\n\n".join(f"Item {n:02} reads 11." for n in range(16))
     task = read(FIXTURE / "inputs.json")["task"]
     first, second = tmp_path / "first", tmp_path / "second"
     trace = RunTrace(first)
     calls = []
+    monkeypatch.setattr(attestextract, "__version__", "0.1.0.dev23")
     with pytest.raises(BackendError) as failure:
-        extract(text, task, backend=backend(calls=calls,trace=trace,fail_at=12,timeout=60,max_attempts=3),
+        extract(text, task, backend=backend(calls=calls,trace=trace,fail_at=12,timeout=60,max_attempts=3,tls_mode="auto"),
             trace=trace,max_chunk_chars=19,
             execution=ExecutionOptions(adaptive_chunking=False,min_chunk_chars=1,max_model_calls=48))
     assert failure.value.code == "timeout" and len(calls) == 12
@@ -177,14 +179,42 @@ def test_sixteen_chunks_timeout_resume_reuses_eleven_with_five_call_budget(tmp_p
     trace2 = RunTrace(second)
     more = []
     monkeypatch.setattr(attestextract,"__version__","0.1.0.dev999")
-    result = extract(text, task, backend=backend(calls=more,trace=trace2,read_timeout=180,tls_mode="1.2",max_attempts=1),
+    result = extract(text, task, backend=backend(calls=more,trace=trace2,read_timeout=180,tls_mode=resumed_tls,max_attempts=1),
         trace=trace2,max_chunk_chars=19,resume_from=first,
         execution=ExecutionOptions(adaptive_chunking=False,min_chunk_chars=1,max_model_calls=17))
     assert len(more) == 5 and result.run.chunk_count == 16
     summary = read(second / "execution/summary.json")
     assert summary["calls_reserved"] == 17 and summary["reused_chunks"] == 11
     assert summary["completed_chunks"] == 16 and len(summary["transport_changes"]) == 1
+    assert summary["transport_changes"][0]["to"]["tls_mode"] == resumed_tls
     assert hashes(first) == previous
+
+
+@pytest.mark.parametrize("damage", ["model", "endpoint", "cache"])
+def test_tls_first_resume_keeps_identity_and_cache_guards(tmp_path, damage):
+    text = "\n\n".join(f"Item {letter} reads 11." for letter in "ABC")
+    task = read(FIXTURE / "inputs.json")["task"]
+    first = tmp_path / "first"
+    trace = RunTrace(first)
+    with pytest.raises(BackendError):
+        extract(text, task, backend=backend(calls=[], trace=trace, fail_at=3, tls_mode="auto", max_attempts=1),
+                trace=trace, max_chunk_chars=19,
+                execution=ExecutionOptions(adaptive_chunking=False, min_chunk_chars=1, max_model_calls=4))
+    calls = []
+    resumed = backend(calls=calls, tls_mode="tls12_fallback", max_attempts=1)
+    if damage == "model":
+        resumed.model = "different-synthetic"
+    elif damage == "endpoint":
+        resumed.base_url = "https://different.invalid/v1"
+    else:
+        cache = next((first / "execution/cache").glob("*.json"))
+        cache.write_text("{}", encoding="utf-8")
+    before = hashes(first)
+    with pytest.raises(ConfigurationError):
+        extract(text, task, backend=resumed, trace=RunTrace(tmp_path / "second"), resume_from=first,
+                max_chunk_chars=19,
+                execution=ExecutionOptions(adaptive_chunking=False, min_chunk_chars=1, max_model_calls=4))
+    assert calls == [] and hashes(first) == before
 
 
 def test_successful_v2_decision_archive_remains_readable(tmp_path):

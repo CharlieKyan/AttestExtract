@@ -57,6 +57,7 @@ jobs:
               "provider_review_smoke.py",
           )
           provider_sources = {}
+          tls_sources = {}
           with tarfile.open(source_archive) as archive:
               for name in provider_names:
                   members = [member for member in archive.getmembers()
@@ -64,6 +65,14 @@ jobs:
                   assert len(members) == 1, f"Source distribution must contain {name}"
                   provider_sources[name] = archive.extractfile(members[0]).read()
                   assert provider_sources[name] == Path("scripts", name).read_bytes()
+              for relative in ("scripts/tls_first_smoke.py",
+                               "tests/fixtures/tls_local/localhost-cert.pem",
+                               "tests/fixtures/tls_local/localhost-key.pem"):
+                  members = [member for member in archive.getmembers()
+                             if member.name.endswith("/" + relative) and member.isfile()]
+                  assert len(members) == 1, f"Source distribution must contain {relative}"
+                  tls_sources[relative] = archive.extractfile(members[0]).read()
+                  assert tls_sources[relative] == Path(relative).read_bytes()
           with tempfile.TemporaryDirectory(prefix="attestextract-smoke-") as directory:
               root = Path(directory)
               environment = root / "venv"
@@ -79,7 +88,7 @@ jobs:
               assert set(examples) == {"ccus", "procurement"}
               for name, count in (("ccus", 2), ("procurement", 3)):
                   result = examples[name]
-                  assert result["package_version"] == "0.1.0.dev23"
+                  assert result["package_version"] == "0.1.0.dev24"
                   assert result["run"]["mode"] == "replay"
                   assert len(result["candidates"]) == count
                   assert result["review"] == []
@@ -89,7 +98,7 @@ jobs:
               assert set(archives) == {"attribute", "observation", "relation"}
               for name, candidate_count, record_count in (("attribute", 2, 1), ("observation", 2, 2), ("relation", 1, 1)):
                   archive = archives[name]
-                  assert archive["extraction"]["package_version"] == "0.1.0.dev23"
+                  assert archive["extraction"]["package_version"] == "0.1.0.dev24"
                   assert archive["extraction"]["run"]["mode"] == "replay"
                   assert len(archive["extraction"]["candidates"]) == candidate_count
                   assert len(archive["records"]) == record_count
@@ -103,7 +112,7 @@ jobs:
               subprocess.run([str(python), str(copied), "--mode", "mock", "--output-dir", str(acceptance)],
                              check=True, cwd=root, env=env)
               summary = json.loads((acceptance / "summary.json").read_text(encoding="utf-8"))
-              assert summary["package_version"] == "0.1.0.dev23"
+              assert summary["package_version"] == "0.1.0.dev24"
               assert summary["passed"] and summary["real_endpoint_calls"] == 0
               assert summary["mock_http_calls"] == 3
               assert [case["candidate_count"] for case in summary["cases"]] == [1, 2, 1]
@@ -177,6 +186,21 @@ jobs:
               assert transport["passed"] and transport["real_endpoint_calls"] == 0
               assert transport["mock_http_calls"] == 17 and transport["resume_new_calls"] == 5
               assert Path(transport["module_path"]).is_relative_to(environment)
+              for relative, content in tls_sources.items():
+                  target = root / "runner" / relative
+                  target.parent.mkdir(parents=True, exist_ok=True)
+                  target.write_bytes(content)
+              tls_output = root / "tls-first"
+              subprocess.run([str(python), str(scripts / "tls_first_smoke.py"),
+                              "--certificate-dir", str(root / "runner/tests/fixtures/tls_local"),
+                              "--output-dir", str(tls_output)], check=True, cwd=root, env=env)
+              tls = json.loads((tls_output / "summary.json").read_text(encoding="utf-8"))
+              assert tls["passed"] and tls["real_endpoint_calls"] == 0 and tls["loopback_only"]
+              assert tls["package_version"] == "0.1.0.dev24"
+              assert tls["local_model_posts"] == 4 and tls["probe_attempts"] == 4
+              assert tls["environment_restored"] and Path(tls["module_path"]).is_relative_to(environment)
+              assert [case.get("actual_tls_version") for case in tls["cases"][:2]] == ["TLSv1.2", "TLSv1.3"]
+              assert tls["cases"][2]["model_posts"] == 0 and not tls["cases"][2]["fallback"]
               for name, content in provider_sources.items():
                   (scripts / name).write_bytes(content)
               provider_output = root / "provider-experiment"

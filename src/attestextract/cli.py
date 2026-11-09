@@ -86,8 +86,8 @@ def _parser() -> argparse.ArgumentParser:
     live.add_argument("--api-key-env", help="Environment variable containing the API key (default: ATTESTEXTRACT_API_KEY)")
     live.add_argument("--timeout", type=float, help="Override all HTTP phase timeouts, 0 < seconds <= 600 (defaults: connect 15, read 180, write 30, pool 15)")
     live.add_argument("--read-timeout", type=float, help="Override only the HTTP read timeout, 0 < seconds <= 600")
-    live.add_argument("--tls-mode", choices=("auto", "1.2", "auto_fallback"), help="TLS policy (Qwen preset: verified automatic compatibility fallback)")
-    live.add_argument("--max-attempts", type=int, help="Maximum HTTP attempts per generation (presets: 1; profiles/legacy: 3)")
+    live.add_argument("--tls-mode", choices=("auto", "1.2", "auto_fallback", "tls12_fallback"), help="Connection policy (default: tls12_fallback, TLS 1.2 first with a bounded automatic negotiation fallback)")
+    live.add_argument("--max-attempts", type=int, help="Maximum HTTP attempts per generation (default: 1; uncertain request outcomes are never automatically retried)")
     live.add_argument("--temperature", type=float, help="Sampling temperature (presets: 0; profiles/legacy: provider default)")
     live.add_argument("--max-output-tokens", type=_output_token_limit, metavar="N|provider",
                       help="Positive output token ceiling, or 'provider' to omit it from the request (not unlimited). Default: presets 8192; profiles/legacy provider default")

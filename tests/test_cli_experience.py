@@ -272,15 +272,48 @@ def test_console_heartbeat_stops_and_does_not_echo_payload():
     assert "compatibility fallback" in stream.getvalue()
 
 
-def test_tls_compatibility_verifies_certificates_and_is_provider_scoped(monkeypatch):
+@pytest.mark.parametrize("mode", ["normal", "verbose", "quiet"])
+@pytest.mark.parametrize("actual", ["TLSv1.2", "unknown"])
+def test_console_separates_connection_policy_from_observed_tls(mode, actual):
+    stream = io.StringIO()
+    console = ConsoleProgress(mode=mode, stream=stream)
+    console({"stage": "configuration", "event": "completed", "tls_mode": "tls12_fallback", "read_timeout": 180})
+    console({"stage": "transport", "event": "tls_selected", "effective_tls_mode": "auto",
+             "fallback": True, "fallback_reason": "UNSUPPORTED_PROTOCOL", "probe_requests": 2})
+    console({"stage": "http", "event": "connection_observed", "actual_tls_version": actual,
+             "actual_http_version": "HTTP/1.1", "request_kind": "model_post"})
+    terminal = stream.getvalue()
+    if mode == "quiet":
+        assert terminal == ""
+        return
+    assert "Connection ready; compatibility fallback selected automatically" in terminal
+    assert "2 probe request(s), no generation" in terminal
+    assert "TLSv1.3" not in terminal
+    if mode == "normal":
+        assert "TLS" not in terminal and "UNSUPPORTED_PROTOCOL" not in terminal
+    else:
+        assert "TLS policy tls12_fallback" in terminal
+        assert "Selected TLS policy: auto; reason UNSUPPORTED_PROTOCOL" in terminal
+        assert f"Connection observation: TLS {actual}; HTTP version HTTP/1.1; model_post" in terminal
+
+
+def test_console_initial_connection_success_does_not_claim_fallback():
+    stream = io.StringIO()
+    console = ConsoleProgress(stream=stream)
+    console({"stage": "transport", "event": "tls_selected", "effective_tls_mode": "1.2",
+             "fallback": False, "probe_requests": 1})
+    assert stream.getvalue() == "Connection ready; 1 probe request(s), no generation\n"
+
+
+def test_tls_compatibility_verifies_certificates_and_presets_share_connection_policy(monkeypatch):
     monkeypatch.delenv("SSL_CERT_FILE", raising=False)
     monkeypatch.delenv("SSL_CERT_DIR", raising=False)
     context = tls_context("1.2")
     assert context.minimum_version == context.maximum_version == ssl.TLSVersion.TLSv1_2
     assert context.verify_mode == ssl.CERT_REQUIRED and context.check_hostname
     assert tls_context("auto") is True
-    assert resolve_model_config("deepseek:deepseek-flash", environment={}).tls_mode == "1.2"
-    assert resolve_model_config("qwen:qwen3.8-27b", environment={}).tls_mode == "auto_fallback"
+    assert resolve_model_config("deepseek:deepseek-flash", environment={}).tls_mode == "tls12_fallback"
+    assert resolve_model_config("qwen:qwen3.8-27b", environment={}).tls_mode == "tls12_fallback"
     assert resolve_model_config("deepseek:deepseek-flash", environment={}, overrides={"tls_mode": "auto"}).tls_mode == "auto"
 
 
@@ -334,7 +367,7 @@ def test_cli_timeout_preview_remains_offline(tmp_path, monkeypatch, capsys, over
     assert cli.main(args + overrides + ["--check"]) == 0
     preview = json.loads(capsys.readouterr().out)
     assert preview["effective_timeouts"] == expected
-    assert preview["tls_mode"] == "auto_fallback"
+    assert preview["tls_mode"] == "tls12_fallback"
     assert preview["network_calls"] == 0
 
 

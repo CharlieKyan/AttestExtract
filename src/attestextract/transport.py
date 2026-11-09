@@ -38,16 +38,26 @@ def exception_chain(exc: BaseException) -> list[BaseException]:
     return result
 
 
-def tls_fallback_allowed(exc: BaseException) -> bool:
-    """Only identified record MAC errors qualify; certificate failure wins."""
+def tls_fallback_reason(exc: BaseException, *, policy: str = "auto_fallback") -> str | None:
+    """Return an allowlisted SSL reason; never infer one from exception text."""
+    reasons = {"SSLV3_ALERT_BAD_RECORD_MAC", "DECRYPTION_FAILED_OR_BAD_RECORD_MAC"}
+    if policy == "tls12_fallback":
+        reasons |= {"TLSV1_ALERT_PROTOCOL_VERSION", "UNSUPPORTED_PROTOCOL", "SSLV3_ALERT_HANDSHAKE_FAILURE"}
+    elif policy != "auto_fallback":
+        return None
     chain = exception_chain(exc)
-    if any(isinstance(item, ssl.SSLCertVerificationError) or
+    if any(isinstance(item, (ssl.SSLCertVerificationError, httpx.ProxyError, httpx.TimeoutException,
+                             httpx.RemoteProtocolError)) or
            isinstance(item, ssl.SSLError) and getattr(item, "reason", None) == "CERTIFICATE_VERIFY_FAILED"
            for item in chain):
-        return False
-    return any(isinstance(item, ssl.SSLError) and getattr(item, "reason", None) in {
-        "SSLV3_ALERT_BAD_RECORD_MAC", "DECRYPTION_FAILED_OR_BAD_RECORD_MAC",
-    } for item in chain)
+        return None
+    return next((item.reason for item in chain if isinstance(item, ssl.SSLError)
+                 and getattr(item, "reason", None) in reasons), None)
+
+
+def tls_fallback_allowed(exc: BaseException) -> bool:
+    """Preserve the original auto-first policy's MAC-only fallback rule."""
+    return tls_fallback_reason(exc) is not None
 
 
 def connection_signature(base_url: str, mode: str, transport: object) -> tuple:

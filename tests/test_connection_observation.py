@@ -130,11 +130,12 @@ def test_failure_before_headers_preserves_observed_tls_without_retry(monkeypatch
         raise httpx.RemoteProtocolError("private")
 
     intercept_clients(monkeypatch, handler)
-    adapter = OpenAICompatibleBackend("https://models.example/v1", "synthetic", max_attempts=3)
+    adapter = OpenAICompatibleBackend("https://models.example/v1", "synthetic", tls_mode="auto", max_attempts=3)
     with pytest.raises(BackendError) as caught:
         adapter.generate(extraction_request())
     observed = caught.value.http_diagnostics["connection_observation"]
     assert len(calls) == 1
+    assert observed["request_kind"] == "model_post"
     assert observed["actual_tls_version"] == "TLSv1.3"
     assert observed["actual_http_version"] == "unknown"
     assert observed["failure_phase"] == "response_headers"
@@ -168,7 +169,7 @@ def test_interruption_keeps_available_connection_observation(monkeypatch):
         raise KeyboardInterrupt()
 
     intercept_clients(monkeypatch, handler)
-    adapter = OpenAICompatibleBackend("https://models.example/v1", "synthetic")
+    adapter = OpenAICompatibleBackend("https://models.example/v1", "synthetic", tls_mode="auto")
     with pytest.raises(KeyboardInterrupt):
         adapter.generate(extraction_request())
     observed = adapter.last_connection_observations[0]
@@ -179,7 +180,7 @@ def test_interruption_keeps_available_connection_observation(monkeypatch):
 def test_decoding_failure_keeps_headers_observation(monkeypatch):
     intercept_clients(monkeypatch, lambda _: httpx.Response(200, stream=httpx.ByteStream(b"invalid gzip"),
         headers={"content-encoding": "gzip"}, extensions={"http_version": b"HTTP/1.1"}))
-    adapter = OpenAICompatibleBackend("https://models.example/v1", "synthetic")
+    adapter = OpenAICompatibleBackend("https://models.example/v1", "synthetic", tls_mode="auto")
     with pytest.raises(BackendError):
         adapter.generate(extraction_request())
     observed = adapter.last_connection_observations[0]
@@ -205,7 +206,7 @@ def test_response_hook_preserves_http_and_tls_when_body_fails(monkeypatch):
             "http_version": b"HTTP/1.1", "network_stream": NetworkStream()})
 
     intercept_clients(monkeypatch, handler)
-    adapter = OpenAICompatibleBackend("https://models.example/v1", "synthetic")
+    adapter = OpenAICompatibleBackend("https://models.example/v1", "synthetic", tls_mode="auto")
     with pytest.raises(BackendError) as caught:
         adapter.generate(extraction_request())
     observed = caught.value.http_diagnostics["connection_observation"]
@@ -297,6 +298,7 @@ def test_responses_backend_uses_same_observer_without_payload_changes(monkeypatc
         ]}, extensions={"network_stream": NetworkStream("TLSv1.2"), "http_version": b"HTTP/1.1"})
 
     intercept_clients(monkeypatch, handler)
-    adapter = DeepSeekResponsesBackend("https://api.deepseek.com", "deepseek-flash", structured_output="off")
+    adapter = DeepSeekResponsesBackend("https://api.deepseek.com", "deepseek-flash", structured_output="off",
+                                      tls_mode="auto")
     assert adapter.generate(extraction_request()).text == '{"records": []}'
     assert adapter.last_connection_observations[0]["actual_tls_version"] == "TLSv1.2"

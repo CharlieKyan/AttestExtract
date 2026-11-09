@@ -1,5 +1,10 @@
 # AttestExtract
 
+Dev24 defaults all built-in HTTP adapters to TLS 1.2 first, with a bounded,
+credential-free compatibility probe before generation and automatic negotiation
+only for recognized TLS failures. Default generation attempts are now one across
+presets, profiles and direct adapters. See [connection defaults](docs/CLI_EXPERIENCE.md).
+
 Dev23 connects validated stage-C semantic reviews to stage-D experiment selection,
 while preserving strict scores and the original call ledger. See [review attachment](docs/semantic-review.md).
 
@@ -20,7 +25,7 @@ identities. See [D4 evidence and context](docs/D4_EVIDENCE.md) and the
 
 Schema-driven extraction from text and tables, with source-linked evidence and pluggable decision backends.
 
-**Early prototype · `0.1.0.dev23` · Python 3.11+**
+**Early prototype · `0.1.0.dev24` · Python 3.11+**
 
 dev18 adds offline `prepare-decisions` / `check-decisions`: validated successful-run materials cover every candidate and empty chunk; simulated suggestions are checked and recorded without applying them. Equal values with uncertain identity, conditions or evidence now produce insufficient-context associations. That release used flat-v1 / result schema 0.3; dev19 uses schema 0.4. No Jev inference or extra model calls are introduced. See [offline decision materials](docs/DECISION_MATERIALS.md).
 
@@ -155,9 +160,9 @@ $env:ATTESTEXTRACT_API_KEY = "your-key"
 attestextract extract --input src/attestextract/examples/procurement.md --task src/attestextract/examples/procurement.task.json --output extraction-results.json
 ```
 
-On Bash, use `export ATTESTEXTRACT_BASE_URL=...`, `export ATTESTEXTRACT_MODEL=...`, and `export ATTESTEXTRACT_API_KEY=...`. Alternatively, load a configuration file explicitly with `--env-file`, as below. Configuration precedence is **CLI arguments → existing process environment → the explicit `.env` file**. No `.env` file is loaded automatically. `--api-key-env OTHER_VARIABLE` selects the variable containing the key; no command-line key value is accepted. A key may be omitted for a local endpoint that does not require authentication. `--timeout` explicitly overrides all HTTP phase limits (0 < seconds <= 600). Without it, connect/read/write/pool limits are 15/180/30/15 seconds; `--read-timeout` overrides only reading. Qwen presets select verified TLS compatibility automatically; see [connection and recovery](docs/CLI_EXPERIENCE.md).
+On Bash, use `export ATTESTEXTRACT_BASE_URL=...`, `export ATTESTEXTRACT_MODEL=...`, and `export ATTESTEXTRACT_API_KEY=...`. Alternatively, load a configuration file explicitly with `--env-file`, as below. Configuration precedence is **CLI arguments → existing process environment → the explicit `.env` file**. No `.env` file is loaded automatically. `--api-key-env OTHER_VARIABLE` selects the variable containing the key; no command-line key value is accepted. A key may be omitted for a local endpoint that does not require authentication. `--timeout` explicitly overrides all HTTP phase limits (0 < seconds <= 600). Without it, connect/read/write/pool limits are 15/180/30/15 seconds; `--read-timeout` overrides only reading. All built-in HTTP adapters default to verified TLS 1.2 first with bounded compatibility fallback; see [connection and recovery](docs/CLI_EXPERIENCE.md).
 
-Live extraction sends document chunks to your configured endpoint. There is no automatic fallback to demo responses. In the advanced configuration, safe connection failures and selected transient HTTP statuses allow at most three attempts by default; ambiguous read/write failures stop without automatic resubmission; model presets default to one attempt. Authentication and configuration failures stop immediately. CLI response-format errors stop by default; an explicit CLI/profile format_retries=1 allows one regeneration. An unrecovered chunk fails the run with a nonzero exit status; there is no partial-success result or failed chunk disguised as empty records. CLI checkpoints can resume completed responses in a new run; see [execution and recovery](docs/EXECUTION.md).
+Live extraction sends document chunks to your configured endpoint. There is no automatic fallback to demo responses. All built-in configurations default to one generation HTTP attempt. Explicitly increasing the limit permits retries only for safe connection failures and selected transient HTTP statuses; ambiguous read/write failures stop without automatic resubmission. Authentication and configuration failures stop immediately. CLI response-format errors stop by default; an explicit CLI/profile format_retries=1 allows one regeneration. An unrecovered chunk fails the run with a nonzero exit status; there is no partial-success result or failed chunk disguised as empty records. CLI checkpoints can resume completed responses in a new run; see [execution and recovery](docs/EXECUTION.md).
 
 ### Optional structured output
 
@@ -397,7 +402,7 @@ python -m pytest
 python -m build
 ```
 
-CI runs on Windows and Ubuntu with Python 3.11 and 3.13. Public tests use synthetic fixed responses and mocked HTTP, never paid model requests. They compare all three D1 cases to hand-written expected semantic output and check archive persistence and invalid references. CI also installs the wheel in a clean environment outside the checkout and runs both original demos and all three D1 archives. Format regression tests cover rejected output, bounded regeneration, preserved attempts, and subsequent evidence checks. End-to-end model quality and provider compatibility require separate evaluation against your chosen endpoint and corpus.
+CI runs on Windows and Ubuntu with Python 3.11 and 3.13. Public tests use synthetic fixed responses, mocked HTTP and loopback-only TLS handshakes, never paid model requests. They compare all three D1 cases to hand-written expected semantic output and check archive persistence and invalid references. CI also installs the wheel in a clean environment outside the checkout and runs both original demos and all three D1 archives. Format regression tests cover rejected output, bounded regeneration, preserved attempts, and subsequent evidence checks. End-to-end model quality and provider compatibility require separate evaluation against your chosen endpoint and corpus.
 
 Next steps are a Jev-style bounded decision adapter, conflict handling and support verification, and compatibility outputs for the earlier CCUS workflow. These are plans, not implemented features or performance claims. The public prototype contains only new framework code and synthetic examples; it does not include research documents, annotations, patents, original workflow outputs, or credentials.
 

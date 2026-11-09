@@ -49,7 +49,7 @@ result = extract(
 
 The three Chat presets default to `json_object` and `max_tokens: 8192`; the explicit
 Responses preset uses `json_schema` and `max_output_tokens: 8192`. All default to
-`temperature: 0`, connect/read/write/pool limits of 15/180/30/15 seconds and one HTTP attempt. Qwen uses `tls_mode="auto_fallback"`; DeepSeek retains verified TLS 1.2. Python keeps zero format
+`temperature: 0`, connect/read/write/pool limits of 15/180/30/15 seconds and one HTTP attempt. All built-in HTTP adapters default to `tls_mode="tls12_fallback"`: probe TLS 1.2 first, then negotiate automatically only for recognized TLS failures. Explicit existing policies retain their meanings. Python keeps zero format
 regeneration; the CLI also defaults to zero. Explicit CLI/profile one remains supported. The token cap applies per chunk
 generation, not to the whole document. Explicit options override these defaults.
 Unknown provider/model identifiers fail before a model request; use a complete
@@ -153,8 +153,8 @@ An existing empty environment value does not fall back to the file.
 | `api_key_env` | `ATTESTEXTRACT_API_KEY`; local unauthenticated services remain possible |
 | `timeout` | Omitted: connect/read/write/pool 15/180/30/15 seconds; explicit value overrides all phases, range `(0, 600]` |
 | `read_timeout` | Optional read-phase override, range `(0, 600]`; never unlimited |
-| `max_attempts` | 3 HTTP attempts per generation; use 1 for bounded acceptance |
-| `tls_mode` | `auto` (HTTPX negotiation), or `1.2` with certificate/hostname validation; DeepSeek presets select `1.2`, Qwen presets use `auto` |
+| `max_attempts` | 1 HTTP attempt per generation; explicit overrides retain bounded retry classification |
+| `tls_mode` | `tls12_fallback`: TLS 1.2 first with controlled negotiation fallback; explicit `auto`, `1.2`, and old `auto_fallback` remain available; certificate/hostname verification stays enabled |
 | `structured_output` | `off`, `json_object`, or `json_schema`; default `off` |
 | `format_retries` | Python and CLI default to 0. Explicit CLI/profile 1 enables regeneration. One extra generation per failing chunk is bounded by execution policy |
 | `generation.temperature` | Optional number from 0 through 2; otherwise omitted |

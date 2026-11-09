@@ -114,7 +114,7 @@ def resolve_model_config(
         adapter="deepseek-responses" if responses else "openai-compatible",
         model=model, max_attempts=1,
         structured_output="json_schema" if responses else "json_object", format_retries=0,
-        tls_mode="1.2" if provider in {"deepseek", "deepseek-responses"} else "auto_fallback",
+        tls_mode="tls12_fallback",
         output_token_parameter="max_output_tokens" if responses else "max_tokens",
         provider_options=deepcopy(_PRESETS[selector]),
     )

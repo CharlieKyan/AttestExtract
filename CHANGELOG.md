@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.0.dev24
+
+- Default built-in HTTP adapters, provider presets and profiles to `tls12_fallback`: a credential-free TLS 1.2 probe followed, only for recognized TLS compatibility failures, by one automatic-negotiation probe. Retain certificate verification and all explicitly configured older TLS policies.
+- Unify omitted `max_attempts` to one. Uncertain generation outcomes are never automatically resent or switched to another TLS policy; finite phase timeouts and v3 transport-only recovery remain available.
+- Add synthetic HTTP, local TLS 1.2/1.3 server and isolated-installation acceptance. Preserve extraction behavior, historical experiments and their runtime checks; no real supplier calls are part of this release acceptance.
+
 ## 0.1.0.dev23
 
 - Attach complete, evidence-bound stage-C semantic reviews offline and derive stage-D configurations without rewriting strict scores, model answers or call reservations. Invalid or altered reviews fail before model calls.

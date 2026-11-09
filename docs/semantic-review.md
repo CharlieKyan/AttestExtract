@@ -58,6 +58,11 @@ reviewer identity or establish that a semantic judgment is correct.
 
 ## Continuing dev22 experiments
 
+This is the limited **dev23** compatibility path. The dev24 connection update does
+not extend it: use the frozen dev23 environment for historical experiment tools,
+or read the saved reports directly. Ordinary v3 extraction checkpoints have a
+separate transport-only recovery contract.
+
 dev23 recognizes only the fixed dev22 engine and experiment sources, with the
 same Python, dependencies and engine implementation apart from version metadata.
 The frozen inputs, reconstructed prompts, wire payloads and ledger are still

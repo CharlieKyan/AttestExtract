@@ -138,7 +138,7 @@ class DeepSeekResponsesBackend(OpenAICompatibleBackend):
         structured_output: Literal["off", "json_object", "json_schema"] = "json_schema",
         provider_options: dict[str, Any] | None = None,
         output_token_parameter: Literal["max_output_tokens"] = "max_output_tokens",
-        tls_mode: Literal["auto", "1.2", "auto_fallback"] = "auto",
+        tls_mode: Literal["auto", "1.2", "auto_fallback", "tls12_fallback"] = "tls12_fallback",
         read_timeout: float | None = None,
     ) -> None:
         _validate_endpoint(base_url)

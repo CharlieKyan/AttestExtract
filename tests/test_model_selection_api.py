@@ -131,7 +131,7 @@ def test_explicit_env_file_and_direct_key_override_without_secret_artifacts(monk
     backend = json.loads((trace.directory / "backend.json").read_text(encoding="utf-8"))
     assert backend["model_id"] == "deepseek:deepseek-flash" and backend["selection_mode"] == "preset"
     assert backend["generation"]["max_output_tokens"] == 8192
-    assert backend["tls_mode"] == "1.2"
+    assert backend["tls_mode"] == "tls12_fallback"
     artifacts = "".join(path.read_text(encoding="utf-8") for path in trace.directory.rglob("*") if path.is_file())
     assert not any(secret in artifacts for secret in ("synthetic-file-key", "synthetic-process-key", "synthetic-explicit-key"))
     assert "https://api.deepseek.com" not in artifacts

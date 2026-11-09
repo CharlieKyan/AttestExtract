@@ -1,5 +1,11 @@
 # Bounded provider experiments
 
+dev24 changes the ordinary connection defaults. Existing frozen experiments and
+review attachments remain bound to their original runtimes; retain their reports
+and use the frozen version for re-analysis. Do not edit a historical manifest or
+transfer unexecuted trial allowances to a new run. New live acceptance requires a
+new frozen bundle and an explicitly bounded call authorization.
+
 dev23 adds [verified semantic review attachments](semantic-review.md) for stage-D
 selection. The original strict scores and call ledger remain available.
 
