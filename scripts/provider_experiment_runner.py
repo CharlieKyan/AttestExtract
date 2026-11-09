@@ -24,7 +24,7 @@ from attestextract.models import ContextOptions, ExecutionOptions, ExtractionReq
 from attestextract.registry import default_registry
 from attestextract.reporting import render_markdown_report
 
-from provider_experiment_bundle import load_bundle
+from provider_experiment_bundle import _read, load_bundle, runtime_identity
 from provider_experiment_reporting import (score_response, select_connections,
                                          select_protocols, summarize, render_report)
 
@@ -48,10 +48,15 @@ def save_record(path: Path, value: dict) -> None:
 
 
 def read_record(path: Path) -> dict:
-    value = json.loads(path.read_text(encoding="utf-8"))
-    if set(value) != {"result", "sha256"} or digest(value["result"]) != value["sha256"]:
-        raise ConfigurationError("Experiment ledger integrity check failed.")
-    return value["result"]
+    try:
+        value = _read(path)
+        if (isinstance(value, dict) and set(value) == {"result", "sha256"}
+                and isinstance(value["result"], dict)
+                and digest(value["result"]) == value["sha256"]):
+            return value["result"]
+    except (OSError, ValueError, TypeError, RecursionError):
+        pass
+    raise ConfigurationError("Experiment ledger integrity check failed.")
 
 
 @contextmanager
@@ -123,6 +128,85 @@ def load_results(root: Path, rows: list[dict]) -> dict[str, dict]:
     return results
 
 
+def _review_attachment(root: Path, bundle: dict, results: dict) -> dict | None:
+    """Revalidate the immutable review and its original evidence before use."""
+    path = root / "semantic-review.json"
+    if not path.exists():
+        bundle.pop("reviewed_protocol_selection", None)
+        bundle.pop("semantic_review", None)
+        return None
+    if path.is_symlink() or not path.resolve().is_relative_to(root.resolve()):
+        raise ConfigurationError("Semantic review attachment escaped the experiment directory.")
+    record = read_record(path)
+    if (record.get("attachment_version") != "0.1"
+            or record.get("bundle_id") != bundle["manifest"]["bundle_id"]
+            or record.get("runtime") != runtime_identity()
+            or record.get("review_sha256") != digest(record.get("review"))):
+        raise ConfigurationError("Semantic review attachment identity changed; no request was sent.")
+    from provider_experiment_review import validate_review
+    verified = validate_review(record["review"], bundle, root, results)
+    if record.get("verified") != verified:
+        raise ConfigurationError("Semantic review selection no longer matches its evidence.")
+    bundle["reviewed_protocol_selection"] = verified["protocol_selection"]
+    bundle["semantic_review"] = {"review_sha256": record["review_sha256"],
+                               "artifact": "semantic-review.json", "origin": verified["review_origin"]}
+    return record
+
+
+def _inspection(bundle: dict, results: dict) -> dict:
+    review_selection = bundle.get("reviewed_protocol_selection")
+    strict = select_protocols(bundle["rows"], results)
+    reserved = sum(item.get("status") != "not_run" for item in results.values())
+    d_pending = sum(row["stage"] == "D" and row["id"] not in results for row in bundle["rows"])
+    return {"checked": True, "network_calls": 0, "planned_calls": len(bundle["rows"]),
+            "existing_outcomes": len(results), "reserved_calls": reserved,
+            "remaining_call_budget": bundle["manifest"]["max_model_calls"] - reserved,
+            "pending_D_trials": d_pending,
+            "network_identity_matches": bundle.get("network_identity_matches", True),
+            "runtime_compatibility": bundle.get("runtime_compatibility"),
+            "connection_selection": select_connections(bundle["rows"], results),
+            "strict_protocol_selection": strict,
+            "protocol_selection": review_selection if review_selection is not None else strict,
+            "selection_basis": "semantic_review" if review_selection is not None else "strict_scores"}
+
+
+def inspect_experiment(bundle_path: Path) -> dict:
+    """Offline inspection does not require the caller's network settings to match."""
+    bundle = load_bundle(bundle_path, check_network=False)
+    root = bundle_path.resolve() / "results"
+    results = load_results(root, bundle["rows"])
+    _review_attachment(root, bundle, results)
+    return _inspection(bundle, results)
+
+
+def attach_review(bundle_path: Path, review_path: Path) -> dict:
+    """Attach a complete review without changing scores, reservations or requests."""
+    from provider_experiment_review import validate_review
+    bundle = load_bundle(bundle_path, check_network=False)
+    root = bundle_path.resolve() / "results"
+    review = _read(review_path)
+    with exclusive_run(root):
+        results = load_results(root, bundle["rows"])
+        if any(row["id"] not in results for row in bundle["rows"] if row["stage"] != "D"):
+            raise ConfigurationError("Finish A, B and C before attaching a semantic review.")
+        existing = _review_attachment(root, bundle, results)
+        if existing is not None:
+            if existing["review_sha256"] != digest(review):
+                raise ConfigurationError("A different semantic review is already attached; it cannot be replaced.")
+            return _inspection(bundle, results)
+        if any(row["id"] in results for row in bundle["rows"] if row["stage"] == "D"):
+            raise ConfigurationError("D already has recorded outcomes; selection cannot be changed.")
+        verified = validate_review(review, bundle, root, results)
+        record = {"attachment_version": "0.1", "bundle_id": bundle["manifest"]["bundle_id"],
+                  "runtime": runtime_identity(), "review_sha256": digest(review), "review": review,
+                  "verified": verified, "reserved_calls_at_attachment":
+                  sum(item.get("status") != "not_run" for item in results.values())}
+        save_record(root / "semantic-review.json", record)
+        _review_attachment(root, bundle, results)
+        write_report(root, bundle)
+        return _inspection(bundle, results)
+
+
 def certificate_error(error: BackendError) -> bool:
     causes = (error.http_diagnostics or {}).get("causes", [])
     return any(item.get("type") == "SSLCertVerificationError" or
@@ -162,7 +246,8 @@ def select_config(row: dict, bundle: dict, results: dict) -> str | None:
         return None
     path = row["path_id"]
     if row["stage"] == "D":
-        path = _selected(select_protocols(bundle["rows"], results), row["provider"])
+        selection = bundle.get("reviewed_protocol_selection")
+        path = _selected(selection if selection is not None else select_protocols(bundle["rows"], results), row["provider"])
         if path is None:
             return None
     key = f"{path}--tls-{mode}"
@@ -238,6 +323,8 @@ class ExperimentRunner:
         base = {"id": row["id"], "row_sha256": digest(row), "stage": row["stage"],
                 "provider": row["provider"], "path_id": row["path_id"], "config_key": key,
                 "started_epoch": started, "reserved_calls": 1}
+        if row["stage"] == "D" and self.bundle.get("semantic_review"):
+            base["semantic_review"] = self.bundle["semantic_review"]
         directory = trial_root(self.root, row)
         save_record(directory / "reserved.json", base)
         self.results[row["id"]] = {**base, "status": "reserved_unknown", "sent": None,
@@ -385,7 +472,14 @@ class ExperimentRunner:
 
 def write_report(root: Path, bundle: dict) -> dict:
     results = load_results(root, bundle["rows"])
+    _review_attachment(root, bundle, results)
     summary = summarize(bundle["rows"], results)
+    if bundle.get("reviewed_protocol_selection") is not None:
+        summary["strict_protocol_selection"] = summary["protocol_selection"]
+        summary["protocol_selection"] = bundle["reviewed_protocol_selection"]
+        summary["protocol_selection_basis"] = "semantic_review"
+        summary["semantic_review"] = bundle["semantic_review"]
+        summary["manual_semantic_review"] = "stage_C_AI_review_attached; full_paper_review_pending"
     for full in summary["full_runs"]:
         path = root / "papers" / f"{full['stage']}-{full['provider']}" / "outcome.json"
         outcome = read_record(path) if path.exists() else {}
@@ -395,7 +489,15 @@ def write_report(root: Path, bundle: dict) -> dict:
     # Reports are derived and replaceable; call reservations and results are not.
     root.mkdir(parents=True, exist_ok=True)
     (root / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    (root / "report.md").write_text(render_report(summary), encoding="utf-8")
+    rendered = render_report(summary)
+    if summary.get("protocol_selection_basis") == "semantic_review":
+        note = ["## Semantic review selection", "",
+                "Candidate paths use the verified AI review attachment. Original strict scores are unchanged; this is not expert gold.",
+                f"Review digest: `{summary['semantic_review']['review_sha256']}`; see `semantic-review.json`.", ""]
+        for provider, strict in summary["strict_protocol_selection"].items():
+            note.append(f"- {provider} original strict selection: `{strict['selected']}` ({strict['reason']}).")
+        rendered = "\n".join(note) + "\n\n" + rendered
+    (root / "report.md").write_text(rendered, encoding="utf-8")
     return summary
 
 
@@ -404,6 +506,16 @@ def run_stage(bundle_path: Path, environment: dict, stage: str, round_number: in
     bundle = load_bundle(bundle_path, environment)
     root = bundle_path.resolve() / "results"
     with exclusive_run(root):
+        results = load_results(root, bundle["rows"])
+        attachment = _review_attachment(root, bundle, results)
+        compatibility = bundle.get("runtime_compatibility") or {}
+        if compatibility.get("legacy") and (stage != "D" or attachment is None):
+            raise ConfigurationError("Legacy experiments can continue only D with a verified semantic review attachment.")
+        if stage == "D":
+            selection = bundle.get("reviewed_protocol_selection")
+            selection = selection if selection is not None else select_protocols(bundle["rows"], results)
+            if not any(item.get("selected") for item in selection.values()):
+                raise ConfigurationError("No qualified protocol for D. Attach a verified review before running; no D trials were reserved.")
         runner = ExperimentRunner(bundle, root, environment, backend_factory=backend_factory,
                                   clock=clock, sleep=sleep, progress=progress)
         if stage not in {"A", "B", "C", "D"} or (stage == "B") != (round_number is not None):

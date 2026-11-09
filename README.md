@@ -1,5 +1,8 @@
 # AttestExtract
 
+Dev23 connects validated stage-C semantic reviews to stage-D experiment selection,
+while preserving strict scores and the original call ledger. See [review attachment](docs/semantic-review.md).
+
 Dev22 includes the experiment entry points and helpers in the source distribution.
 
 Dev21 adds value-free observations of the actual TLS/HTTP connection and a bounded
@@ -17,7 +20,7 @@ identities. See [D4 evidence and context](docs/D4_EVIDENCE.md) and the
 
 Schema-driven extraction from text and tables, with source-linked evidence and pluggable decision backends.
 
-**Early prototype · `0.1.0.dev20` · Python 3.11+**
+**Early prototype · `0.1.0.dev23` · Python 3.11+**
 
 dev18 adds offline `prepare-decisions` / `check-decisions`: validated successful-run materials cover every candidate and empty chunk; simulated suggestions are checked and recorded without applying them. Equal values with uncertain identity, conditions or evidence now produce insufficient-context associations. That release used flat-v1 / result schema 0.3; dev19 uses schema 0.4. No Jev inference or extra model calls are introduced. See [offline decision materials](docs/DECISION_MATERIALS.md).
 

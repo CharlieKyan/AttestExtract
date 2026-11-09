@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.0.dev23
+
+- Attach complete, evidence-bound stage-C semantic reviews offline and derive stage-D configurations without rewriting strict scores, model answers or call reservations. Invalid or altered reviews fail before model calls.
+- Read narrowly compatible dev22 experiment bundles, preserving the original 108-slot budget; continue only D with a verified attachment. Online network identity checks remain strict, while offline inspection reports network differences.
+- Refuse unqualified D execution before recording skipped trials. Add synthetic review-to-selection regression and independent installed-package acceptance.
+
 ## 0.1.0.dev22
 
 - Include all provider experiment entry points and helpers in the source distribution. Preserve the published dev21 tag; extraction and experiment behavior are unchanged.

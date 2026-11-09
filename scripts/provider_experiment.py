@@ -14,7 +14,7 @@ from attestextract.envconfig import load_env_file
 from attestextract.errors import AttestExtractError
 
 from provider_experiment_bundle import prepare_bundle, load_bundle
-from provider_experiment_runner import run_stage, write_report, load_results
+from provider_experiment_runner import run_stage, write_report, inspect_experiment, attach_review
 
 
 def main(argv=None):
@@ -26,6 +26,9 @@ def main(argv=None):
     prepare.add_argument("--env-file", required=True, type=Path)
     prepare.add_argument("--output", required=True, type=Path)
     prepare.add_argument("--checklist", type=Path, help="Optional independently reviewed source anchors to freeze")
+    review = sub.add_parser("attach-review", help="Validate and attach a stage-C semantic review offline")
+    review.add_argument("--bundle", required=True, type=Path)
+    review.add_argument("--review", required=True, type=Path)
     for name in ("check", "report", "run"):
         command = sub.add_parser(name)
         command.add_argument("--bundle", required=True, type=Path)
@@ -41,22 +44,22 @@ def main(argv=None):
             prepare_bundle(args.output, args.input, args.task, load_env_file(args.env_file), paper_checklist=checklist)
             print(json.dumps({"prepared": str(args.output.resolve()), "network_calls": 0,
                               "planned_calls": 108, "manifest": "manifest.json"}, ensure_ascii=False))
+        elif args.command == "attach-review":
+            print(json.dumps(attach_review(args.bundle, args.review), ensure_ascii=False))
         elif args.command == "run":
             if not args.live:
                 parser.error("run needs --live after approval of the frozen request list")
             summary = run_stage(args.bundle, load_env_file(args.env_file), args.stage, args.round)
             print(json.dumps(summary["counts"], ensure_ascii=False))
         else:
-            bundle = load_bundle(args.bundle)
-            root = args.bundle.resolve() / "results"
             if args.command == "report":
+                bundle = load_bundle(args.bundle, check_network=False)
+                root = args.bundle.resolve() / "results"
                 summary = write_report(root, bundle)
                 print(json.dumps({"report": str(root / "report.md"), "counts": summary["counts"],
                                   "network_calls": 0}, ensure_ascii=False))
             else:
-                results = load_results(root, bundle["rows"])
-                print(json.dumps({"checked": True, "planned_calls": len(bundle["rows"]),
-                                  "existing_outcomes": len(results), "network_calls": 0}, ensure_ascii=False))
+                print(json.dumps(inspect_experiment(args.bundle), ensure_ascii=False))
         return 0
     except AttestExtractError as error:
         print(f"Provider experiment: {error}")

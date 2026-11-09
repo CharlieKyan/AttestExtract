@@ -53,6 +53,8 @@ jobs:
               "provider_experiment.py", "provider_experiment_bundle.py",
               "provider_experiment_runner.py", "provider_experiment_reporting.py",
               "provider_experiment_smoke.py",
+              "provider_experiment_review.py", "provider_experiment_compat.py",
+              "provider_review_smoke.py",
           )
           provider_sources = {}
           with tarfile.open(source_archive) as archive:
@@ -77,7 +79,7 @@ jobs:
               assert set(examples) == {"ccus", "procurement"}
               for name, count in (("ccus", 2), ("procurement", 3)):
                   result = examples[name]
-                  assert result["package_version"] == "0.1.0.dev22"
+                  assert result["package_version"] == "0.1.0.dev23"
                   assert result["run"]["mode"] == "replay"
                   assert len(result["candidates"]) == count
                   assert result["review"] == []
@@ -87,7 +89,7 @@ jobs:
               assert set(archives) == {"attribute", "observation", "relation"}
               for name, candidate_count, record_count in (("attribute", 2, 1), ("observation", 2, 2), ("relation", 1, 1)):
                   archive = archives[name]
-                  assert archive["extraction"]["package_version"] == "0.1.0.dev22"
+                  assert archive["extraction"]["package_version"] == "0.1.0.dev23"
                   assert archive["extraction"]["run"]["mode"] == "replay"
                   assert len(archive["extraction"]["candidates"]) == candidate_count
                   assert len(archive["records"]) == record_count
@@ -101,7 +103,7 @@ jobs:
               subprocess.run([str(python), str(copied), "--mode", "mock", "--output-dir", str(acceptance)],
                              check=True, cwd=root, env=env)
               summary = json.loads((acceptance / "summary.json").read_text(encoding="utf-8"))
-              assert summary["package_version"] == "0.1.0.dev22"
+              assert summary["package_version"] == "0.1.0.dev23"
               assert summary["passed"] and summary["real_endpoint_calls"] == 0
               assert summary["mock_http_calls"] == 3
               assert [case["candidate_count"] for case in summary["cases"]] == [1, 2, 1]
@@ -184,3 +186,12 @@ jobs:
               assert providers["passed"] and providers["real_endpoint_calls"] == 0
               assert providers["mock_network_calls"] == 108
               assert Path(providers["module_path"]).is_relative_to(environment)
+              reviewed_output = root / "provider-review"
+              subprocess.run([str(python), str(scripts / "provider_review_smoke.py"),
+                              "--output-dir", str(reviewed_output)], check=True, cwd=root, env=env)
+              reviewed = json.loads((reviewed_output / "summary.json").read_text(encoding="utf-8"))
+              assert reviewed["passed"] and reviewed["real_endpoint_calls"] == 0
+              assert reviewed["D_new_calls"] == 32 and reviewed["repeat_D_new_calls"] == 0
+              assert reviewed["attach_review_new_calls"] == 0
+              assert reviewed["historical_artifacts_unchanged"] and reviewed["strict_scores_preserved"]
+              assert Path(reviewed["module_path"]).is_relative_to(environment)

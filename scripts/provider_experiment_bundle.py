@@ -34,6 +34,8 @@ from attestextract.providers import resolve_model_config
 from attestextract.registry import default_registry
 from attestextract.storage import _reject_constant, _unique_object
 
+from provider_experiment_compat import runtime_compatibility
+
 
 TLS_MODES = ("auto", "1.2", "auto_fallback")
 PATHS = {
@@ -302,13 +304,14 @@ def prepare_bundle(output: Path, source: Path, task: Path, environment: Mapping[
     return manifest
 
 
-def check_environment(bundle: dict, environment: Mapping[str, str]) -> None:
+def check_environment(bundle: dict, environment: Mapping[str, str], *, check_network: bool = True) -> None:
     """Revalidate endpoint/key-variable bindings without binding credential values."""
-    if _configs(environment) != bundle["configs"] or network_identity() != bundle["manifest"]["network_identity"]:
+    if (_configs(environment) != bundle["configs"]
+            or check_network and network_identity() != bundle["manifest"]["network_identity"]):
         raise ConfigurationError("Provider bindings or network environment changed; create a new frozen experiment.")
 
 
-def load_bundle(root: Path, environment: Mapping[str, str] | None = None) -> dict:
+def load_bundle(root: Path, environment: Mapping[str, str] | None = None, *, check_network: bool = True) -> dict:
     """Check all frozen inputs, runtime and request shapes offline, then resolve references."""
     root = Path(root).resolve()
     try:
@@ -317,8 +320,10 @@ def load_bundle(root: Path, environment: Mapping[str, str] | None = None) -> dic
         if (manifest.get("bundle_version") != "0.1" or manifest.get("bundle_id") != "provider-experiment-" + digest(identity)
                 or set(manifest["files"]) != set(ARTIFACTS)):
             raise ValueError("manifest")
-        if manifest["runtime"] != runtime_identity() or manifest["network_identity"] != network_identity():
-            raise ConfigurationError("Engine, experiment code or network environment changed; create a new frozen experiment.")
+        compatibility = runtime_compatibility(manifest["runtime"], runtime_identity())
+        network_matches = manifest["network_identity"] == network_identity()
+        if check_network and not network_matches:
+            raise ConfigurationError("Network environment changed; use the frozen certificate and proxy settings before running requests.")
         data = {}
         for name in ARTIFACTS:
             path = _safe_file(root, name)
@@ -326,9 +331,10 @@ def load_bundle(root: Path, environment: Mapping[str, str] | None = None) -> dic
                 raise ValueError("artifact checksum")
             data[name.removesuffix(".json").replace("-", "_")] = _read(path)
         _validate_materials(manifest, data)
-        result = {"manifest": manifest, **data, "extraction": manifest["extraction"]}
+        result = {"manifest": manifest, **data, "extraction": manifest["extraction"],
+                  "runtime_compatibility": compatibility, "network_identity_matches": network_matches}
         if environment is not None:
-            check_environment(result, environment)
+            check_environment(result, environment, check_network=check_network)
         result["cases"] = {key: {**case, "source": data["sources"][case["source_id"]]["text"],
                                   "task": data["tasks"][case["task_id"]],
                                   "gold": data["gold"].get(case["gold_id"]),

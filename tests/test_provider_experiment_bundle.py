@@ -4,6 +4,7 @@ from collections import Counter
 import importlib.util
 import json
 from pathlib import Path
+import sys
 
 import httpx
 import pytest
@@ -12,6 +13,7 @@ from attestextract.errors import ConfigurationError
 
 
 SCRIPT = Path(__file__).parents[1] / "scripts/provider_experiment_bundle.py"
+sys.path.insert(0, str(SCRIPT.parent))
 spec = importlib.util.spec_from_file_location("provider_experiment_bundle_under_test", SCRIPT)
 bundle = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(bundle)

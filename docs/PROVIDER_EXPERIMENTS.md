@@ -1,5 +1,8 @@
 # Bounded provider experiments
 
+dev23 adds [verified semantic review attachments](semantic-review.md) for stage-D
+selection. The original strict scores and call ledger remain available.
+
 This developer tool prepares a private, reproducible comparison of the existing
 Qwen and DeepSeek adapters. It does not automatically tune ordinary extraction,
 save learned connection preferences, or make additional repair calls.
