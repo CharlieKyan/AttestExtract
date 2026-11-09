@@ -12,6 +12,7 @@ from typing import Any, Literal
 import httpx
 
 from .capabilities import check_structured_output
+from .connection_observation import ConnectionObservation
 from .errors import BackendError, ConfigurationError, InvalidResponseError
 from .diagnostics import RunTrace, redact_text
 from .http_diagnostics import describe_http_error
@@ -160,6 +161,7 @@ class OpenAICompatibleBackend:
         self.effective_tls_mode: str | None = None
         self.probe_requests = 0
         self.last_probe_requests = 0
+        self.last_connection_observations: list[dict[str, Any]] = []
         self._tls_selection: tuple[tuple, str] | None = None
         if trace is not None and api_key:
             trace.add_secrets(api_key, api_key.strip())
@@ -232,13 +234,18 @@ class OpenAICompatibleBackend:
             self.effective_tls_mode = mode
             self.last_probe_requests += 1
             self.probe_requests += 1
+            observation = ConnectionObservation(self.base_url + "/models", method="GET", custom_transport=False)
             try:
                 # Separate short-lived client: probe cookies cannot enter a model request.
-                with httpx.Client(timeout=5.0, verify=tls_context(mode), follow_redirects=False) as probe:
-                    with probe.stream("GET", self.base_url + "/models") as response:
+                with httpx.Client(timeout=5.0, verify=tls_context(mode), follow_redirects=False,
+                                  event_hooks={"response": [observation.response]}) as probe:
+                    with probe.stream("GET", self.base_url + "/models", extensions={"trace": observation.trace}) as response:
                         status = response.status_code  # Do not consume or log the response body.
             except httpx.TransportError as exc:
-                diagnostic, artifact = self._transport_failure(exc, request, 0, started=started, preflight=True)
+                observed = self._publish_connection(observation, request, self.last_probe_requests,
+                                                    request_kind="tls_probe", request_status="transport_failure")
+                diagnostic, artifact = self._transport_failure(exc, request, 0, started=started, preflight=True,
+                                                              observation=observed)
                 if mode == "auto" and tls_fallback_allowed(exc):
                     continue
                 raise BackendError(
@@ -246,6 +253,12 @@ class OpenAICompatibleBackend:
                     code="timeout" if isinstance(exc, httpx.TimeoutException) else "transport_error",
                     retryable=False, http_diagnostics=diagnostic, http_details=artifact,
                 ) from None
+            except KeyboardInterrupt:
+                self._publish_connection(observation, request, self.last_probe_requests,
+                                         request_kind="tls_probe", request_status="interrupted")
+                raise
+            self._publish_connection(observation, request, self.last_probe_requests,
+                                     request_kind="tls_probe", request_status="http_response")
             self._tls_selection = signature, mode
             if self._trace is not None:
                 self._trace.event("transport", "tls_selected", chunk_id=request.chunk_id,
@@ -255,6 +268,7 @@ class OpenAICompatibleBackend:
             return
 
     def generate(self, request: ExtractionRequest) -> BackendResponse:
+        self.last_connection_observations = []
         payload = self.prepare_payload(request)
         context = {"chunk_id": request.chunk_id, "format_attempt": request.format_attempt}
         schema_info = schema_request_info(request.output_schema, self.structured_output)
@@ -276,6 +290,9 @@ class OpenAICompatibleBackend:
             follow_redirects=False,
         ) as client:
             for attempt in range(1, self.max_attempts + 1):
+                observation = ConnectionObservation(self.base_url + self.endpoint_path, method="POST",
+                                                    custom_transport=self._transport is not None)
+                client.event_hooks["response"] = [observation.response]
                 if self._trace is not None:
                     self._trace.event("http", "started", **context, attempt=attempt,
                                       read_timeout=self.effective_timeout.read, effective_tls_mode=self.effective_tls_mode)
@@ -284,9 +301,13 @@ class OpenAICompatibleBackend:
                         self.base_url + self.endpoint_path,
                         headers=headers,
                         json=payload,
+                        extensions={"trace": observation.trace},
                     )
                 except httpx.TransportError as exc:
-                    diagnostic, artifact = self._transport_failure(exc, request, attempt, started=started)
+                    observed = self._publish_connection(observation, request, attempt,
+                                                        request_kind="model_post", request_status="transport_failure")
+                    diagnostic, artifact = self._transport_failure(exc, request, attempt, started=started,
+                                                                  observation=observed)
                     retryable = safe_to_retry(exc)
                     timed_out = isinstance(exc, httpx.TimeoutException)
                     if attempt == self.max_attempts or not retryable:
@@ -306,11 +327,20 @@ class OpenAICompatibleBackend:
                     self._pause(attempt)
                     continue
                 except httpx.DecodingError:
+                    self._publish_connection(observation, request, attempt,
+                                             request_kind="model_post", request_status="decode_failure")
                     raise InvalidResponseError(
                         "The model endpoint returned an invalid encoded response.",
                         attempts=attempt,
                     ) from None
+                except KeyboardInterrupt:
+                    self._publish_connection(observation, request, attempt,
+                                             request_kind="model_post", request_status="interrupted")
+                    raise
 
+                observation.body_complete = True
+                self._publish_connection(observation, request, attempt,
+                                         request_kind="model_post", request_status="http_response")
                 if self._trace is not None:
                     self._trace.event("http", "completed", **context,
                                       attempt=attempt, status_code=response.status_code)
@@ -363,8 +393,25 @@ class OpenAICompatibleBackend:
 
         raise BackendError("The model request did not complete.")  # pragma: no cover
 
+    def _publish_connection(self, observation: ConnectionObservation, request: ExtractionRequest,
+                            attempt: int, *, request_kind: str, request_status: str) -> dict[str, Any]:
+        observed = observation.snapshot(request_status=request_status)
+        observed.update(request_kind=request_kind, attempt=attempt, configured_tls_mode=self.tls_mode,
+                        effective_tls_mode=self.effective_tls_mode)
+        self.last_connection_observations.append(observed)
+        if self._trace is not None:
+            suffix = f"probe-{attempt}" if request_kind == "tls_probe" else f"attempt-{attempt}"
+            artifact = f"http/{request.artifact_stem}.{suffix}.connection.json"
+            self._trace.write_json(artifact, observed)
+            if self._trace.directory is not None:
+                self._trace.describe_artifact(artifact, "connection_observation")
+            self._trace.event("http", "connection_observed", chunk_id=request.chunk_id,
+                              format_attempt=request.format_attempt, **observed)
+        return observed
+
     def _transport_failure(self, exc: Exception, request: ExtractionRequest,
-                           attempt: int, *, started: float, preflight: bool = False) -> tuple[dict[str, Any], str | None]:
+                           attempt: int, *, started: float, preflight: bool = False,
+                           observation: dict[str, Any] | None = None) -> tuple[dict[str, Any], str | None]:
         self._tls_selection = None
         diagnostic = transport_details(exc, tls_mode=self.tls_mode, attempt=attempt)
         active_timeout = httpx.Timeout(5.0) if preflight else self.effective_timeout
@@ -375,6 +422,8 @@ class OpenAICompatibleBackend:
                           probe_requests=self.last_probe_requests, model_post_attempts=attempt,
                           request_outcome="not_sent" if preflight or safe_to_retry(exc) else "unknown",
                           automatic_retry_allowed=False if preflight else safe_to_retry(exc))
+        if observation is not None:
+            diagnostic["connection_observation"] = observation
         if self._transport is not None or self.effective_tls_mode == "not_applicable":
             diagnostic["certificate_verification"] = None  # Controlled by the injected transport.
         artifact = None

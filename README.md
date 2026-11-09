@@ -1,5 +1,11 @@
 # AttestExtract
 
+Dev21 adds value-free observations of the actual TLS/HTTP connection and a bounded
+[provider experiment](docs/PROVIDER_EXPERIMENTS.md). Preparation and checks are offline;
+each approved trial can be reserved only once. Missing responses are not scored as invalid
+JSON. Existing extraction defaults, flat-v1, result schema 0.4 and retry policies are unchanged.
+Mock acceptance is not evidence of live endpoint reliability or model accuracy.
+
 Dev19 adds optional source structure and conservative evidence retrieval. Use `--context structure` or
 `--context neighbors --neighbor-chars 500` to opt in; `none` remains the default. MinerU sidecars and
 explicit header hints preserve original HTML cell coordinates without rewriting the input. Result schema

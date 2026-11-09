@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.0.dev21
+
+- Observe actual origin TLS/HTTP versions and bounded phase timing through HTTPX trace/hooks; separate probes from model POSTs and preserve unknown values without logging trace secrets.
+- Add offline preparation, integrity checking, at-most-once scheduling and layered scoring for a frozen 108-slot Qwen/DeepSeek experiment. Fresh-paper trials use the existing extraction pipeline; unknown reservations cannot be replayed.
+- Add synthetic cross-provider installation acceptance and distinguish transport, format, task, content and evidence results. Paid endpoint experiments require separate approval; mock checks are not live reliability or accuracy claims.
+- Keep provider defaults, timeout/retry policies, prompts, flat-v1 and result schema 0.4 unchanged.
+
 ## 0.1.0.dev20
 
 - Add Qwen's verified TLS compatibility preflight: anonymous, bounded `/models` probes may select TLS 1.2 only after recognized bad-record-MAC failures. Never replay an ambiguous generation POST to change TLS; certificate failures remain failures.
