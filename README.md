@@ -1,5 +1,7 @@
 # AttestExtract
 
+Dev22 includes the experiment entry points and helpers in the source distribution.
+
 Dev21 adds value-free observations of the actual TLS/HTTP connection and a bounded
 [provider experiment](docs/PROVIDER_EXPERIMENTS.md). Preparation and checks are offline;
 each approved trial can be reserved only once. Missing responses are not scored as invalid

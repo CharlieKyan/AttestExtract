@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.0.dev22
+
+- Include all provider experiment entry points and helpers in the source distribution. Preserve the published dev21 tag; extraction and experiment behavior are unchanged.
+
 ## 0.1.0.dev21
 
 - Observe actual origin TLS/HTTP versions and bounded phase timing through HTTPX trace/hooks; separate probes from model POSTs and preserve unknown values without logging trace secrets.

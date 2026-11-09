@@ -13,3 +13,8 @@ include scripts/d4_context_experiment.py
 include scripts/transport_recovery_smoke.py
 recursive-include tests/fixtures *.json *.md
 recursive-include docs *.md
+include scripts/provider_experiment.py
+include scripts/provider_experiment_bundle.py
+include scripts/provider_experiment_runner.py
+include scripts/provider_experiment_reporting.py
+include scripts/provider_experiment_smoke.py

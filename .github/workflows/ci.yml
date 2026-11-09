@@ -34,6 +34,7 @@ jobs:
           from pathlib import Path
           import shutil
           import subprocess
+          import tarfile
           import tempfile
           import venv
 
@@ -47,7 +48,20 @@ jobs:
           decision_script = Path("scripts/decision_bundle_smoke.py").resolve()
           d4_script = Path("scripts/d4_evidence_smoke.py").resolve()
           transport_script = Path("scripts/transport_recovery_smoke.py").resolve()
-          provider_scripts = list(Path("scripts").resolve().glob("provider_experiment*.py"))
+          source_archive = next(Path("dist").glob("attestextract-*.tar.gz")).resolve()
+          provider_names = (
+              "provider_experiment.py", "provider_experiment_bundle.py",
+              "provider_experiment_runner.py", "provider_experiment_reporting.py",
+              "provider_experiment_smoke.py",
+          )
+          provider_sources = {}
+          with tarfile.open(source_archive) as archive:
+              for name in provider_names:
+                  members = [member for member in archive.getmembers()
+                             if member.name.endswith("/scripts/" + name) and member.isfile()]
+                  assert len(members) == 1, f"Source distribution must contain {name}"
+                  provider_sources[name] = archive.extractfile(members[0]).read()
+                  assert provider_sources[name] == Path("scripts", name).read_bytes()
           with tempfile.TemporaryDirectory(prefix="attestextract-smoke-") as directory:
               root = Path(directory)
               environment = root / "venv"
@@ -63,7 +77,7 @@ jobs:
               assert set(examples) == {"ccus", "procurement"}
               for name, count in (("ccus", 2), ("procurement", 3)):
                   result = examples[name]
-                  assert result["package_version"] == "0.1.0.dev21"
+                  assert result["package_version"] == "0.1.0.dev22"
                   assert result["run"]["mode"] == "replay"
                   assert len(result["candidates"]) == count
                   assert result["review"] == []
@@ -73,7 +87,7 @@ jobs:
               assert set(archives) == {"attribute", "observation", "relation"}
               for name, candidate_count, record_count in (("attribute", 2, 1), ("observation", 2, 2), ("relation", 1, 1)):
                   archive = archives[name]
-                  assert archive["extraction"]["package_version"] == "0.1.0.dev21"
+                  assert archive["extraction"]["package_version"] == "0.1.0.dev22"
                   assert archive["extraction"]["run"]["mode"] == "replay"
                   assert len(archive["extraction"]["candidates"]) == candidate_count
                   assert len(archive["records"]) == record_count
@@ -87,7 +101,7 @@ jobs:
               subprocess.run([str(python), str(copied), "--mode", "mock", "--output-dir", str(acceptance)],
                              check=True, cwd=root, env=env)
               summary = json.loads((acceptance / "summary.json").read_text(encoding="utf-8"))
-              assert summary["package_version"] == "0.1.0.dev21"
+              assert summary["package_version"] == "0.1.0.dev22"
               assert summary["passed"] and summary["real_endpoint_calls"] == 0
               assert summary["mock_http_calls"] == 3
               assert [case["candidate_count"] for case in summary["cases"]] == [1, 2, 1]
@@ -161,8 +175,8 @@ jobs:
               assert transport["passed"] and transport["real_endpoint_calls"] == 0
               assert transport["mock_http_calls"] == 17 and transport["resume_new_calls"] == 5
               assert Path(transport["module_path"]).is_relative_to(environment)
-              for provider_script in provider_scripts:
-                  shutil.copyfile(provider_script, scripts / provider_script.name)
+              for name, content in provider_sources.items():
+                  (scripts / name).write_bytes(content)
               provider_output = root / "provider-experiment"
               subprocess.run([str(python), str(scripts / "provider_experiment_smoke.py"),
                               "--output-dir", str(provider_output)], check=True, cwd=root, env=env)
