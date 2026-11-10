@@ -23,3 +23,4 @@ include scripts/provider_experiment_compat.py
 include scripts/provider_review_smoke.py
 include scripts/tls_first_smoke.py
 recursive-include tests/fixtures/tls_local *.pem
+include scripts/minimal_api_smoke.py

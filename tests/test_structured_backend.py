@@ -214,6 +214,7 @@ def test_cli_forwards_explicit_mode_and_logs_effective_mode(tmp_path, monkeypatc
     args = [
         "extract", "--input", str(source), "--task", str(task), "--output", str(output),
         "--base-url", "https://models.example/v1", "--model", "model", "--log-dir", str(directory),
+        "--adapter", "openai-compatible",  # Explicit adapter retains its own default mode.
     ]
     if mode is not None:
         args.extend(["--structured-output", mode])

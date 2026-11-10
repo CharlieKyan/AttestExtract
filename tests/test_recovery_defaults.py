@@ -41,7 +41,8 @@ def arguments(tmp_path, selection="legacy", profile_retry=None):
             text += f"format_retries={profile_retry}\n"
         profile.write_text(text, encoding="utf-8")
         return args + ["--config", str(profile), "--profile", "test"]
-    return args + ["--base-url", "https://synthetic.invalid/v1", "--model", "synthetic"]
+    return args + ["--base-url", "https://synthetic.invalid/v1", "--model", "synthetic",
+                   "--adapter", "openai-compatible"]  # Retained fixed/anonymous behavior.
 
 
 @pytest.mark.parametrize("selection,profile_retry,cli_retry,expected", [

@@ -54,7 +54,7 @@ def _canonical(value: object) -> str:
 
 
 def _validate_evidence(document: Document, evidence: EvidenceRef, *, schema_version: str = "0.4") -> None:
-    if schema_version != "0.4" and (evidence.source_matches or evidence.table_refs
+    if schema_version not in {"0.4", "0.5"} and (evidence.source_matches or evidence.table_refs
                                     or evidence.status == "normalized"):
         raise ValueError("Normalized evidence and table references require schema version 0.4")
     if evidence.source_matches:
@@ -117,13 +117,13 @@ def _validate_exact_evidence(document: Document, evidence: EvidenceRef) -> None:
 def _validate_measurements(document: Document, extraction: ExtractionResult, candidate: Candidate) -> None:
     spec = extraction.task.record_types[candidate.record_type]
     structure = None
-    if extraction.schema_version == "0.4" and candidate.measurements:
+    if extraction.schema_version in {"0.4", "0.5"} and candidate.measurements:
         from .structure import build_structure
         structure = document.structure or build_structure(document.text)
     if candidate.measurements.keys() - spec.measurement_groups.keys():
         raise ValueError("Measurements must reference declared task groups")
     for name, measurement in candidate.measurements.items():
-        if extraction.schema_version not in {"0.3", "0.4"} and measurement.range_binding is not None:
+        if extraction.schema_version not in {"0.3", "0.4", "0.5"} and measurement.range_binding is not None:
             raise ValueError("Range bindings require extraction schema version 0.3")
         contexts = [measurement.context]
         if measurement.unit_context is not None:
@@ -158,7 +158,7 @@ def _validate_measurements(document: Document, extraction: ExtractionResult, can
                 unit_quote=measurement.unit_context.quote if measurement.unit_context else "",
             )
             checked = check_measurement(document.text, chunk, raw, spec.measurement_groups[name], candidate.fields,
-                                        schema_version=extraction.schema_version,
+                                        schema_version="0.4" if extraction.schema_version == "0.5" else extraction.schema_version,
                                         structure=structure)
             if (not measurement.issues and checked.model_dump() != measurement.model_dump()
                     or measurement.range_binding != checked.range_binding):
@@ -169,7 +169,7 @@ def _validate_candidate(document: Document, extraction: ExtractionResult, candid
     spec = extraction.task.record_types.get(candidate.record_type)
     if spec is None or candidate.fields.keys() - spec.fields.keys():
         raise ValueError("A candidate must use declared task record types and fields")
-    if candidate.source_context and extraction.schema_version != "0.4":
+    if candidate.source_context and extraction.schema_version not in {"0.4", "0.5"}:
         raise ValueError("Candidate source context requires extraction schema version 0.4")
     for passage in candidate.source_context:
         if (not passage.span.start < passage.span.end <= len(document.text)
@@ -183,7 +183,7 @@ def _validate_candidate(document: Document, extraction: ExtractionResult, candid
     if candidate.field_status.keys() - spec.fields.keys():
         raise ValueError("Field statuses must reference declared task fields")
     _validate_measurements(document, extraction, candidate)
-    grounded = can_ground_fields(candidate.fields) if extraction.schema_version in {"0.2", "0.3", "0.4"} else (
+    grounded = can_ground_fields(candidate.fields) if extraction.schema_version in {"0.2", "0.3", "0.4", "0.5"} else (
         bool(candidate.fields) and all(field.evidence.status == "matched" for field in candidate.fields.values())
     )
     if grounded:
@@ -226,6 +226,9 @@ class ExtractionArchive(ContractModel):
 
     @model_validator(mode="after")
     def verify_links(self) -> ExtractionArchive:
+        if self.extraction.schema_version == "0.5":
+            from .automatic_provenance import validate_automatic_provenance
+            validate_automatic_provenance(self.extraction)
         source = self.extraction.source
         if source.sha256 != self.document.text_sha256 or source.character_count != self.document.character_count:
             raise ValueError("Extraction and document must reference identical source text")

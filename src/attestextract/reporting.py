@@ -49,6 +49,9 @@ def render_markdown_report(result: ExtractionResult, *, secrets: Iterable[str] =
     A matched quote establishes location only; this report accepts no facts.
     """
     secrets = tuple(secrets)
+    if result.schema_version == "0.5":
+        from .automatic_provenance import validate_automatic_provenance
+        validate_automatic_provenance(result)
 
     def cell(value: str) -> str:
         return _cell(value, secrets)
@@ -74,7 +77,7 @@ def render_markdown_report(result: ExtractionResult, *, secrets: Iterable[str] =
         f"- 文献：{cell(result.source.name or '未命名输入')}",
         f"- 任务：{cell(result.task.name)}",
         f"- 程序版本：{cell(result.package_version)}；结果格式：{cell(result.schema_version)}",
-        f"- 模型：{cell(result.run.model or '未报告')}；模式：{cell(result.run.mode)}",
+        f"- 模型：{cell('按分块记录，见实际调用来源' if result.schema_version == '0.5' else result.run.model or '未报告')}；模式：{cell(result.run.mode)}",
         f"- 模型回答协议：{cell(result.run.output_protocol)}",
         f"- 分块：{result.run.chunk_count}；模型响应：{result.run.response_count}；HTTP/后端尝试：{result.run.request_attempts}",
         f"- 候选：{len(result.candidates)}；待复核候选：{pending}；复核项：{len(result.review)}",
@@ -86,6 +89,26 @@ def render_markdown_report(result: ExtractionResult, *, secrets: Iterable[str] =
         "字段状态：reported＝已报告；not_reported＝未报告；not_applicable＝任务声明不适用；required_missing＝必要信息缺失。", "",
         "关联检查仅覆盖任务配置的相同比较值，尚未实现完整的不同值矛盾检测；没有关联不表示没有冲突。", "",
     ]
+    if result.schema_version == "0.5":
+        lines += ["## 实际调用来源", "",
+                  "以下记录实际使用的路径，不代表模型返回的事实已核验。失败或结果未知的请求也占用调用额度。", "",
+                  "| 分块 | 路径 | 请求模型 | 服务报告模型 | 接口 | 输出约束 | 成功尝试 |",
+                  "| --- | --- | --- | --- | --- | --- | --- |"]
+        for chunk_id, origin in result.run.chunk_provenance.items():
+            route = result.run.routes[origin.route_id]
+            config = route["config"]
+            cells = (chunk_id, origin.route_id, config["model"], origin.reported_model or "未报告",
+                     config["adapter"], config["structured_output"], origin.attempt_id)
+            lines.append("| " + " | ".join(cell(value) for value in cells) + " |")
+        unknown = sum(item.outcome_unknown for item in result.run.generation_attempts)
+        lines += ["", f"- 已预留生成尝试：{len(result.run.generation_attempts)}；结果未知：{unknown}。未知用量不能视为零费用。", "",
+                  "| 尝试 | 分块 | 路径 | 状态 | 错误代码 | HTTP 尝试 |",
+                  "| --- | --- | --- | --- | --- | ---: |"]
+        for attempt in result.run.generation_attempts:
+            cells = (attempt.attempt_id, attempt.chunk_id, attempt.route_id, attempt.status,
+                     attempt.error_code or "无", str(attempt.http_attempts))
+            lines.append("| " + " | ".join(cell(value) for value in cells) + " |")
+        lines.append("")
     if result.run.usage:
         lines += ["## 模型用量", "", "| 指标 | 数量 |", "| --- | ---: |"]
         lines += [f"| {cell(name)} | {count} |" for name, count in sorted(result.run.usage.items())]

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.0.dev25
+
+- Accept explicit API base URL, key and unregistered raw model names through Python `extract()` and the matching CLI. No profile registration or synthetic generation is required before extracting the first real source chunk.
+- Select exact service/model defaults and bounded compatible routes. Unknown compatible Chat services start with Schema; only explicit parameter rejection permits output-mode or token-field changes. Add an explicitly chosen `ModelConnection` backup, retaining independent credentials and stopping on uncertain transport outcomes.
+- Record each automatic generation separately, with a three-attempt chunk limit and default N+2 total reservations. Result 0.5/checkpoint v4 preserve route provenance, failed responses, immutable content identity and completed-chunk recovery; fixed legacy paths keep their existing contracts.
+- Extend reports, archives and offline decision materials to verify automatic provenance. Cache only non-secret successful-configuration digests; no cached setting establishes server enforcement or scientific accuracy.
+- Verify using synthetic HTTP and isolated installations. New-provider live acceptance remains a separate user-run test; this release work sends no paid provider calls.
+
 ## 0.1.0.dev24
 
 - Default built-in HTTP adapters, provider presets and profiles to `tls12_fallback`: a credential-free TLS 1.2 probe followed, only for recognized TLS compatibility failures, by one automatic-negotiation probe. Retain certificate verification and all explicitly configured older TLS policies.

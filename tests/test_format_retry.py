@@ -382,6 +382,8 @@ def test_cli_controls_pipeline_regeneration_without_requiring_live_api(tmp_path,
     args = [
         "extract", "--input", str(source), "--task", str(task), "--output", str(output),
         "--base-url", "https://models.example/v1", "--model", "synthetic-model",
+        # Exercise the retained fixed-mode retry contract, without credentials.
+        "--structured-output", "off",
     ]
     if option is not None:
         args.extend(["--format-retries", option])

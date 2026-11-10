@@ -10,12 +10,13 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from .archive import create_archive
+from .automatic_provenance import validate_automatic_provenance
 from .decisions import DecisionTask
 from .documents import Document
 from .evidence import link_candidates
 from .execution import _read_state, _State, digest
 from .identity import can_ground_fields
-from .models import (Candidate, CandidateLink, ContextSegment, ContractModel, DocumentChunk,
+from .models import (BackendResponse, Candidate, CandidateLink, ContextSegment, ContractModel, DocumentChunk,
                      EvidenceRef, ExtractionResult, SourceSpan, TaskSpec)
 from .storage import _load, _reject_constant, _unique_object
 
@@ -112,7 +113,7 @@ def _verify_candidate_scope(candidate: Candidate, chunks: dict[str, list[SourceS
 
 def _source_payload(document: Document, extraction: ExtractionResult) -> tuple[dict, dict]:
     source, result = document.model_dump(), extraction.model_dump()
-    if extraction.schema_version != "0.4":
+    if extraction.schema_version not in {"0.4", "0.5"}:
         source.pop("structure", None)
         for candidate in result["candidates"]:
             candidate.pop("source_context", None)
@@ -180,8 +181,8 @@ class DecisionBundle(ContractModel):
 
     @model_validator(mode="after")
     def verify_materials(self) -> DecisionBundle:
-        if self.extraction.schema_version not in {"0.3", "0.4"}:
-            raise ValueError("Decision bundle 0.1 supports extraction schema 0.3 and 0.4")
+        if self.extraction.schema_version not in {"0.3", "0.4", "0.5"}:
+            raise ValueError("Decision bundle 0.1 supports extraction schema 0.3, 0.4 and 0.5")
         # This verifies source identity, every original quote, field contracts,
         # candidate IDs, measurements and review references; accepts no facts.
         create_archive(self.document, self.extraction)
@@ -189,6 +190,8 @@ class DecisionBundle(ContractModel):
         scoped = {batch.chunk_id: (batch.body_segments, batch.context_segments) for batch in self.batches}
         if len(chunks) != len(self.batches) or len(chunks) != self.extraction.run.chunk_count:
             raise ValueError("Final leaf chunks must be unique and agree with the extraction run")
+        if self.extraction.schema_version == "0.5":
+            validate_automatic_provenance(self.extraction, set(chunks))
         for segments in chunks.values():
             _verify_segments(segments, self.document.character_count)
         for batch in self.batches:
@@ -210,7 +213,7 @@ class DecisionBundle(ContractModel):
         if self.analysis_links != link_candidates(self.extraction.candidates, self.extraction.task):
             raise ValueError("Analysis links must be derived from the unchanged extraction snapshot")
         payload = self.model_dump(exclude={"bundle_id"})
-        if self.extraction.schema_version != "0.4":
+        if self.extraction.schema_version not in {"0.4", "0.5"}:
             payload["document"], payload["extraction"] = _source_payload(self.document, self.extraction)
             for batch in payload["batches"]:
                 batch.pop("body_segments", None)
@@ -334,8 +337,23 @@ def _prepare_decision_bundle(run_dir: str | Path) -> DecisionBundle:
             or state.request_attempts != extraction.run.request_attempts or state.usage != extraction.run.usage
             or state.model != extraction.run.model):
         raise ValueError("Checkpoint completion ledger and extraction run disagree")
+    automatic = extraction.schema_version == "0.5"
+    if automatic != (state.checkpoint_version == "4"):
+        raise ValueError("Automatic results require their matching v4 checkpoint")
+    if automatic:
+        from .automatic import public_route_snapshot
+        try:
+            expected_routes = {route["id"]: public_route_snapshot(route) for route in state.route_plan["routes"]}
+        except (KeyError, TypeError, ValueError):
+            raise ValueError("Automatic checkpoint route descriptors are invalid") from None
+        if (extraction.run.routes != expected_routes
+                or extraction.run.generation_attempts != state.generation_attempts
+                or extraction.run.chunk_provenance != state.chunk_provenance):
+            raise ValueError("Automatic result sources must match the saved route and attempt ledger")
+        validate_automatic_provenance(extraction, set(leaves))
     chunks = []
     scoped = {}
+    cached = {}
     for key in leaves:
         relative = f"chunks/{key}.json"
         if relative not in manifest["artifacts"]:
@@ -347,6 +365,24 @@ def _prepare_decision_bundle(run_dir: str | Path) -> DecisionBundle:
             raise ValueError("Saved leaf chunk must match checkpoint positions and exact original text")
         chunks.append((key, chunk.segments))
         scoped[key] = (chunk.body_segments, chunk.context_segments)
+        if automatic:
+            payload = _read_json(_source_file(directory, f"execution/cache/{key}.json"))
+            if digest(payload) != state.nodes[key].cache_hash:
+                raise ValueError("Completed response cache checksum does not match the checkpoint")
+            response = BackendResponse.model_validate(payload)
+            if response.finish_reason not in (None, "stop"):
+                raise ValueError("Completed cache must contain a normally finished response")
+            from .pipeline import _parse_response, _check_task_records
+            from .errors import BackendError
+            try:
+                raw = _parse_response(response.text, output_protocol=state.output_protocol)
+                _check_task_records(raw, task, trace=None, chunk_id=key, output_protocol=state.output_protocol)
+            except BackendError:
+                raise ValueError("Completed cache does not match the extraction response contract") from None
+            cached[key] = response
+    if automatic:
+        from .automatic_execution import validate_automatic_state
+        validate_automatic_state(state, cached)
     batches, tasks = _materials(document, extraction, chunks, scoped)
     source_payload, result_payload = _source_payload(document, extraction)
     payload = {"decision_bundle_version": "0.1", "analysis_package_version": __version__,
@@ -354,7 +390,7 @@ def _prepare_decision_bundle(run_dir: str | Path) -> DecisionBundle:
                "extraction": result_payload, "batches": [batch.model_dump() for batch in batches],
                "tasks": [task.model_dump() for task in tasks],
                "analysis_links": [link.model_dump() for link in link_candidates(extraction.candidates, extraction.task)]}
-    if extraction.schema_version != "0.4":
+    if extraction.schema_version not in {"0.4", "0.5"}:
         for batch in payload["batches"]:
             batch.pop("body_segments", None)
             batch.pop("context_segments", None)

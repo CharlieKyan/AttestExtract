@@ -141,6 +141,7 @@ def test_backend_failure_is_reported_and_does_not_create_success_output(monkeypa
     status = cli.main([
         "extract", "--input", str(source), "--task", str(task), "--output", str(output),
         "--base-url", "https://example.invalid/v1", "--model", "synthetic-test-model",
+        "--adapter", "openai-compatible",  # Explicit retained fixed/custom backend path.
     ])
 
     assert status != 0

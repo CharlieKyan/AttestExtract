@@ -39,7 +39,7 @@ def grounded_candidate_id(
         excluded = {"range_binding"} if schema_version in {"0.1", "0.2"} else set()
         identity["measurements"] = {name: group.model_dump(exclude=excluded)
                                     for name, group in sorted(measurements.items())}
-    if schema_version != "0.4":
+    if schema_version not in {"0.4", "0.5"}:
         identity = _legacy_evidence(identity)
     encoded = json.dumps(identity, sort_keys=True, ensure_ascii=False, allow_nan=False)
     return "candidate-" + hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:24]

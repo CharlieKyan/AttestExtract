@@ -94,6 +94,11 @@ def _read_state(envelope: dict) -> _State:
     if (not isinstance(envelope, dict) or set(envelope) != {"state", "sha256"} or
             not isinstance(envelope["state"], dict) or digest(envelope["state"]) != envelope["sha256"]):
         raise ValueError("checksum")
+    if envelope["state"].get("checkpoint_version") == "4":
+        from .automatic_execution import AutomaticState, validate_automatic_state
+        state = AutomaticState.model_validate(envelope["state"])
+        validate_automatic_state(state)
+        return state
     if envelope["state"].get("checkpoint_version") not in {"2", "3"}:
         raise ConfigurationError("This checkpoint uses an older or unsupported execution format. Start a new run; dev12 chunk plans cannot be resumed with the sentence-aware planner.")
     if envelope["state"].get("checkpoint_version") == "3" and not {
@@ -188,6 +193,8 @@ class ExecutionSession:
         try:
             envelope = json.loads(path.read_bytes().decode("utf-8"))
             state = _read_state(envelope)
+            if state.checkpoint_version == "4" and not getattr(self, "automatic", False):
+                raise ConfigurationError("This automatic checkpoint requires the automatic model entry point.")
             legacy = state.checkpoint_version == "2"
             if legacy:
                 if self._legacy_compatibility is None:

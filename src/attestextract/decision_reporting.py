@@ -36,6 +36,18 @@ def render_decision_bundle(bundle: DecisionBundle) -> str:
         reviews = sum(item.candidate_id in batch.candidate_ids and item.severity == "review" for item in bundle.extraction.review)
         cells = (batch.chunk_id, positions, numbers or "无", reviews, "有候选" if numbers else "合法空块，需覆盖核查")
         lines.append("| " + " | ".join(_text(cell) for cell in cells) + " |")
+    if bundle.extraction.schema_version == "0.5":
+        run = bundle.extraction.run
+        lines += ["", "## 实际模型来源", "",
+                  "每组对应实际完成抽取的请求；候选通过 chunk_ids 关联此处来源。配置与原始网络日志未复制到材料包。", "",
+                  "| 分块 | 请求模型 | 服务报告模型 | 接口 | 输出约束 | 成功尝试 |",
+                  "| --- | --- | --- | --- | --- | --- |"]
+        for batch in bundle.batches:
+            origin = run.chunk_provenance[batch.chunk_id]
+            config = run.routes[origin.route_id]["config"]
+            cells = (batch.chunk_id, config["model"], origin.reported_model or "未报告",
+                     config["adapter"], config["structured_output"], origin.attempt_id)
+            lines.append("| " + " | ".join(_text(cell) for cell in cells) + " |")
     lines += ["", "## 逻辑判断任务", "", "| 任务 ID | 材料组 | 候选序号 | 允许动作 |", "| --- | --- | --- | --- |"]
     for task in bundle.tasks:
         cells = (task.task_id, task.batch_id, ", ".join(str(ordinals[x]) for x in task.candidate_ids) or "空块", ", ".join(task.allowed_actions))

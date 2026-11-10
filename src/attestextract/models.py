@@ -6,7 +6,7 @@ from typing import Any, Literal, Protocol
 
 from pydantic import (
     BaseModel, ConfigDict, Field, StrictBool, StrictFloat, StrictInt, StrictStr,
-    model_validator,
+    model_validator, model_serializer,
 )
 
 
@@ -143,10 +143,13 @@ class ExtractionRequest(ContractModel):
     output_protocol: OutputProtocol = "flat-v1"
     format_attempt: int = Field(default=1, ge=1, le=2)
     generation: GenerationOptions = Field(default_factory=GenerationOptions)
+    artifact_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_.-]+$", exclude=True)
 
     @property
     def artifact_stem(self) -> str:
         """Keep the first response's paths stable and preserve regeneration logs."""
+        if self.artifact_id is not None:
+            return self.artifact_id
         return self.chunk_id if self.format_attempt == 1 else f"{self.chunk_id}.format-{self.format_attempt}"
 
 
@@ -270,6 +273,32 @@ class SourceInfo(ContractModel):
     document_id: str | None = None
 
 
+class GenerationAttempt(ContractModel):
+    """One reserved generation, including failures whose billing is unknown."""
+
+    attempt_id: str = Field(pattern=r"^[A-Za-z0-9_.-]+$")
+    chunk_id: str
+    route_id: str
+    status: Literal["reserved", "responded", "failed", "rejected", "completed"] = "reserved"
+    error_code: str | None = None
+    model: str | None = None
+    reported_model: str | None = None
+    request_id: str | None = None
+    http_attempts: int = Field(default=0, ge=0)
+    usage: dict[str, int] = Field(default_factory=dict)
+    elapsed_seconds: float = Field(default=0, ge=0)
+    outcome_unknown: bool = False
+    response_received: bool = False
+    format_attempt: int = Field(default=1, ge=1, le=2)
+
+
+class ChunkProvenance(ContractModel):
+    route_id: str
+    attempt_id: str
+    model: str | None = None
+    reported_model: str | None = None
+
+
 class RunInfo(ContractModel):
     backend: str
     mode: Literal["live", "replay"]
@@ -281,6 +310,17 @@ class RunInfo(ContractModel):
     model: str | None = None
     usage: dict[str, int] = Field(default_factory=dict)
     elapsed_seconds: float
+    routes: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    chunk_provenance: dict[str, ChunkProvenance] = Field(default_factory=dict)
+    generation_attempts: list[GenerationAttempt] = Field(default_factory=list)
+
+    @model_serializer(mode="wrap")
+    def _serialize_run(self, handler):
+        result = handler(self)
+        if not self.routes:
+            for name in ("routes", "chunk_provenance", "generation_attempts"):
+                result.pop(name, None)
+        return result
 
 
 def _package_version() -> str:
@@ -290,7 +330,7 @@ def _package_version() -> str:
 
 
 class ExtractionResult(ContractModel):
-    schema_version: Literal["0.1", "0.2", "0.3", "0.4"] = "0.4"
+    schema_version: Literal["0.1", "0.2", "0.3", "0.4", "0.5"] = "0.4"
     package_version: str = Field(default_factory=_package_version)
     task: TaskSpec
     source: SourceInfo
@@ -298,3 +338,13 @@ class ExtractionResult(ContractModel):
     review: list[ReviewItem]
     links: list[CandidateLink] = Field(default_factory=list)
     run: RunInfo
+
+    @model_validator(mode="after")
+    def _provenance_version(self):
+        automatic = bool(self.run.routes or self.run.chunk_provenance or self.run.generation_attempts)
+        if self.schema_version != "0.5" and automatic:
+            raise ValueError("Automatic provenance requires result schema 0.5.")
+        if self.schema_version == "0.5" and (not self.run.routes or self.run.backend != "automatic"
+                                             or self.run.model is not None):
+            raise ValueError("Result schema 0.5 requires per-chunk automatic provenance.")
+        return self

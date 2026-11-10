@@ -17,6 +17,7 @@ from .chunking import chunk_document
 from .contextual_chunking import coverage_report
 from .errors import BackendError, ConfigurationError, InvalidResponseError, TaskValidationError
 from .diagnostics import RunTrace
+from .automatic import AutomaticBackend, ModelConnection, build_automatic_backend
 from .documents import Document
 from .execution import ExecutionSession, check_resume_paths, prepare_execution
 from .identity import can_ground_fields, grounded_candidate_id
@@ -70,7 +71,7 @@ def load_task(path: str | Path) -> TaskSpec:
 
 def _response_error(
     message: str, diagnostic: dict[str, Any], *, trace: RunTrace | None,
-    chunk_id: str | None, format_attempt: int = 1,
+    chunk_id: str | None, format_attempt: int = 1, artifact_stem: str | None = None,
 ) -> InvalidResponseError:
     first = diagnostic["errors"][0] if diagnostic["errors"] else None
     if first:
@@ -86,7 +87,7 @@ def _response_error(
                         f"expected {first['expected']}, got {first['actual_type']}).")
     artifact = None
     if trace is not None and chunk_id is not None:
-        stem = chunk_id if format_attempt == 1 else f"{chunk_id}.format-{format_attempt}"
+        stem = artifact_stem or (chunk_id if format_attempt == 1 else f"{chunk_id}.format-{format_attempt}")
         if trace.directory is not None:
             artifact = f"validation/{stem}.errors.json"
             trace.write_json(artifact, diagnostic)
@@ -102,7 +103,7 @@ def _response_error(
 def _parse_response(
     text: str, *, trace: RunTrace | None = None, chunk_id: str | None = None,
     format_attempt: int = 1, allowed_keys: set[str] | None = None,
-    output_protocol: OutputProtocol = "flat-v1",
+    output_protocol: OutputProtocol = "flat-v1", artifact_stem: str | None = None,
 ) -> _RawResponse:
     original_text = text
     if output_protocol not in ("flat-v1", "native-v1"):
@@ -134,24 +135,24 @@ def _parse_response(
         if structure is not None:
             diagnostic["errors"][0]["structure"] = structure
         raise _response_error(message, diagnostic, trace=trace, chunk_id=chunk_id,
-                              format_attempt=format_attempt) from None
+                              format_attempt=format_attempt, artifact_stem=artifact_stem) from None
     except JSONValidationError as exc:
         raise _response_error(message, exc.diagnostic, trace=trace, chunk_id=chunk_id,
-                              format_attempt=format_attempt) from None
+                              format_attempt=format_attempt, artifact_stem=artifact_stem) from None
     except (ValueError, TypeError):
         diagnostic = details("json_syntax", [issue(
             (), "invalid_json", "JSON without duplicate keys or non-finite numbers", text,
             "JSON contains a duplicate key, a non-finite number, or invalid structure.",
         )])
         raise _response_error(message, diagnostic, trace=trace, chunk_id=chunk_id,
-                              format_attempt=format_attempt) from None
+                              format_attempt=format_attempt, artifact_stem=artifact_stem) from None
     try:
         if output_protocol == "native-v1":
             return _RawResponse.model_validate(payload)
         flat = _FlatResponse.model_validate(payload)
     except ValidationError as exc:
         raise _response_error(message, contract_details(exc, payload, allowed_keys=allowed_keys), trace=trace, chunk_id=chunk_id,
-                              format_attempt=format_attempt) from None
+                              format_attempt=format_attempt, artifact_stem=artifact_stem) from None
     records = []
     for index, record in enumerate(flat.records):
         orphaned = record.quotes.keys() - record.values.keys()
@@ -160,7 +161,7 @@ def _parse_response(
                             "orphan_quote", "a corresponding values key", record.quotes[name],
                             "A quote has no corresponding value field.") for name in sorted(orphaned)]
             raise _response_error(message, details("records_contract", errors), trace=trace,
-                                  chunk_id=chunk_id, format_attempt=format_attempt)
+                                  chunk_id=chunk_id, format_attempt=format_attempt, artifact_stem=artifact_stem)
         item = {"record_type": record.record_type, "fields": {
             name: {"value": value, "quote": record.quotes.get(name, "")}
             for name, value in record.values.items()}}
@@ -180,7 +181,8 @@ def _request(task: TaskSpec, chunk: DocumentChunk, generation: GenerationOptions
 
 
 def _check_task_records(raw: _RawResponse, task: TaskSpec, *, trace: RunTrace | None,
-                        chunk_id: str, format_attempt: int = 1, output_protocol: OutputProtocol = "flat-v1") -> None:
+                        chunk_id: str, format_attempt: int = 1, output_protocol: OutputProtocol = "flat-v1",
+                        artifact_stem: str | None = None) -> None:
     errors = []
     for index, record in enumerate(raw.records):
         if record.record_type not in task.record_types:
@@ -206,7 +208,7 @@ def _check_task_records(raw: _RawResponse, task: TaskSpec, *, trace: RunTrace | 
     if errors:
         diagnostic = details("task_schema", errors)
         raise _response_error(errors[0]["message"], diagnostic, trace=trace, chunk_id=chunk_id,
-                              format_attempt=format_attempt)
+                              format_attempt=format_attempt, artifact_stem=artifact_stem)
 
 
 def _value_has_type(value: Scalar, field_type: str) -> bool:
@@ -296,9 +298,12 @@ def _validated_response(
     responses = []
     allowed_keys = {name for record in task.record_types.values() for name in (*record.fields, *record.measurement_groups)}
     allowed_keys.update({"values", "quotes", "measurements", "context_quote", "value_text", "unit_text", "unit_quote"})
-    for format_attempt in range(first_attempt, format_retries + 2):
+    for format_attempt in range(first_attempt, max(first_attempt, format_retries + 1) + 1):
         if session is not None:
             session.reserve(chunk.chunk_id, format_attempt=format_attempt)
+            artifact_factory = getattr(session, "artifact_stem", None)
+            if callable(artifact_factory):
+                request = request.model_copy(update={"artifact_id": artifact_factory(chunk.chunk_id, format_attempt)})
         stem = request.artifact_stem
         if trace is not None:
             trace.event("model_request", "started", chunk_id=chunk.chunk_id, format_attempt=format_attempt)
@@ -361,12 +366,13 @@ def _validated_response(
                                        code="truncated_response" if response.finish_reason == "length" else "invalid_response")
         try:
             raw = _parse_response(response.text, trace=trace, chunk_id=chunk.chunk_id,
-                                  format_attempt=format_attempt, allowed_keys=allowed_keys, output_protocol=output_protocol)
+                                  format_attempt=format_attempt, allowed_keys=allowed_keys, output_protocol=output_protocol,
+                                  artifact_stem=stem)
             if trace is not None:
                 trace.event("validation", "json_parsed", chunk_id=chunk.chunk_id,
                             format_attempt=format_attempt, record_count=len(raw.records))
             _check_task_records(raw, task, trace=trace, chunk_id=chunk.chunk_id,
-                                format_attempt=format_attempt, output_protocol=output_protocol)
+                                format_attempt=format_attempt, output_protocol=output_protocol, artifact_stem=stem)
         except InvalidResponseError as exc:
             feedback = _format_feedback(exc.validation_details, task, output_protocol)
             if session is not None:
@@ -411,6 +417,21 @@ def _validate_cached_responses(task: TaskSpec, session: ExecutionSession) -> dic
     return checked
 
 
+def _validated_automatic_response(task: TaskSpec, chunk: DocumentChunk,
+                                  backend: AutomaticBackend, trace: RunTrace | None,
+                                  session) -> tuple[_RawResponse, list[BackendResponse]]:
+    """Schedule each compatibility attempt through the shared execution ledger."""
+    while True:
+        route = session.route_for(chunk.chunk_id)
+        attempt = session.attempt_session(chunk.chunk_id, route.route_id)
+        try:
+            return _validated_response(task, chunk, route.backend, trace, 0,
+                                       route.generation, attempt)
+        except BackendError as exc:
+            if not session.advance(chunk.chunk_id, route.route_id, exc):
+                raise
+
+
 def _responses_for_chunks(task: TaskSpec, chunks: list[DocumentChunk], backend: ExtractionBackend,
                           trace: RunTrace | None, format_retries: int, generation: GenerationOptions,
                           session: ExecutionSession | None):
@@ -444,7 +465,10 @@ def _responses_for_chunks(task: TaskSpec, chunks: list[DocumentChunk], backend: 
                     trace.stage = "model_response"
                 raise InvalidResponseError("Resume the saved truncated chunk by subdivision when possible.",
                                            attempts=0, code="truncated_response")
-            raw, responses = _validated_response(task, chunk, backend, trace, format_retries, generation, session)
+            if isinstance(backend, AutomaticBackend):
+                raw, responses = _validated_automatic_response(task, chunk, backend, trace, session)
+            else:
+                raw, responses = _validated_response(task, chunk, backend, trace, format_retries, generation, session)
         except Exception as exc:
             failed_stage = trace.stage if trace is not None else None
             session.failed(key, exc)
@@ -469,7 +493,7 @@ def _selected_backend(
     model: str, *, env_file: str | Path | None, api_key: str | None,
     api_key_env: str | None, base_url: str | None, region: str | None,
     model_options: Mapping[str, Any] | None, generation: GenerationOptions | None,
-    format_retries: int, trace: RunTrace | None,
+    format_retries: int, trace: RunTrace | None, fallback: ModelConnection | None = None,
 ) -> tuple[ExtractionBackend, GenerationOptions]:
     """Resolve the opt-in model shortcut without changing backend injection."""
     # Import lazily: the public package imports this module before the registry.
@@ -502,6 +526,34 @@ def _selected_backend(
             overrides[name] = value
     overrides["format_retries"] = format_retries
     environment = load_env_file(env_file) if env_file is not None else dict(os.environ)
+    from .providers import available_models
+    effective_url = overrides.get("base_url")
+    if model not in available_models() and effective_url is not None:
+        if region is not None:
+            raise ConfigurationError("Use the explicit API address for a region on the automatic entry point.")
+        automatic_options = dict(overrides)
+        automatic_options.pop("format_retries", None)
+        automatic_options.pop("base_url", None)
+        automatic_options.pop("api_key_env", None)
+        try:
+            primary = ModelConnection(base_url=effective_url, model=model, api_key=api_key,
+                                      api_key_env=overrides.get("api_key_env", "ATTESTEXTRACT_API_KEY"))
+        except (ValueError, TypeError):
+            raise ConfigurationError("Supply a valid API address, model name and credential binding.") from None
+        backend = build_automatic_backend(primary, fallback=fallback, trace=trace,
+                                          environment=environment, overrides=automatic_options)
+        selected = backend.routes[backend.preferred_route_id].config
+        if trace is not None:
+            trace.write_json("backend.json", {
+                "backend": "automatic", "selection_mode": "automatic", "model": model,
+                "structured_output": selected.structured_output, "output_protocol": "flat-v1",
+                "generation": selected.generation.model_dump(mode="json"),
+                "format_retries": format_retries, "max_attempts": 1,
+                "api_key_configured": True, "env_file_used": env_file is not None,
+            })
+        return backend, selected.generation
+    if fallback is not None:
+        raise ConfigurationError("A fallback connection requires a raw model name and explicit base_url; existing preset calls retain their fixed behavior.")
     config = resolve_model_config(model, environment=environment, overrides=overrides, region=region)
     key = resolve_model_credentials(config, environment, api_key=api_key)
     if trace is not None:
@@ -534,6 +586,7 @@ def extract(
     env_file: str | Path | None = None,
     region: str | None = None,
     model_options: Mapping[str, Any] | None = None,
+    fallback: ModelConnection | None = None,
     source_name: str | None = None,
     max_chunk_chars: int = 6000,
     table_rows_per_chunk: int = 12,
@@ -582,7 +635,7 @@ def extract(
             options = GenerationOptions.model_validate(generation.model_dump()) if generation is not None else GenerationOptions()
         except ValidationError:
             raise ConfigurationError("generation contains invalid controls.") from None
-        selection = (model, api_key, api_key_env, base_url, env_file, region, model_options)
+        selection = (model, api_key, api_key_env, base_url, env_file, region, model_options, fallback)
         if backend is not None:
             if any(value is not None for value in selection):
                 raise ConfigurationError("Pass either backend= or model= with its configuration, not both.")
@@ -593,7 +646,7 @@ def extract(
                 model, env_file=env_file, api_key=api_key, api_key_env=api_key_env,
                 base_url=base_url, region=region, model_options=model_options,
                 generation=options if generation is not None else None,
-                format_retries=format_retries, trace=trace,
+                format_retries=format_retries, trace=trace, fallback=fallback,
             )
         return _extract(
             text, task, backend=backend, source_name=source_name,
@@ -662,8 +715,15 @@ def _extract(
         trace.write_json("task.json", spec.model_dump(mode="json"))
         trace.event("chunking", "started", max_chunk_chars=max_chunk_chars, table_rows_per_chunk=table_rows_per_chunk)
     session = None
+    automatic = isinstance(backend, AutomaticBackend)
+    if automatic and execution is None:
+        execution = ExecutionOptions()
     if execution is not None:
-        session = prepare_execution(text, spec, backend, generation, execution, max_chars=max_chunk_chars,
+        prepare = prepare_execution
+        if automatic:
+            from .automatic_execution import prepare_automatic_execution
+            prepare = prepare_automatic_execution
+        session = prepare(text, spec, backend, generation, execution, max_chars=max_chunk_chars,
                                     table_rows_per_chunk=table_rows_per_chunk, format_retries=format_retries,
                                     source_name=source_name, backend_identity=backend_identity, trace=trace,
                                     resume_from=resume_from, context=context, structure=chunk_structure)
@@ -848,14 +908,16 @@ def _extract(
         request_attempts = session.state.request_attempts
         usage = session.state.usage
         model = session.state.model or model
+    provenance = session.provenance_dump() if automatic else {}
     return ExtractionResult(
-        task=spec,
+        schema_version="0.5" if automatic else "0.4", task=spec,
         source=SourceInfo(name=source_name, sha256=source_hash, character_count=len(text), document_id=document.document_id),
         candidates=candidates, review=review, links=link_candidates(candidates, spec),
         run=RunInfo(
             backend=backend.name, mode=mode, output_protocol=output_protocol,
             chunk_count=len(session.leaves()) if session else len(chunks), response_count=response_count,
             candidate_count=len(candidates), request_attempts=request_attempts,
-            model=model, usage=usage, elapsed_seconds=time.perf_counter() - started,
+            model=None if automatic else model, usage=usage, elapsed_seconds=time.perf_counter() - started,
+            **provenance,
         ),
     )

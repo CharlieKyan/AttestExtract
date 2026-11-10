@@ -238,6 +238,7 @@ def test_cli_masks_raw_and_json_escaped_secrets_in_error_paths_and_every_trace_a
     status = cli.main([
         "extract", "--input", str(source), "--task", str(task), "--output", str(output),
         "--base-url", "https://example.invalid/v1", "--model", "synthetic-model",
+        "--adapter", "openai-compatible",  # The injected backend tests fixed-path redaction.
         "--log-dir", str(directory),
     ])
 

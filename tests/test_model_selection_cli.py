@@ -115,7 +115,8 @@ def test_legacy_colon_model_id_is_still_literal(tmp_path, monkeypatch):
     received = []
     intercept(monkeypatch, lambda request: received.append(json.loads(request.content)) or completion())
     assert cli.main(inputs(tmp_path) + ["--base-url", "https://synthetic.invalid/v1",
-                    "--model", "deepseek:custom-old-route", "--output", str(tmp_path / "result.json")]) == 0
+                    "--model", "deepseek:custom-old-route", "--structured-output", "off",
+                    "--output", str(tmp_path / "result.json")]) == 0
     assert received[0]["model"] == "deepseek:custom-old-route"
     assert "response_format" not in received[0] and "thinking" not in received[0]
 
@@ -157,7 +158,8 @@ def test_omitted_attempt_limit_sends_once_for_retryable_http_error(tmp_path, mon
         profile.write_text('[profiles.synthetic]\nbase_url="https://synthetic.invalid/v1"\nmodel="synthetic"\n', encoding="utf-8")
         options = ["--config", str(profile), "--profile", "synthetic"]
     else:
-        options = ["--base-url", "https://synthetic.invalid/v1", "--model", "synthetic"]
+        options = ["--base-url", "https://synthetic.invalid/v1", "--model", "synthetic",
+                   "--structured-output", "off"]  # Retain the legacy fixed/anonymous path.
     assert cli.main(inputs(tmp_path) + options) == 1
     assert len(calls) == 1
     run = next((tmp_path / "outputs").iterdir())

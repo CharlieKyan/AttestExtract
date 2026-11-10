@@ -101,6 +101,15 @@ class ConsoleProgress:
                         f"{event['max_model_calls'] - event['calls_reserved']} calls left")
         elif stage == "execution" and kind == "call_reserved":
             self._calls_reserved, self._call_limit = event["used"], event["limit"]
+        elif stage == "execution" and kind == "route_switched":
+            self._waiting_since = None
+            self._write(f"{prefix} compatibility fallback: {event.get('model', event['to_route'])}; "
+                        f"{event.get('adapter', '?')} / {event.get('structured_output', '?')}; "
+                        f"reason: {event.get('reason', '?')}; "
+                        f"{event['max_model_calls'] - event['calls_reserved']} calls left")
+        elif stage == "execution" and kind == "format_retry":
+            self._waiting_since = None
+            self._write(f"{prefix} format regeneration requested; one additional reserved call")
         elif stage == "execution" and kind in {"finished", "stopped"}:
             self._waiting_since = None
             self._write(f"Chunk summary: {event['completed_chunks']}/{event['leaf_chunks']} completed; "

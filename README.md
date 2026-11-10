@@ -1,5 +1,12 @@
 # AttestExtract
 
+Dev25 lets the public Python and CLI entry points accept an API base address,
+key, raw model name, task and source directly. There is no registration or paid
+onboarding probe. Explicit parameter rejection can select a bounded compatible
+route; read/write failures with an unknown outcome still stop. Automatic runs
+record every generation and model source in result 0.5/checkpoint v4. See the
+[minimal-input guide](docs/MINIMAL_API.md) for complete commands and boundaries.
+
 Dev24 defaults all built-in HTTP adapters to TLS 1.2 first, with a bounded,
 credential-free compatibility probe before generation and automatic negotiation
 only for recognized TLS failures. Default generation attempts are now one across
@@ -25,7 +32,7 @@ identities. See [D4 evidence and context](docs/D4_EVIDENCE.md) and the
 
 Schema-driven extraction from text and tables, with source-linked evidence and pluggable decision backends.
 
-**Early prototype · `0.1.0.dev24` · Python 3.11+**
+**Early prototype · `0.1.0.dev25` · Python 3.11+**
 
 dev18 adds offline `prepare-decisions` / `check-decisions`: validated successful-run materials cover every candidate and empty chunk; simulated suggestions are checked and recorded without applying them. Equal values with uncertain identity, conditions or evidence now produce insufficient-context associations. That release used flat-v1 / result schema 0.3; dev19 uses schema 0.4. No Jev inference or extra model calls are introduced. See [offline decision materials](docs/DECISION_MATERIALS.md).
 

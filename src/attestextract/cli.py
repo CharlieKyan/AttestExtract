@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
 import os
 import sys
+import warnings
 from datetime import datetime
 from importlib.resources import files
 from pathlib import Path
@@ -30,6 +32,7 @@ from .providers import available_models, resolve_model_config, resolve_model_cre
 from .progress import ConsoleProgress
 from .reporting import render_markdown_report
 from .registry import BackendRegistry, default_registry
+from .automatic import AutomaticBackend, ModelConnection, build_automatic_backend
 
 
 def _output_token_limit(value: str) -> int | str:
@@ -84,6 +87,9 @@ def _parser() -> argparse.ArgumentParser:
     live.add_argument("--profile", help="Profile name in --config; explicit CLI values override it")
     live.add_argument("--adapter", help="Registered backend name (default: openai-compatible)")
     live.add_argument("--api-key-env", help="Environment variable containing the API key (default: ATTESTEXTRACT_API_KEY)")
+    live.add_argument("--fallback-base-url", help="Optional explicitly chosen backup API address")
+    live.add_argument("--fallback-model", help="Optional backup model's raw name")
+    live.add_argument("--fallback-api-key-env", help="Environment variable holding the backup's own key")
     live.add_argument("--timeout", type=float, help="Override all HTTP phase timeouts, 0 < seconds <= 600 (defaults: connect 15, read 180, write 30, pool 15)")
     live.add_argument("--read-timeout", type=float, help="Override only the HTTP read timeout, 0 < seconds <= 600")
     live.add_argument("--tls-mode", choices=("auto", "1.2", "auto_fallback", "tls12_fallback"), help="Connection policy (default: tls12_fallback, TLS 1.2 first with a bounded automatic negotiation fallback)")
@@ -94,8 +100,8 @@ def _parser() -> argparse.ArgumentParser:
     live.add_argument("--env-file", type=Path, help="Explicit KEY=value configuration file; existing environment takes precedence")
     live.add_argument("--log-dir", type=Path, help="Empty directory for source, prompts, responses and diagnostic events")
     live.add_argument(
-        "--structured-output", choices=("off", "json_object", "json_schema"),
-        help="Output mode (presets: json_object; profiles/legacy: off; no automatic fallback)",
+        "--structured-output", choices=("auto", "off", "json_object", "json_schema"),
+        help="Output mode (explicit address/model: automatic; presets/profiles retain fixed settings)",
     )
     live.add_argument(
         "--format-retries", type=int, choices=(0, 1),
@@ -321,7 +327,50 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
             # None would mean "no override" to the existing config resolver.
             overrides.pop("max_output_tokens")
             overrides["generation"] = {"max_output_tokens": None}
-        if args.model_id is not None:
+        automatic_backend = None
+        automatic = (registry is None and args.base_url is not None and args.model is not None
+                     and args.config is None and args.adapter is None and args.model_id is None
+                     and args.structured_output in (None, "auto") and args.max_attempts in (None, 1))
+        backup_values = (args.fallback_base_url, args.fallback_model, args.fallback_api_key_env)
+        if any(value is not None for value in backup_values) and (not automatic or not all(backup_values)):
+            raise ConfigurationError("A backup requires all three fallback options and the automatic address/model entry point.")
+        if args.structured_output == "auto" and not automatic:
+            raise ConfigurationError("Automatic output selection requires --base-url and --model, without a fixed profile, adapter or repeated HTTP attempts.")
+        if automatic:
+            if args.region is not None:
+                raise ConfigurationError("Use the explicit API address for a region on the automatic entry point.")
+            key_name = args.api_key_env or "ATTESTEXTRACT_API_KEY"
+            api_key = environment.get(key_name)
+            if api_key is None and not args.check and sys.stdin.isatty():
+                try:
+                    with warnings.catch_warnings():
+                        warnings.simplefilter("error", getpass.GetPassWarning)
+                        api_key = getpass.getpass("API key (hidden): ")
+                except (EOFError, getpass.GetPassWarning):
+                    raise ConfigurationError(f"No credential supplied; set {key_name} or enter a key in an interactive terminal.") from None
+            primary = ModelConnection(base_url=args.base_url, model=args.model,
+                                      api_key=api_key if api_key is not None else "offline-check" if args.check else None,
+                                      api_key_env=key_name)
+            fallback = None
+            if all(backup_values):
+                fallback_key = environment.get(args.fallback_api_key_env)
+                fallback = ModelConnection(base_url=args.fallback_base_url, model=args.fallback_model,
+                                           api_key=fallback_key if fallback_key is not None else "offline-check" if args.check else None,
+                                           api_key_env=args.fallback_api_key_env)
+            automatic_options = {key: value for key, value in overrides.items()
+                                 if key not in {"base_url", "model", "api_key_env", "format_retries", "structured_output",
+                                                "temperature", "max_output_tokens"}}
+            generation = dict(automatic_options.pop("generation", {}))
+            for name in ("temperature", "max_output_tokens"):
+                if name in overrides:
+                    generation[name] = overrides[name]
+            if generation:
+                automatic_options["generation"] = generation
+            automatic_backend = build_automatic_backend(primary, fallback=fallback, trace=trace,
+                                                         environment=environment, overrides=automatic_options)
+            config = automatic_backend.routes[automatic_backend.preferred_route_id].config.model_copy(
+                update={"format_retries": args.format_retries or 0})
+        elif args.model_id is not None:
             if any(value is not None for value in (args.config, args.profile, args.model, args.adapter)):
                 raise ConfigurationError("--model-id cannot be combined with --config, --profile, --model or --adapter.")
             config = resolve_model_config(args.model_id, environment=environment,
@@ -362,10 +411,12 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
                                       structure=structure)
         if trace is not None:
             trace.event("configuration", "backend_validation_started")
-        backend = (registry if registry is not None else default_registry()).create(
+        backend = automatic_backend or (registry if registry is not None else default_registry()).create(
             config.adapter, config=config, api_key=api_key, trace=trace,
         )
-        if type(backend) in (OpenAICompatibleBackend, DeepSeekResponsesBackend):
+        if isinstance(backend, AutomaticBackend):
+            backend_identity = None
+        elif type(backend) in (OpenAICompatibleBackend, DeepSeekResponsesBackend):
             backend_identity = None
             # Only for verifying a dev19 CLI fingerprint; never persisted.
             backend._legacy_cli_config = config.model_dump(
@@ -381,7 +432,7 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
                 "env_file_used": args.env_file is not None,
                 "profile": args.profile, "adapter": config.adapter,
                 "model_id": args.model_id,
-                "selection_mode": "preset" if args.model_id is not None else "profile" if args.profile else "legacy",
+                "selection_mode": "automatic" if automatic else "preset" if args.model_id is not None else "profile" if args.profile else "legacy",
                 "structured_output": config.structured_output,
                 "output_protocol": "flat-v1",
                 "structured_output_capability": capability,
@@ -398,7 +449,11 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
                         read_timeout=config.read_timeout or config.timeout or 180,
                         tls_mode=config.tls_mode)
         if args.check:
-            session = prepare_execution(text, task, backend, config.generation, execution,
+            prepare = prepare_execution
+            if automatic:
+                from .automatic_execution import prepare_automatic_execution
+                prepare = prepare_automatic_execution
+            session = prepare(text, task, backend, config.generation, execution,
                                         max_chars=args.max_chunk_chars, format_retries=config.format_retries,
                                         source_name=args.input.name, backend_identity=backend_identity,
                                         resume_from=args.resume, context=context, structure=structure)

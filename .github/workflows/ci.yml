@@ -41,6 +41,7 @@ jobs:
           wheel = next(Path("dist").glob("attestextract-*.whl")).resolve()
           acceptance_script = Path("scripts/d2_acceptance.py").resolve()
           selection_script = Path("scripts/model_selection_smoke.py").resolve()
+          minimal_script = Path("scripts/minimal_api_smoke.py").resolve()
           execution_script = Path("scripts/execution_smoke.py").resolve()
           format_script = Path("scripts/format_recovery_smoke.py").resolve()
           structured_script = Path("scripts/structured_output_smoke.py").resolve()
@@ -88,7 +89,7 @@ jobs:
               assert set(examples) == {"ccus", "procurement"}
               for name, count in (("ccus", 2), ("procurement", 3)):
                   result = examples[name]
-                  assert result["package_version"] == "0.1.0.dev24"
+                  assert result["package_version"] == "0.1.0.dev25"
                   assert result["run"]["mode"] == "replay"
                   assert len(result["candidates"]) == count
                   assert result["review"] == []
@@ -98,7 +99,7 @@ jobs:
               assert set(archives) == {"attribute", "observation", "relation"}
               for name, candidate_count, record_count in (("attribute", 2, 1), ("observation", 2, 2), ("relation", 1, 1)):
                   archive = archives[name]
-                  assert archive["extraction"]["package_version"] == "0.1.0.dev24"
+                  assert archive["extraction"]["package_version"] == "0.1.0.dev25"
                   assert archive["extraction"]["run"]["mode"] == "replay"
                   assert len(archive["extraction"]["candidates"]) == candidate_count
                   assert len(archive["records"]) == record_count
@@ -112,10 +113,19 @@ jobs:
               subprocess.run([str(python), str(copied), "--mode", "mock", "--output-dir", str(acceptance)],
                              check=True, cwd=root, env=env)
               summary = json.loads((acceptance / "summary.json").read_text(encoding="utf-8"))
-              assert summary["package_version"] == "0.1.0.dev24"
+              assert summary["package_version"] == "0.1.0.dev25"
               assert summary["passed"] and summary["real_endpoint_calls"] == 0
               assert summary["mock_http_calls"] == 3
               assert [case["candidate_count"] for case in summary["cases"]] == [1, 2, 1]
+              minimal_copy = scripts / "minimal_api_smoke.py"
+              shutil.copyfile(minimal_script, minimal_copy)
+              minimal_output = root / "minimal-api"
+              subprocess.run([str(python), str(minimal_copy), "--output-dir", str(minimal_output)],
+                             check=True, cwd=root, env=env)
+              minimal = json.loads((minimal_output / "summary.json").read_text(encoding="utf-8"))
+              assert minimal["passed"] and minimal["real_endpoint_calls"] == 0
+              assert minimal["mock_model_posts"] == 15
+              assert Path(minimal["module_path"]).is_relative_to(environment)
               selection_copy = scripts / "model_selection_smoke.py"
               shutil.copyfile(selection_script, selection_copy)
               selection_output = root / "model-selection"
@@ -196,7 +206,7 @@ jobs:
                               "--output-dir", str(tls_output)], check=True, cwd=root, env=env)
               tls = json.loads((tls_output / "summary.json").read_text(encoding="utf-8"))
               assert tls["passed"] and tls["real_endpoint_calls"] == 0 and tls["loopback_only"]
-              assert tls["package_version"] == "0.1.0.dev24"
+              assert tls["package_version"] == "0.1.0.dev25"
               assert tls["local_model_posts"] == 4 and tls["probe_attempts"] == 4
               assert tls["environment_restored"] and Path(tls["module_path"]).is_relative_to(environment)
               assert [case.get("actual_tls_version") for case in tls["cases"][:2]] == ["TLSv1.2", "TLSv1.3"]
