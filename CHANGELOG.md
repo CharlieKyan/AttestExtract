@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.0.dev27
+
+- Replace automatic table-field correction with `observe_only` delivery. Preserve every legal parsed record, its fields, citations and ordering; diagnose unknown or missing task fields without deleting or inventing them.
+- Resolve source locations separately from model declarations and check literal completeness, units and relationships without rewriting values or evidence. Duplicate facts and historical conflicts are annotations, not merges or replacements.
+- Version results as `table-route-v3` and experiments as `table-a-0.3`. Remove the executable strict-result/correction view while preserving read-only imports of earlier saved A responses; ordinary extraction defaults and model prompts stay unchanged.
+- Separate delivery fidelity, evidence checks and frozen-reference scoring. Add a task-scoped format-equivalence metric for outer whitespace and a single math-dollar wrapper, without changing original scores, references or evidence.
+- Keep partial record isolation and whole-response failures. Release validation uses synthetic tests and saved real responses offline, with no new paid model calls or automatic Jev verification.
+
 ## 0.1.0.dev26
 
 - Add a separate, A-only scientific-table experiment entry point with synthetic examples, immutable saved-response imports and source-linked reports. Ordinary extraction defaults remain unchanged.

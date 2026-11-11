@@ -51,7 +51,7 @@ def test_frozen_four_cases_has_four_a_slots_and_no_answer_leak(tmp_path, monkeyp
         item["gold"] = [{"secret_answer": "DO_NOT_SEND_REFERENCE_ANSWER"}]
     manifest = runner.prepare_bundle(root, cases)
     bundle = runner.load_bundle(root)
-    assert manifest["schema_version"] == "table-a-0.2"
+    assert manifest["schema_version"] == "table-a-0.3"
     assert manifest["max_calls"] == 4
     assert len(bundle["requests"]) == 4
     assert "DO_NOT_SEND_REFERENCE_ANSWER" not in json.dumps(bundle["requests"])
@@ -181,3 +181,40 @@ def test_report_entrypoint_works_and_refuses_tampered_trial(prepared):
     response.write_text('{"text":"changed"}', encoding="utf-8")
     with pytest.raises(ConfigurationError, match="evidence changed"):
         runner.write_report(prepared)
+
+
+@pytest.mark.parametrize("schema", ["table-a-0.2", "table-a-0.1"])
+def test_previous_a_manifests_are_readonly_but_can_import_saved_responses(prepared, tmp_path, schema):
+    runner.run_bundle(prepared)
+    manifest = runner.read_json(prepared / "manifest.json")
+    manifest["schema_version"] = schema
+    manifest.pop("processing_policy", None)
+    (prepared / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    before = {p.relative_to(prepared).as_posix(): p.read_bytes() for p in prepared.rglob("*") if p.is_file()}
+    with pytest.raises(ConfigurationError, match="Previous bundles are read-only"):
+        runner.run_bundle(prepared)
+    imported = tmp_path / "imported"
+    new = runner.fork_replay(prepared, imported, {})
+    assert new["schema_version"] == "table-a-0.3" and new["replay_only"] is True
+    assert runner.run_bundle(imported)["statuses"] == {"success": 1}
+    assert before == {p.relative_to(prepared).as_posix(): p.read_bytes() for p in prepared.rglob("*") if p.is_file()}
+
+
+def test_new_runner_results_are_v3_with_original_fields_and_no_strict_view(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner, "runtime_identity", lambda: {"test": "stable"})
+    examples = Path(__file__).parents[1] / "src/attestextract/examples/table_routes/cases.json"
+    item = json.loads(examples.read_text(encoding="utf-8"))[0]
+    root = tmp_path / "observe"
+    runner.prepare_bundle(root, [item])
+    summary = runner.run_bundle(root)
+    assert summary["statuses"] == {"success": 1}
+    assert summary["quality_summary"]["delivery_fidelity"]["changed_records"] == 0
+    trial = root / "trials" / f'r1-{item["id"]}-A'
+    parsed = runner.read_json(trial / "parsed.json")
+    result = runner.read_json(trial / "results.json")
+    assert result["schema_version"] == "table-route-v3"
+    assert result["processing_policy"] == "observe_only"
+    for candidate, raw in zip(result["candidates"], parsed["records"]):
+        assert all(candidate[key] == value for key, value in raw.items())
+    for name in ("evaluation.json", "reconciliation.json", "results.json"):
+        assert not {"current_results", "changes", "all_changes"} & runner.read_json(trial / name).keys()

@@ -81,7 +81,8 @@ def test_mechanical_errors_and_risks_remain_visible_and_separate(tmp_path):
     assert all(value["affected_records"] == value["diagnostics"] == 1
                for value in quality["check_categories"].values())
     html = render_table_report(root)
-    assert "明确的格式或原文检查问题" in html and "需要优先检查的具体风险" in html
+    assert "格式与原文字面检查" in html and "需要优先检查的具体风险" in html
+    assert "未确认不等于数值错误" in html
     assert "literal_incomplete" in html and "group_identity_narrowed" in html
 
 

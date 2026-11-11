@@ -40,23 +40,29 @@ def measurement(reading, selected=None):
     ("10至20", "10"), ("≤10", "10"), (">=10", "10"), (r"\leq 10", "10"),
     ("≈10", "10"), ("12 (n=3)", "3"), ("12 (n=3)", "12"),
     ("12（n=3）", "3"), ("1e-3 ± 2e-4", "1e-3"),
+    (r"3 \times 10^{-15}", "3"), ("3 × 10^-15", "3"), ("10 ^ 3", "10"),
+    (r"3 \times 10^{-15}", "10"), (r"3 \times 10^{-15}", "-15"),
+    (r"3 \times 10^{-15}", "15"), ("10 ^ 3", "3"),
+    (r"3 \times 10 ^ { -15 }", "3"), ("3 * 10^-15", "3"),
 ])
 def test_selected_number_cannot_drop_an_explicit_qualifier(reading, selected):
     table, record = measurement(reading, selected)
     before = deepcopy(record)
     result = evaluate_route("A", {"records": [record]}, table, task())
-    assert result["current_results"] == []
+    assert result["candidates"] and result["issues"]
     assert "partial_literal_selection" in {item["code"] for item in result["issues"]}
     assert result["records"][0]["fields"]["value"]["sources"] == record["fields"]["value"]["sources"]
     assert record == before
 
 
-@pytest.mark.parametrize("reading", ["12±3", "10–20", "≤10", "12 (n=3)", r"12 \pm 3", "-12", "1e-3"])
+@pytest.mark.parametrize("reading", ["12±3", "10–20", "≤10", "12 (n=3)", r"12 \pm 3", "-12", "1e-3",
+                                      r"3 \times 10^{-15}", "3 × 10^-15", "10 ^ 3",
+                                      r"3 \times 10 ^ { -15 }", "3 * 10^-15"])
 def test_complete_measurement_expression_is_preserved(reading):
     table, record = measurement(reading)
     result = evaluate_route("A", {"records": [record]}, table, task())
     assert result["issues"] == []
-    assert result["current_results"][0]["values"]["value"] == reading
+    assert result["candidates"][0]["values"]["value"] == reading
 
 
 @pytest.mark.parametrize("reading,selected", [("first=12; second=18", "12"),
@@ -70,7 +76,7 @@ def test_unrelated_same_cell_fact_and_non_numeric_annotation_remain_selectable(r
     table, record = measurement(reading, selected)
     result = evaluate_route("A", {"records": [record]}, table, task())
     assert result["issues"] == []
-    assert result["current_results"][0]["values"]["value"] == selected
+    assert result["candidates"][0]["values"]["value"] == selected
 
 
 def group_record(label="A and B", value="A and B", quote=None):
@@ -95,7 +101,7 @@ def test_group_total_cannot_be_assigned_to_one_cited_member(label, value, quote)
     table, record = group_record(label, value, quote)
     before = deepcopy(record)
     result = evaluate_route("A", {"records": [record]}, table, task())
-    assert result["current_results"] == []
+    assert result["candidates"] and result["issues"]
     assert "group_identity_narrowed" in {item["code"] for item in result["issues"]}
     assert record == before
 
@@ -107,7 +113,7 @@ def test_complete_group_identity_and_supported_expansion_remain_usable(label, va
     table, record = group_record(label, value)
     result = evaluate_route("A", {"records": [record]}, table, task())
     assert result["issues"] == []
-    assert result["current_results"][0]["values"]["object"] == value
+    assert result["candidates"][0]["values"]["object"] == value
 
 
 def test_shared_identity_is_not_mistaken_for_a_collective_measurement():
@@ -121,4 +127,4 @@ def test_shared_identity_is_not_mistaken_for_a_collective_measurement():
                     "unit": binding(table, "m", "Length/m", "column", "m")}} for value in ("10", "20")]
     result = evaluate_route("A", {"records": records}, table, task())
     assert result["issues"] == []
-    assert len(result["current_results"]) == 2
+    assert len(result["candidates"]) == 2

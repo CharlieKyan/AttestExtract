@@ -7,6 +7,7 @@ The ordinary extraction defaults and archived reviews are not modified.
 from __future__ import annotations
 
 from copy import deepcopy
+from decimal import Decimal
 from collections import Counter
 import json
 import math
@@ -211,17 +212,14 @@ def _resolve(selection: dict, lookup: dict) -> dict:
             "selected_end": entry["start"] + offset + len(quote)}
 
 
-def _resolve_working_selection(selection: dict, lookup: dict, changes: list,
-                               record_id: str, field: str, path: str) -> dict:
-    """Record a unique exact position repair on a working selection, never raw output."""
+def _observe_selection(selection: dict, lookup: dict, issues: list,
+                       record_id: str, field: str, path: str) -> dict:
+    """Locate a quotation without changing the model's reference or offset."""
     resolved = _resolve(selection, lookup)
     actual_offset = resolved["selected_start"] - resolved["start"]
     if selection.get("offset") is not None and selection["offset"] != actual_offset:
-        before = deepcopy(selection)
-        selection["offset"] = actual_offset
-        changes.append({"record_id": record_id, "field": field, "path": path,
-                        "before": before, "after": deepcopy(selection),
-                        "reason": "source_offset_corrected"})
+        issues.append(_problem("source_offset_mismatch", record_id, field, path=path,
+                               source=deepcopy(selection), located_offset=actual_offset))
     return resolved
 
 
@@ -244,22 +242,6 @@ def _related(source: dict, anchor: dict, relation: str) -> bool:
             source["row"] + source["rowspan"] >= anchor["row"] + anchor["rowspan"])
 
 
-def _read_value(source: dict, field_type: str):
-    text = source["selected_quote"]
-    if field_type == "string":
-        return text
-    if field_type in {"number", "integer"}:
-        # No hidden unit conversion, arithmetic, or extraction from surrounding prose.
-        if not re.fullmatch(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?", text):
-            raise ValueError("numeric_source_not_literal")
-        value = float(text) if field_type == "number" else int(text)
-        if field_type == "number" and (value != value or abs(value) == float("inf")):
-            raise ValueError("numeric_source_not_finite")
-        return value
-    if text not in {"true", "false"}:
-        raise ValueError("boolean_source_not_literal")
-    return text == "true"
-
 
 def _partial_numeric_expression(text: str, start: int, end: int) -> bool:
     """Reject a fragment of an explicit qualified number, without rewriting it.
@@ -271,8 +253,11 @@ def _partial_numeric_expression(text: str, start: int, end: int) -> bool:
     pair = number + r"\s*(?:±|\+\s*/\s*-|\\pm\b|[–—~～−-]|\bto\b|至)\s*" + number
     qualified = r"(?:[≤≥<>≈≃]|<=|>=|\\(?:leq?|geq?|approx)\b)\s*" + number
     statistic = number + r"\s*[（(]\s*[nN]\s*=\s*" + number + r"\s*[)）]"
+    exponent = r"\^\s*(?:\{\s*[+-]?\d+\s*\}|[+-]?\d+)"
+    power = number + r"\s*" + exponent
+    scientific = number + r"\s*(?:\\times\b|×|\*)\s*10\s*" + exponent
     markup = [match.span() for match in re.finditer(r"</?[A-Za-z][^<>]*>", text)]
-    for expression in (pair, qualified, statistic):
+    for expression in (pair, qualified, statistic, scientific, power):
         for match in re.finditer(expression, text):
             if expression == qualified and any(a <= match.start() < b for a, b in markup):
                 continue  # The '>' in <b>12</b> is markup, not a numerical bound.
@@ -293,14 +278,21 @@ This is a lexical boundary guard, not mathematical equivalence or unit conversio
     selected = source["selected_quote"]
     if unit:
         attached = r"[A-Za-z0-9µμΩ°]"
-        prefix = before.rstrip()
+        prefix = re.sub(r"\\(?:text|mathrm)\{$", "", before.rstrip()).rstrip()
         continuation = prefix.endswith(("*", "·"))
         if prefix.endswith("/"):
             tokens = re.findall(r"[A-Za-zµμΩ°%][A-Za-z0-9µμΩ°%^+-]*", prefix[:-1])
             continuation = bool(tokens and _unit_expression(tokens[-1]))
+        # Recognize explicit adjacent unit factors without rewriting TeX or
+        # treating ordinary prose such as "m (dry)" as a compound expression.
+        token = r"[A-Za-zµμΩ°%]+(?:\^\{?[+-]?\d+\}?|[+-]?\d+|[⁰¹²³⁴⁵⁶⁷⁸⁹⁻⁺]+)?"
+        following = re.match(r"\s+(" + token + r")(?![A-Za-z0-9])", after)
+        preceding = re.search(r"(" + token + r")\s+$", before)
+        spaced_factor = any(match and _unit_expression(re.sub(r"[{}]", "", match.group(1)))
+                            for match in (following, preceding))
         return bool((before and re.search(r"[A-Za-zµμΩ°]$", before)) or
-                    continuation or
-                    (after and (re.match(attached + r"|\s*[/^*·]|<sup|\s*\$?\s*\^", after))))
+                    continuation or spaced_factor or
+                    (after and re.match(attached + r"|[⁰¹²³⁴⁵⁶⁷⁸⁹⁻⁺]|\s*[/^*·]|<sup|\s*\$?\s*\^|\}\s*[/^*·]", after)))
     if _partial_numeric_expression(source["quote"], start, end):
         return True
     if not re.fullmatch(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?", selected):
@@ -316,14 +308,9 @@ def _subselection(source: dict, start: int, end: int) -> dict:
             "selected_end": source["selected_start"] + end}
 
 
-def _selection_from_resolved(source: dict) -> dict:
-    return {"ref": source["ref"], "quote": source["selected_quote"],
-            "offset": (None if len(_exact_positions(source["quote"], source["selected_quote"])) == 1
-                       else source["selected_start"] - source["start"])}
-
 
 def _unit_expression(text: str) -> bool:
-    """A small lexical grammar for mechanical correction, not unit conversion.
+    """A small lexical grammar for checking complete units, not unit conversion.
 
     Unknown units can still be retained by an exact supported value. They are not
     inferred as replacements for an incorrect value by this limited grammar.
@@ -333,72 +320,33 @@ def _unit_expression(text: str) -> bool:
     return bool(re.fullmatch(powered + r"(?:\s*[/·.*]\s*" + powered + r")*", text))
 
 
-def _literal_source(source: dict, value: Scalar, *, unit: bool) -> dict:
-    """Separate an evidence passage from its scalar value without changing raw output."""
+def _literal_support(source: dict, value: Scalar, *, unit: bool, field_type: str) -> dict:
+    """Check a claim inside its cited passage; return evidence, never a new value."""
     if _literal_boundary_problem(source, unit=unit):
         raise ValueError("partial_literal_selection")
-    # This repair concerns units. Preserve complete numeric/range/statistical
-    # quotations; narrowing them could discard bounds, uncertainty or qualifiers.
-    if not unit:
-        return source
     text = source["selected_quote"]
-    if unit and re.search(r"[;,；，\n]", text):
+    claimed = ("true" if value else "false") if type(value) is bool else str(value)
+    # JSON numbers may have different lexical spellings without being changed.
+    if field_type in {"number", "integer"} and re.fullmatch(
+            r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?", text):
+        if Decimal(text) == Decimal(str(value)):
+            return source
+    if unit and claimed == text and not _unit_expression(text) and re.search(r"[/()（）;,；，\n]", text):
         raise ValueError("unit_source_not_scalar")
-    if unit and _unit_expression(text):
-        return source
-    claimed = str(value) if value is not None else ""
-    if unit and claimed == text and re.search(r"[/()（）]", text):
-        # A complete non-unit header is not made a scalar merely by repeating it
-        # as the claimed value. Unknown compound syntax remains unresolved.
-        raise ValueError("unit_source_not_scalar")
-    matches = []
-    if claimed:
-        for match in re.finditer(re.escape(claimed), text):
-            candidate = _subselection(source, match.start(), match.end())
-            if not _literal_boundary_problem(candidate, unit=unit):
-                matches.append(candidate)
-    if len(matches) == 1:
-        return matches[0]
-    if len(matches) > 1:
+    positions = _exact_positions(text, claimed) if claimed else []
+    matches = [_subselection(source, pos, pos + len(claimed)) for pos in positions]
+    complete = [candidate for candidate in matches if not _literal_boundary_problem(candidate, unit=unit)]
+    if len(complete) == 1:
+        return complete[0]
+    if len(complete) > 1:
         raise ValueError("literal_source_ambiguous")
-    # A broad header is evidence, not the unit itself. Only infer a replacement
-    # from explicit trailing unit syntax after the supported claim check fails.
-    explicit = []
-    if unit:
-        parenthesized = re.search(r"[（(]\s*([^()（）]+?)\s*[)）]\s*$", text)
-        prefix_tokens = [] if not parenthesized else re.findall(
-            r"[A-Za-zµμΩ°%][A-Za-z0-9µμΩ°%^+-]*", text[:parenthesized.start()].rstrip("/ "))
-        denominator = bool(parenthesized and text[:parenthesized.start()].rstrip().endswith("/") and
-                           prefix_tokens and _unit_expression(prefix_tokens[-1]))
-        if parenthesized and not denominator and _unit_expression(parenthesized.group(1)):
-            explicit.append(_subselection(source, parenthesized.start(1), parenthesized.end(1)))
-        if "/" in text:
-            prefix, suffix = text.split("/", 1)
-            stripped = suffix.strip()
-            prefix_tokens = re.findall(r"[A-Za-zµμΩ°%][A-Za-z0-9µμΩ°%^+-]*", prefix)
-            ends_in_unit = bool(prefix_tokens and _unit_expression(prefix_tokens[-1]))
-            if prefix.strip() and not ends_in_unit and _unit_expression(stripped):
-                start = text.index("/") + 1 + len(suffix) - len(suffix.lstrip())
-                explicit.append(_subselection(source, start, start + len(stripped)))
-        if explicit:
-            choices = {(item["selected_start"], item["selected_end"]): item for item in explicit}
-            if len(choices) == 1:
-                return next(iter(choices.values()))
-            raise ValueError("literal_source_ambiguous")
-    if unit and not _unit_expression(text):
-        raise ValueError("unit_source_not_scalar")
-    return source
-
-
-def _correct_relation(binding: dict, sources: list[dict], anchors: list[dict]) -> str | None:
-    """Correct only a mislabeled anchor/cell relation with one unambiguous axis."""
-    if binding["relation"] not in {"anchor", "cell"} or not sources or not anchors:
-        return None
-    if all(_related(s, a, binding["relation"]) for s in sources for a in anchors):
-        return None
-    axes = [axis for axis in ("row", "column")
-            if all(_related(s, a, axis) for s in sources for a in anchors)]
-    return axes[0] if len(axes) == 1 else None
+    if matches:
+        raise ValueError("partial_literal_selection")
+    # No TeX/HTML normalization is performed on scientific evidence. Such syntax
+    # needs review rather than a fabricated coordinate or a false literal pass.
+    if any(token in claimed for token in ("$", "\\", "<sup")):
+        raise ValueError("literal_not_confirmed")
+    raise ValueError("literal_value_mismatch")
 
 
 def _group_identity_narrowed(value: Scalar, sources: list[dict]) -> bool:
@@ -466,168 +414,151 @@ def _check_record(record: dict, table_input: dict, task: TaskSpec) -> dict:
     record = deepcopy(record)
     lookup = {entry["ref"]: entry for entry in table_input["entries"]}
     rid = record["record_id"]
-    issues, changes, fields, anchors = [], [], {}, []
+    issues, fields, anchors, scope_entries, literal_checks, literal_evidence = [], {}, [], [], {}, {}
     spec = task.record_types.get(record["record_type"])
     if spec is None:
-        return {**record, "values": {name: binding["value"] for name, binding in record["fields"].items()},
-                "issues": [_problem("unknown_record_type", rid)], "changes": [], "status": "unresolved"}
-    for index, selection in enumerate(record["anchors"]):
-        try:
-            anchor = _resolve_working_selection(selection, lookup, changes, rid, "anchors",
-                                                f"anchors[{index}]")
-            if anchor["kind"] != "cell":
-                raise ValueError("anchor_not_cell")
-            anchors.append(anchor)
-        except ValueError as exc:
-            issues.append(_problem(str(exc), rid, "anchors", source=selection))
-    scope_entries = []
-    for index, selection in enumerate(record["scope_sources"]):
-        try:
-            scope_entries.append(_resolve_working_selection(
-                selection, lookup, changes, rid, "scope_sources", f"scope_sources[{index}]"))
-        except ValueError as exc:
-            issues.append(_problem(str(exc), rid, "scope_sources", source=selection))
+        issues.append(_problem("unknown_record_type", rid))
+    for field, selections, resolved in (("anchors", record["anchors"], anchors),
+                                         ("scope_sources", record["scope_sources"], scope_entries)):
+        for index, selection in enumerate(selections):
+            try:
+                source = _observe_selection(selection, lookup, issues, rid, field, f"{field}[{index}]")
+                if field == "anchors" and source["kind"] != "cell":
+                    raise ValueError("anchor_not_cell")
+                resolved.append(source)
+            except ValueError as exc:
+                issues.append(_problem(str(exc), rid, field, source=deepcopy(selection)))
     if record["scope"] in {"group", "each"} and not record["scope_sources"]:
         issues.append(_problem("scope_evidence_missing", rid))
     if record["scope"] == "each":
+        # Keep negation in the same cited entry visible even if the model quotes
+        # only "each" inside "not each". This does not search another entry.
         wording = " ".join(s["quote"] for s in scope_entries)
         if not re.search(r"\b(each|every|all)\b|每|均|各", wording, re.I):
             issues.append(_problem("distributive_wording_missing", rid))
         if re.search(r"\b(not|no|neither|except|unless)\b|并非|不是|不均|不适用|除外|仅", wording, re.I):
             issues.append(_problem("distributive_wording_negated_or_conditional", rid))
-    value_fields = {m.value_field for m in spec.measurement_groups.values()}
-    value_fields.update(name for name, f in spec.fields.items() if f.type != "string")
-    literal_fields = value_fields | {m.unit_field for m in spec.measurement_groups.values()}
-    unit_fields = {m.unit_field for m in spec.measurement_groups.values()}
-    for name in record["fields"].keys() - spec.fields.keys():
-        issues.append(_problem("unknown_field", rid, name))
-    for name, field_spec in spec.fields.items():
-        binding = deepcopy(record["fields"].get(name))
-        if binding is None:
+    value_fields = set() if spec is None else {m.value_field for m in spec.measurement_groups.values()}
+    if spec is not None:
+        value_fields.update(name for name, f in spec.fields.items() if f.type != "string")
+    unit_fields = set() if spec is None else {m.unit_field for m in spec.measurement_groups.values()}
+    literal_fields = value_fields | unit_fields
+    if spec is not None:
+        for name in spec.fields.keys() - record["fields"].keys():
             issues.append(_problem("missing_field", rid, name))
-            continue
-        value = binding["value"]
-        sources = []
-        required = field_spec.required or any(record["fields"].get(k, {}).get("value") in vals
-                                             for k, vals in field_spec.required_when.items())
+    for name, binding in record["fields"].items():
+        value, sources = binding["value"], []
+        field_spec = None if spec is None else spec.fields.get(name)
+        if spec is not None and field_spec is None:
+            issues.append(_problem("unknown_field", rid, name))
+        required = field_spec is not None and (field_spec.required or any(
+            record["fields"].get(k, {}).get("value") in vals for k, vals in field_spec.required_when.items()))
+        literal_checks[name] = "not_confirmed" if name in literal_fields else "not_applicable"
         if value is None:
             if required:
                 issues.append(_problem("required_value_missing", rid, name))
+                literal_checks[name] = "failed" if name in literal_fields else "not_applicable"
+            elif not binding["sources"]:
+                literal_checks[name] = "not_applicable"
             if binding["sources"]:
                 issues.append(_problem("null_with_sources", rid, name))
             fields[name] = {**binding, "resolved_sources": []}
             continue
         if not binding["sources"]:
             issues.append(_problem("field_source_missing", rid, name))
-        if any(record["fields"].get(k, {}).get("value") in vals
-               for k, vals in field_spec.not_applicable_when.items()):
+        if field_spec is not None and any(record["fields"].get(k, {}).get("value") in vals
+                                          for k, vals in field_spec.not_applicable_when.items()):
             issues.append(_problem("field_not_applicable", rid, name))
-        resolved_selections = []
         for index, selection in enumerate(binding["sources"]):
             try:
-                src = _resolve_working_selection(selection, lookup, changes, rid, name,
-                                                 f"fields.{name}.sources[{index}]")
-                sources.append(src)
-                resolved_selections.append(selection)
+                source = _observe_selection(selection, lookup, issues, rid, name, f"fields.{name}.sources[{index}]")
+                sources.append(source)
+                if not any(_related(source, anchor, binding["relation"]) for anchor in anchors):
+                    issues.append(_problem("relation_geometry_mismatch", rid, name, source=deepcopy(selection)))
             except ValueError as exc:
-                issues.append(_problem(str(exc), rid, name, source=selection))
-        if record["scope"] == "group" and name in spec.identity_fields and _group_identity_narrowed(value, sources):
-            issues.append(_problem("group_identity_narrowed", rid, name))
-        correction = _correct_relation(binding, sources, anchors) if name not in value_fields else None
-        if correction:
-            changes.append({"record_id": rid, "field": name, "before": binding["relation"],
-                            "after": correction, "reason": "relation_label_corrected",
-                            "sources": deepcopy(binding["sources"])})
-            binding["relation"] = correction
-        for source, selection in zip(sources, resolved_selections):
-            if not any(_related(source, a, binding["relation"]) for a in anchors):
-                issues.append(_problem("relation_geometry_mismatch", rid, name, source=selection))
+                issues.append(_problem(str(exc), rid, name, source=deepcopy(selection)))
+        fields[name] = {**binding, "resolved_sources": sources}
+        if spec is not None and record["scope"] == "group" and name in spec.identity_fields:
+            if _group_identity_narrowed(value, sources):
+                issues.append(_problem("group_identity_narrowed", rid, name))
         types = {"string": (str,), "number": (int, float), "integer": (int,), "boolean": (bool,)}
-        if type(value) not in types[field_spec.type]:
+        type_valid = field_spec is None or type(value) in types[field_spec.type]
+        if not type_valid:
             issues.append(_problem("field_type_mismatch", rid, name))
-        if name in literal_fields:
-            if len(sources) != 1:
-                issues.append(_problem("literal_source_not_unique", rid, name))
-            else:
-                try:
-                    refined = _literal_source(sources[0], value, unit=name in unit_fields)
-                    if (refined["selected_start"], refined["selected_end"]) != (
-                            sources[0]["selected_start"], sources[0]["selected_end"]):
-                        replacement = _selection_from_resolved(refined)
-                        changes.append({"record_id": rid, "field": name, "before": binding["sources"][0],
-                                        "after": replacement, "reason": "source_refined"})
-                        binding["sources"] = [replacement]
-                        sources = [refined]
-                except ValueError as exc:
-                    issues.append(_problem(str(exc), rid, name))
-                    fields[name] = {**binding, "value": value, "resolved_sources": sources}
+        if name not in literal_fields:
+            continue
+        if len(sources) != 1 or len(binding["sources"]) != 1:
+            issues.append(_problem("literal_source_not_unique", rid, name))
+        elif type_valid:
+            try:
+                support = _literal_support(sources[0], value, unit=name in unit_fields, field_type=field_spec.type)
+                literal_evidence[name] = support
+                if name in value_fields and not any(anchor["ref"] == support["ref"] and
+                        anchor["selected_start"] <= support["selected_start"] and
+                        support["selected_end"] <= anchor["selected_end"] for anchor in anchors):
+                    raise ValueError("literal_source_not_anchored")
+                literal_checks[name] = "passed"
+            except ValueError as exc:
+                code = str(exc)
+                issues.append(_problem(code, rid, name))
+                literal_checks[name] = ("not_confirmed" if code in {
+                    "literal_not_confirmed", "literal_source_ambiguous", "literal_source_not_anchored"} else "failed")
+        else:
+            literal_checks[name] = "failed"
+        if name in value_fields and len(sources) == 1:
+            source = sources[0]
+            if source["kind"] == "cell" and (source["rowspan"] > 1 or source["colspan"] > 1):
+                if record["scope"] == "individual":
+                    issues.append(_problem("merged_measurement_scope_unresolved", rid, name))
+                if record["scope"] == "group":
+                    for identity in spec.identity_fields:
+                        owner_binding = fields.get(identity, record["fields"].get(identity, {}))
+                        direction = owner_binding.get("relation")
+                        if direction == "context":
+                            continue
+                        for selection in record["fields"].get(identity, {}).get("sources", []):
+                            try:
+                                owner = _resolve(selection, lookup)
+                                axis, extent = ("column", "colspan") if direction == "column" else ("row", "rowspan")
+                                if owner["kind"] == "cell" and not (owner[axis] <= source[axis] and
+                                        owner[axis] + owner[extent] >= source[axis] + source[extent]):
+                                    issues.append(_problem("group_measurement_assigned_to_member", rid, identity))
+                            except ValueError:
+                                pass  # Resolution failures are reported for the original binding.
+    if spec is not None:
+        for group in spec.measurement_groups.values():
+            observations = fields.get(group.value_field, {}).get("resolved_sources", [])
+            shared = set(spec.identity_fields + spec.condition_fields + group.condition_fields + [group.unit_field])
+            for name in shared:
+                binding = fields.get(name)
+                if binding is None or binding["value"] is None:
                     continue
-                if name in value_fields and not any(a["ref"] == sources[0]["ref"] and
-                           a["selected_start"] <= sources[0]["selected_start"] and
-                           sources[0]["selected_end"] <= a["selected_end"] for a in anchors):
-                    issues.append(_problem("literal_source_not_anchored", rid, name))
-                try:
-                    read = _read_value(sources[0], field_spec.type)
-                    if value != read:
-                        changes.append({"record_id": rid, "field": name, "before": value, "after": read,
-                                        "reason": "read_original_source", "source": binding["sources"][0]})
-                        value = read
-                except ValueError:
-                    issues.append(_problem("literal_source_invalid", rid, name))
-                a = sources[0]
-                if name in value_fields and a["kind"] == "cell" and (a["rowspan"] > 1 or a["colspan"] > 1):
-                    if record["scope"] == "individual":
-                        issues.append(_problem("merged_measurement_scope_unresolved", rid, name))
-                    if record["scope"] == "group":
-                        for identity in spec.identity_fields:
-                            direction = fields.get(identity, record["fields"].get(identity, {})).get("relation")
-                            if direction == "context":
-                                continue
-                            for sel in record["fields"].get(identity, {}).get("sources", []):
-                                try:
-                                    owner = _resolve(sel, lookup)
-                                    axis, extent = ("column", "colspan") if direction == "column" else ("row", "rowspan")
-                                    if owner["kind"] == "cell" and not (
-                                        owner[axis] <= a[axis] and owner[axis] + owner[extent] >= a[axis] + a[extent]):
-                                        issues.append(_problem("group_measurement_assigned_to_member", rid, identity))
-                                except ValueError:
-                                    pass  # The ordinary field loop reports this invalid source.
-        fields[name] = {**binding, "value": value, "resolved_sources": sources}
-    # A record can contain multiple observations only when its shared identity and
-    # conditions actually apply to EACH measurement, not merely to one arbitrary anchor.
-    for group in spec.measurement_groups.values():
-        observations = fields.get(group.value_field, {}).get("resolved_sources", [])
-        shared = set(spec.identity_fields + spec.condition_fields + group.condition_fields + [group.unit_field])
-        for name in shared:
-            binding = fields.get(name)
-            if binding is None or binding["value"] is None:
-                continue
-            for observation in observations:
-                if any(not _related(source, observation, binding["relation"])
-                       for source in binding["resolved_sources"]):
-                    issues.append(_problem("measurement_scope_mismatch", rid, name,
-                                           value_field=group.value_field))
-    issues.extend(_mixed_condition_issues(fields, spec, rid))
-    return {**record, "fields": fields, "values": {k: v["value"] for k, v in fields.items()},
-            "resolved_anchors": anchors, "issues": issues, "changes": changes,
-            "status": "source_checked" if not issues else "unresolved"}
+                for observation in observations:
+                    if any(not _related(source, observation, binding["relation"]) for source in binding["resolved_sources"]):
+                        issues.append(_problem("measurement_scope_mismatch", rid, name, value_field=group.value_field))
+        issues.extend(_mixed_condition_issues(fields, spec, rid))
+    return {**record, "values": {k: v["value"] for k, v in record["fields"].items()},
+            "resolved_fields": {k: v["resolved_sources"] for k, v in fields.items()},
+            "resolved_anchors": anchors, "resolved_scope_sources": scope_entries,
+            "literal_evidence": literal_evidence, "literal_checks": literal_checks,
+            "issues": issues, "status": "extracted", "check_status": "issues_found" if issues else "checked"}
 
 
 _RELATION_WARNINGS = {
     "relation_geometry_mismatch", "measurement_scope_mismatch",
     "merged_measurement_scope_unresolved", "scope_evidence_missing",
-    "previous_record_not_uniquely_resolved",
+    "previous_record_not_uniquely_resolved", "duplicate_fact",
 }
 _RELATION_RISKS = {
     "group_identity_narrowed", "group_measurement_assigned_to_member",
     "distributive_wording_missing", "distributive_wording_negated_or_conditional",
-    "conflicting_checked_records",
+    "conflicting_checked_records", "historical_value_conflict",
     "mixed_measurement_conditions",
 }
 
 
 def _classify_issues(issues: list[dict]) -> dict:
-    """Classify diagnostics without weakening the historical strict gate."""
+    """Classify independent diagnostics without filtering delivered records."""
     return {
         "mechanical_errors": [i for i in issues if i["code"] not in _RELATION_WARNINGS | _RELATION_RISKS],
         "relationship_warnings": [i for i in issues if i["code"] in _RELATION_WARNINGS],
@@ -636,88 +567,54 @@ def _classify_issues(issues: list[dict]) -> dict:
 
 
 def _field_checks(record: dict, task: TaskSpec) -> dict:
-    """A literal check says nothing about scientific ownership or unit choice."""
+    """Report independent evidence checks; literal support is explicitly computed."""
     spec = task.record_types.get(record["record_type"])
-    literals = set()
-    if spec is not None:
-        literals = {m.value_field for m in spec.measurement_groups.values()}
-        literals.update(m.unit_field for m in spec.measurement_groups.values())
-        literals.update(name for name, field in spec.fields.items() if field.type != "string")
     checks = {}
-    names = set(record["fields"])
-    if spec is not None:
-        names.update(spec.fields)
+    names = set(record["fields"]) | (set() if spec is None else set(spec.fields))
     for name in sorted(names):
         binding = record["fields"].get(name)
         issues = [i for i in record["issues"] if i.get("field") in {None, name, "anchors", "scope_sources"}]
         classified = _classify_issues(issues)
-        if spec is None:
-            location, literal, relation = "not_checked", "not_checked", "not_confirmed"
-        elif binding is None:
-            location, literal, relation = "missing", "not_applicable", "not_confirmed"
+        literal = record["literal_checks"].get(name, "not_confirmed")
+        if binding is None:
+            location, relation = "missing", "not_confirmed"
         elif binding["value"] is None and not binding["sources"]:
-            if classified["mechanical_errors"]:
-                location, relation = "missing", "not_confirmed"
-                literal = "failed" if name in literals else "not_applicable"
-            else:
-                location, literal, relation = "not_applicable", "not_applicable", "not_applicable"
+            location = "missing" if any(i["code"] == "required_value_missing" for i in issues) else "not_applicable"
+            relation = "not_confirmed" if location == "missing" else "not_applicable"
         else:
-            resolved = binding.get("resolved_sources", [])
+            resolved = record["resolved_fields"].get(name, [])
             if any(i["code"] == "source_quote_ambiguous" and i.get("field") == name for i in issues):
                 location = "ambiguous"
             elif not binding["sources"] or len(resolved) != len(binding["sources"]):
                 location = "missing"
             else:
                 location = "located"
-            literal = "not_applicable"
-            if name in literals:
-                literal = "failed" if classified["mechanical_errors"] else "passed"
-            relation = "locally_supported" if location == "located" and not issues else "not_confirmed"
+            relation = "locally_supported" if location == "located" and not issues and spec is not None else "not_confirmed"
         checks[name] = {"quote_location": location, "literal_check": literal,
-                        "relation_check": relation, "semantic_verification": "not_run",
-                        **classified}
+                        "relation_check": relation, "semantic_verification": "not_run", **classified}
     return checks
 
 
 def _candidate_view(records: list[dict], originals: list[dict], indices: list[int],
                     evidence_id: str, task: TaskSpec, table_input: dict) -> list[dict]:
     candidates, seen = [], {}
-    lookup = {entry["ref"]: entry for entry in table_input["entries"]}
-
-    def ranges(sources):
-        return sorted((s["ref"], s["selected_start"], s["selected_end"]) for s in sources)
-
     for record, original, index in zip(records, originals, indices):
-        candidate = {**deepcopy(record), **deepcopy(_classify_issues(record["issues"])),
-                     "field_checks": _field_checks(record, task),
-                     "semantic_verification": "not_run", "evidence_ref": evidence_id,
+        candidate = {**deepcopy(record), "semantic_verification": "not_run", "evidence_ref": evidence_id,
                      "record_ids": [record["record_id"]], "input_indices": [index],
                      "original_records": [deepcopy(original)]}
-        # Do not coalesce unresolved facts: a missing anchor or differing evidence
-        # must remain individually inspectable, even when the scalar values match.
-        key = None
-        if record["status"] == "source_checked":
-            bindings = [(name, binding["relation"], ranges(binding["resolved_sources"]))
-                        for name, binding in sorted(record["fields"].items())]
-            key = json.dumps([record["record_type"], record["values"], record["scope"],
-                              ranges(record["resolved_anchors"]), bindings,
-                              ranges([_resolve(s, lookup) for s in record["scope_sources"]])],
-                             sort_keys=True, ensure_ascii=False)
-        if key is not None and key in seen:
-            existing = seen[key]
-            existing["record_ids"].append(record["record_id"])
-            existing["input_indices"].append(index)
-            existing["original_records"].append(deepcopy(original))
-            existing["changes"].extend(deepcopy(record["changes"]))
+        key = json.dumps({k: v for k, v in original.items() if k != "record_id"}, sort_keys=True, ensure_ascii=False)
+        if key in seen:
+            candidate["issues"].append(_problem("duplicate_fact", record["record_id"], duplicate_of=seen[key]))
+            candidate["check_status"] = "issues_found"
         else:
-            candidates.append(candidate)
-            if key is not None:
-                seen[key] = candidate
+            seen[key] = record["record_id"]
+        candidate.update(deepcopy(_classify_issues(candidate["issues"])))
+        candidate["field_checks"] = _field_checks(candidate, task)
+        candidates.append(candidate)
     return candidates
 
 
 def evaluate_route(stage: str, parsed: dict, table_input: dict, task: dict) -> dict:
-    # A partial parse carries diagnostic metadata, not additional model fields.
     if not isinstance(parsed, dict) or set(parsed) not in ({"records"}, {"records", "record_indices", "rejections"}):
         raise ValueError("Expected strict or partial table parse result")
     rejections = deepcopy(parsed.get("rejections", []))
@@ -727,69 +624,51 @@ def evaluate_route(stage: str, parsed: dict, table_input: dict, task: dict) -> d
     parsed = parse_route_response(stage, json.dumps({"records": parsed["records"]}, ensure_ascii=False))
     spec = TaskSpec.model_validate(task)
     records = [_check_record(record, table_input, spec) for record in parsed["records"]]
-    issues = [issue for record in records for issue in record["issues"]]
-    current = [r for r in records if r["status"] == "source_checked"]
-    # Deduplicate exact same source facts, but retain distinct conditions and scopes.
-    seen, unique = set(), []
-    for r in current:
-        ranges = sorted((a["ref"], a["selected_start"], a["selected_end"]) for a in r["resolved_anchors"])
-        key = json.dumps([r["record_type"], r["values"], ranges, r["scope"]], sort_keys=True, ensure_ascii=False)
-        if key not in seen:
-            unique.append(r)
-            seen.add(key)
     evidence_id = f'{table_input["source_sha256"]}:{table_input["table_id"]}'
     candidates = _candidate_view(records, parsed["records"], indices, evidence_id, spec, table_input)
-    status = "source_checked" if not issues else "issues_found"
+    issues = [issue for record in candidates for issue in record["issues"]]
+    status = "checked" if not issues else "issues_found"
     if rejections:
         status = "partial_format_error" if records else "format_error"
-    return {"stage": stage, "schema_version": "table-route-v2", "records": records,
-            "current_results": unique, "issues": issues,
-            "changes": [c for r in records if r["status"] == "source_checked" for c in r["changes"]],
-            "status": status,
+    return {"stage": stage, "schema_version": "table-route-v3", "processing_policy": "observe_only",
+            "records": deepcopy(candidates), "candidates": candidates, "issues": issues, "status": status,
             "semantic_acceptance": "not_expert_reviewed", "semantic_verification": "not_run",
-            "candidates": candidates, "parse_rejections": rejections,
-            "all_changes": [deepcopy(c) for r in records for c in r["changes"]],
-            "evidence": {"evidence_id": evidence_id, "table_input": deepcopy(table_input),
-                         "semantic_verification": "not_run"},
+            "parse_rejections": rejections,
+            "evidence": {"evidence_id": evidence_id, "table_input": deepcopy(table_input), "semantic_verification": "not_run"},
             **_classify_issues(issues)}
 
 
 def reconcile_results(previous: list, evaluation: dict, task: dict, *,
                       table_input: dict | None = None) -> dict:
-    """Update the experimental current view; preserve all original candidate history."""
+    """Annotate historical associations without replacing or adding delivered records."""
+    if evaluation.get("schema_version") != "table-route-v3":
+        raise ValueError("Reconciliation requires table-route-v3; import older model responses for replay")
     spec = TaskSpec.model_validate(task)
-    current = deepcopy(evaluation["current_results"])
-    changes = deepcopy(evaluation["changes"])
-    unresolved = deepcopy(evaluation["issues"])
-    lookup = None if table_input is None else {e["ref"]: e for e in table_input["entries"]}
+    lookup = None if table_input is None else {entry["ref"]: entry for entry in table_input["entries"]}
+    candidates = deepcopy(evaluation["candidates"])
+    issues, associations, conflicts = deepcopy(evaluation["issues"]), [], []
 
-    def anchor_key(items):
-        if lookup is None:
-            # Historical callers without an index retain the strict raw identity.
-            return sorted((s["ref"], s["quote"], s.get("offset") if s.get("offset") is not None else -1)
-                          for s in (items or []))
-        if not items:
+    def source_key(selections):
+        if not selections:
             return None
+        if lookup is None:
+            return sorted((s["ref"], s["quote"], s.get("offset") if s.get("offset") is not None else -1)
+                          for s in selections)
         try:
-            resolved = [_resolve(selection, lookup) for selection in items]
+            return sorted((s["ref"], s["selected_start"], s["selected_end"])
+                          for s in (_resolve(selection, lookup) for selection in selections))
         except (KeyError, TypeError, ValueError):
             return None
-        return sorted((s["ref"], s["selected_start"], s["selected_end"]) for s in resolved)
 
     def association_key(record):
-        anchors = anchor_key(record.get("anchors"))
+        anchors = source_key(record.get("anchors"))
         record_type = record.get("record_type")
-        if lookup is None:
-            return record_type, anchors
         record_spec = spec.record_types.get(record_type)
         if anchors is None or record_spec is None or record.get("scope") not in {"individual", "group", "each"}:
             return None
-        # A value cell can support several distinct conditions or owners. Match
-        # their source selections too, while permitting corrected semantic labels
-        # backed by the same quotations (e.g. a misnamed parameter header).
+        context = []
         names = set(record_spec.identity_fields + record_spec.condition_fields)
         names.update(name for group in record_spec.measurement_groups.values() for name in group.condition_fields)
-        context = []
         for name in sorted(names):
             binding = record.get("fields", {}).get(name)
             if binding is None:
@@ -797,64 +676,40 @@ def reconcile_results(previous: list, evaluation: dict, task: dict, *,
             if binding.get("value") is None and not binding.get("sources"):
                 context.append((name, None))
                 continue
-            ranges = anchor_key(binding.get("sources"))
+            ranges = source_key(binding.get("sources"))
             if ranges is None:
                 return None
             context.append((name, ranges))
         scope_sources = record.get("scope_sources", [])
-        scope_ranges = anchor_key(scope_sources) if scope_sources else []
+        scope_ranges = source_key(scope_sources) if scope_sources else []
         if scope_ranges is None or (record["scope"] in {"group", "each"} and not scope_ranges):
             return None
         return record_type, anchors, context, record["scope"], scope_ranges
 
-    for old in previous:
-        old_key = association_key(old)
-        matches = [r for r in current if old_key is not None and association_key(r) == old_key]
-        if len(matches) == 1:
-            new = matches[0]
-            before = old.get("values", {k: v["value"] for k, v in old.get("fields", {}).items()})
-            if old.get("status") == "source_checked" and before != new["values"]:
-                current.remove(new)
-                current.append(deepcopy(old))
-                unresolved.append(_problem("conflicting_checked_records", old.get("record_id", "previous"),
-                                           candidate_record_id=new["record_id"]))
-            else:
-                changes.append({"action": "unchanged" if before == new["values"] else "replaced",
-                                "before": before, "after": new["values"], "record_id": new["record_id"],
-                                "reason": "unique_source_anchor_with_checked_bindings"})
-        else:
-            # Do not silently lose previously checked records; raw unresolved ones stay in history.
-            if old.get("status") == "source_checked":
-                current.append(deepcopy(old))
-            else:
-                unresolved.append(_problem("previous_record_not_uniquely_resolved", old.get("record_id", "previous")))
-    previous_keys = [association_key(r) for r in previous if association_key(r) is not None]
-    for record in current:
-        key = association_key(record)
-        if key is None or key not in previous_keys:
-            changes.append({"action": "added", "record_id": record["record_id"], "after": record["values"],
-                            "reason": "new_source_supported_fact"})
-    candidates = deepcopy(evaluation.get("candidates", evaluation.get("records", evaluation["current_results"])))
-    # Compare every delivered result with checked history, including results the
-    # old geometric gate excludes. Delivery never overwrites that history.
-    for old in previous:
-        if old.get("status") != "source_checked":
+    for index, old in enumerate(previous):
+        key = association_key(old)
+        matches = [candidate for candidate in candidates if key is not None and association_key(candidate) == key]
+        association = {"history_index": index, "history_record_id": old.get("record_id"),
+                       "candidate_record_ids": [candidate["record_id"] for candidate in matches],
+                       "status": "unique" if len(matches) == 1 else "ambiguous" if matches else "unmatched"}
+        associations.append(association)
+        if len(matches) != 1:
+            issues.append(_problem("previous_record_not_uniquely_resolved", old.get("record_id", "previous")))
             continue
-        old_key = association_key(old)
-        before = old.get("values", {k: v["value"] for k, v in old.get("fields", {}).items()})
-        for candidate in candidates:
-            if old_key is None or association_key(candidate) != old_key or candidate["values"] == before:
-                continue
-            issue = _problem("conflicting_checked_records", old.get("record_id", "previous"),
-                             candidate_record_id=candidate["record_id"])
-            if issue not in unresolved:
-                unresolved.append(issue)
-            candidate.setdefault("risk_diagnostics", []).append(deepcopy(issue))
-    return {"schema_version": "table-route-v2", "current_results": current,
-            "changes": changes, "unresolved": unresolved,
-            "history": deepcopy(previous), "expert_review_status": "not_reviewed",
-            "candidates": candidates, "evidence": deepcopy(evaluation.get("evidence")),
-            "parse_rejections": deepcopy(evaluation.get("parse_rejections", [])),
-            "all_changes": deepcopy(evaluation.get("all_changes", evaluation["changes"]))
-                           + [deepcopy(c) for c in changes if "action" in c],
-            "semantic_verification": "not_run", **_classify_issues(unresolved)}
+        candidate = matches[0]
+        old_values = old.get("values", {k: v["value"] for k, v in old.get("fields", {}).items()})
+        if json.dumps(old_values, sort_keys=True, ensure_ascii=False) != json.dumps(candidate["values"], sort_keys=True, ensure_ascii=False):
+            issue = _problem("conflicting_checked_records" if old.get("status") == "source_checked" else "historical_value_conflict",
+                             candidate["record_id"], history_record_id=old.get("record_id"), history_index=index)
+            conflicts.append(issue)
+            issues.append(issue)
+            candidate["issues"].append(deepcopy(issue))
+            candidate["risk_diagnostics"].append(deepcopy(issue))
+            candidate["check_status"] = "issues_found"
+            candidate["field_checks"] = _field_checks(candidate, spec)
+    return {"schema_version": "table-route-v3", "processing_policy": "observe_only",
+            "candidates": candidates, "issues": issues, "unresolved": deepcopy(issues),
+            "history": deepcopy(previous), "associations": associations, "conflicts": conflicts,
+            "expert_review_status": "not_reviewed", "semantic_verification": "not_run",
+            "evidence": deepcopy(evaluation.get("evidence")),
+            "parse_rejections": deepcopy(evaluation.get("parse_rejections", [])), **_classify_issues(issues)}

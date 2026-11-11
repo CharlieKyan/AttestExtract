@@ -1,5 +1,11 @@
 # AttestExtract
 
+Dev27 makes the separate A-route table experiment deliver parsed model fields
+unchanged, with evidence and relationship checks beside them. It does not rewrite
+values or citations, merge records, or replace them with historical results.
+Older saved responses remain available for offline imports. See the
+[table experiment and v3 migration guide](docs/TABLE_ROUTE_EXPERIMENTS.md).
+
 Dev25 lets the public Python and CLI entry points accept an API base address,
 key, raw model name, task and source directly. There is no registration or paid
 onboarding probe. Explicit parameter rejection can select a bounded compatible

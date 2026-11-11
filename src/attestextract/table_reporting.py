@@ -21,14 +21,14 @@ _STEPS = (
     ("parse-rejections.json", "3a. 被隔离记录与格式错误"),
     ("evaluation.json", "4. 字段、来源与范围检查"),
     ("results.json", "5. 抽取结果（附检查状态）"),
-    ("reconciliation.json", "6. 历史关联与修改记录"),
+    ("reconciliation.json", "6. 历史关联与冲突记录"),
     ("error.json", "错误位置与原因"),
     ("reservation.json", "调用预留记录"),
     ("outcome.json", "阶段执行状态"),
 )
 
 _CHECK_CATEGORIES = {
-    "mechanical_errors": "明确的格式或原文检查问题",
+    "mechanical_errors": "格式与原文字面检查",
     "relationship_warnings": "关联未自动确认",
     "risk_diagnostics": "需要优先检查的具体风险",
 }
@@ -132,7 +132,28 @@ def _record_values(record: dict) -> dict:
             for name, field in fields.items()}
 
 
-def _matches(actual: dict, expected: dict) -> bool:
+def _format_literal(value):
+    """Comparison only: exterior whitespace and one complete single-dollar pair."""
+    if not isinstance(value, str):
+        return value
+    text = value.strip()
+    if (len(text) > 2 and text.startswith("$") and text.endswith("$")
+            and text.count("$") == 2 and text[-2] != "\\"):
+        text = text[1:-1].strip()
+    return text
+
+
+def _format_fields(task: dict | None) -> dict[str, set[str]]:
+    result = {}
+    for name, spec in (task or {}).get("record_types", {}).items():
+        fields = set()
+        for group in spec.get("measurement_groups", {}).values():
+            fields.update((group["value_field"], group["unit_field"]))
+        result[name] = fields
+    return result
+
+
+def _matches(actual: dict, expected: dict, *, format_fields: set[str] | None = None) -> bool:
     if actual.get("record_type") != expected.get("record_type"):
         return False
     values, target = _record_values(actual), _record_values(expected)
@@ -143,8 +164,9 @@ def _matches(actual: dict, expected: dict) -> bool:
         return False
     for key, value in target.items():
         allowed = [value, *aliases.get(key, [])]
-        if key not in values or not any(type(values[key]) is type(option) and values[key] == option
-                                        for option in allowed):
+        normalize = _format_literal if key in (format_fields or ()) else lambda item: item
+        if key not in values or not any(type(values[key]) is type(option)
+                                        and normalize(values[key]) == normalize(option) for option in allowed):
             return False
     return True
 
@@ -231,7 +253,8 @@ def _source_score(records: list[dict] | None, gold: list[dict], check_sources: b
     return score
 
 
-def score_table_records(records: list[dict] | None, gold: list[dict], *, check_sources: bool = True) -> dict:
+def score_table_records(records: list[dict] | None, gold: list[dict], *, check_sources: bool = True,
+                        task: dict | None = None) -> dict:
     """One-to-one frozen-reference matching, without claiming semantic review.
 
     None means no evaluable output. An actual empty list is an evaluated empty
@@ -242,7 +265,7 @@ def score_table_records(records: list[dict] | None, gold: list[dict], *, check_s
     source_score.update(_cell_reference_score(records, gold, check_sources))
     if records is None:
         return {"evaluated": False, "matched": None, "expected": len(gold),
-                "matched_without_aliases": None,
+                "matched_without_aliases": None, "matched_format_equivalent": None,
                 "missing": None, "extra": None, "rows": [], **source_score}
     remaining = list(enumerate(records))
     rows = []
@@ -265,8 +288,20 @@ def score_table_records(records: list[dict] | None, gold: list[dict], *, check_s
         if index is not None:
             exact_remaining.pop(index)
             exact_matches += 1
+    format_matches = None
+    declared = _format_fields(task)
+    if any(declared.values()):
+        format_remaining = list(records)
+        format_matches = 0
+        for expected in gold:
+            index = next((i for i, item in enumerate(format_remaining)
+                          if _matches(item, expected, format_fields=declared.get(expected.get("record_type"), set()))), None)
+            if index is not None:
+                format_remaining.pop(index)
+                format_matches += 1
     return {"evaluated": True, "matched": matches, "expected": len(gold),
             "matched_without_aliases": exact_matches,
+            "matched_format_equivalent": format_matches,
             "missing": len(gold) - matches, "extra": len(remaining), "rows": rows, **source_score}
 
 
@@ -341,6 +376,9 @@ def _score_html(title: str, score: dict, case_id: str, known: set[str]) -> str:
               '参考值匹配仅使用调用前冻结的别名，不表示科学关系已核验。</p>',
               _source_score_html(score, case_id, known),
               '<table><thead><tr><th>状态</th><th>固定参考答案</th><th>实际记录</th></tr></thead><tbody>']
+    if score.get("matched_format_equivalent") is not None:
+        output.insert(2, f'<p>格式等价匹配：{score["matched_format_equivalent"]}/{score["expected"]}。'
+                      '仅测量值和单位比较忽略外围空白与一层单美元符；不改原值、参考或证据，不代表科学核验。</p>')
     for row in score["rows"]:
         output.append(f'<tr><td>{escape(row["status"])}</td><td><pre>{escape(_text(row["expected"]))}</pre></td>'
                       f'<td><pre>{escape(_text(row["actual"]))}</pre>'
@@ -367,6 +405,12 @@ def _issues(evaluation, reconciliation) -> list[dict]:
 
 
 def _candidates(evaluation, reconciliation) -> list[dict] | None:
+    if any((value or {}).get("schema_version") == "table-route-v3" for value in (evaluation, reconciliation)):
+        for value in (reconciliation, evaluation):
+            records = _records(value, "candidates")
+            if records is not None:
+                return records
+        return None
     for value, key in ((reconciliation, "candidates"), (evaluation, "candidates"),
                        (evaluation, "records"), (reconciliation, "current_results"),
                        (evaluation, "current_results")):
@@ -374,6 +418,25 @@ def _candidates(evaluation, reconciliation) -> list[dict] | None:
         if records is not None:
             return records
     return None
+
+
+def delivery_fidelity(raw: list[dict] | None, candidates: list[dict] | None) -> dict:
+    """Check original fields, types and order, independently of reference answers."""
+    if raw is None or candidates is None:
+        return {"assessed": False, "expected_records": len(raw or []), "unchanged_records": None,
+                "changed_indices": [], "extra_records": None}
+    changed = []
+    for index, original in enumerate(raw):
+        candidate = candidates[index] if index < len(candidates) else {}
+        actual = {key: candidate[key] for key in original if key in candidate}
+        same = json.dumps(actual, sort_keys=True, ensure_ascii=False) == json.dumps(original, sort_keys=True, ensure_ascii=False)
+        if "values" in candidate:
+            same = same and json.dumps(candidate["values"], sort_keys=True, ensure_ascii=False) == json.dumps(
+                _record_values(original), sort_keys=True, ensure_ascii=False)
+        if not same:
+            changed.append(index)
+    return {"assessed": True, "expected_records": len(raw), "unchanged_records": len(raw) - len(changed),
+            "changed_indices": changed, "extra_records": max(0, len(candidates) - len(raw))}
 
 
 def _category_issues(evaluation, reconciliation, category: str) -> list[dict]:
@@ -415,6 +478,7 @@ def summarize_table_bundle(bundle: Path) -> dict:
     def read(relative: str, default=None):
         return _read(root / relative, default, root=root)
     cases = {case["id"]: case for case in read("cases.json", [])}
+    observe_only = read("manifest.json", {}).get("schema_version") == "table-a-0.3"
     slots = read("slots.json", [])
     _require_a_slots(slots)
     statuses, issue_codes = Counter(), Counter()
@@ -428,13 +492,16 @@ def summarize_table_bundle(bundle: Path) -> dict:
     def metrics():
         return {"planned_trials": 0, "evaluated_trials": 0, "trials_without_gold": 0,
                 "expected_records": 0, "evaluated_expected_records": 0, "matched": 0,
-                "matched_without_aliases": 0,
+                "matched_without_aliases": 0, "matched_format_equivalent": 0, "format_evaluated_trials": 0,
                 "missing_in_evaluated_trials": 0, "extra_in_evaluated_trials": 0,
                 "source_checked_trials": 0, "expected_source_records": 0,
                 "matched_sources": 0, "unmatched_sources_in_evaluated_trials": 0,
                 "unassessed_source_records": 0,
                 "matched_cell_references": 0}
-    routes["A"] = {"raw": metrics(), "candidates": metrics(), "current": metrics()}
+    phases = ("raw", "candidates") if observe_only else ("raw", "candidates", "current")
+    routes["A"] = {phase: metrics() for phase in phases}
+    fidelity = {"assessed_trials": 0, "expected_records": 0, "unchanged_records": 0,
+                "changed_records": 0, "extra_records": 0, "unassessed_trials": 0}
     for slot in slots:
         relative = f"trials/{slot['slot_id']}"
         outcome = read(relative + "/outcome.json", {})
@@ -495,21 +562,35 @@ def summarize_table_bundle(bundle: Path) -> dict:
         raw = _records(parsed, "records")
         parsed_records += len(raw or [])
         candidates = _candidates(evaluation, reconciliation)
+        if observe_only:
+            preserved = delivery_fidelity(raw, candidates)
+            fidelity["expected_records"] += preserved["expected_records"]
+            fidelity["assessed_trials"] += preserved["assessed"]
+            fidelity["unassessed_trials"] += not preserved["assessed"]
+            if preserved["assessed"]:
+                fidelity["unchanged_records"] += preserved["unchanged_records"]
+                fidelity["changed_records"] += len(preserved["changed_indices"])
+                fidelity["extra_records"] += preserved["extra_records"]
         current = _records(reconciliation, "current_results")
         if current is None:
             current = _records(evaluation, "current_results")
         for phase, records in (("raw", raw), ("candidates", candidates), ("current", current)):
+            if phase not in phases:
+                continue
             summary = routes[stage][phase]
             summary["planned_trials"] += 1
             summary["trials_without_gold"] += not bool(gold)
             summary["expected_records"] += len(gold)
-            score = score_table_records(records, gold)
+            score = score_table_records(records, gold, task=case.get("task") if observe_only else None)
             summary["expected_source_records"] += score["expected_source_records"]
             if score["evaluated"] and gold:
                 summary["evaluated_trials"] += 1
                 summary["evaluated_expected_records"] += len(gold)
                 summary["matched"] += score["matched"]
                 summary["matched_without_aliases"] += score["matched_without_aliases"]
+                if score["matched_format_equivalent"] is not None:
+                    summary["matched_format_equivalent"] += score["matched_format_equivalent"]
+                    summary["format_evaluated_trials"] += 1
                 summary["missing_in_evaluated_trials"] += score["missing"]
                 summary["extra_in_evaluated_trials"] += score["extra"]
             if score["source_checked"]:
@@ -522,6 +603,8 @@ def summarize_table_bundle(bundle: Path) -> dict:
                 summary["unassessed_source_records"] += len(gold)
     for route in routes.values():
         for summary in route.values():
+            if not summary["format_evaluated_trials"]:
+                summary["matched_format_equivalent"] = None
             if not summary["evaluated_trials"]:
                 summary["matched"] = None
                 summary["matched_without_aliases"] = None
@@ -531,7 +614,7 @@ def summarize_table_bundle(bundle: Path) -> dict:
     quality_status = "not_evaluated" if not evaluated_stages else "checks_completed_not_semantically_accepted"
     if problem_stages:
         quality_status = "issues_found"
-    current_scores = [route["current"] for route in routes.values()]
+    current_scores = [route["candidates" if observe_only else "current"] for route in routes.values()]
     if not problem_stages and evaluated_stages and any(
             score["planned_trials"] > score["evaluated_trials"] or score["trials_without_gold"]
             or score["unassessed_source_records"] for score in current_scores):
@@ -542,6 +625,8 @@ def summarize_table_bundle(bundle: Path) -> dict:
         quality_status = "reference_mismatches"
     if rejected_records:
         quality_status = "partial_format_error" if parsed_records else "format_error"
+    if observe_only and (fidelity["changed_records"] or fidelity["extra_records"]):
+        quality_status = "delivery_changed"
     return {"execution": {"planned_slots": len(slots), "statuses": dict(statuses),
                            "completed_stages": statuses["success"], "saved_responses": saved_responses,
                            "partial_format_error_stages": statuses["partial_format_error"],
@@ -552,6 +637,8 @@ def summarize_table_bundle(bundle: Path) -> dict:
                            "confirmed_complete_live_http_stages": confirmed_live_http,
                            "live_stages_without_complete_http_evidence": live_reserved_stages - confirmed_live_http},
             "quality_summary": {"status": quality_status, "evaluated_stages": evaluated_stages,
+                                "processing_policy": "observe_only" if observe_only else "historical",
+                                "delivery_fidelity": fidelity if observe_only else None,
                                 "stages_with_issues": problem_stages,
                                 "affected_records": len(affected_records),
                                 "affected_fields": len(affected_fields), "diagnostics": diagnostics,
@@ -562,7 +649,7 @@ def summarize_table_bundle(bundle: Path) -> dict:
                                 "expert_review_status": "not_assessed",
                                 "notice": "success means the stage completed, not that its content is correct. "
                                           "Missing gold, missing source annotations and missing responses are unassessed. "
-                                          "Review raw responses and changes; do not rerun paid calls to inspect results."}}
+                                          "Review raw responses and evidence checks; do not rerun paid calls to inspect results."}}
 
 
 def _summary_html(summary: dict) -> str:
@@ -584,6 +671,7 @@ def _summary_html(summary: dict) -> str:
               f'诊断 {quality["diagnostics"]} 条。同一字段可触发多条诊断，不能把它们当作独立科学错误。</p>',
               '<table><thead><tr><th>路线 / 阶段</th><th>值匹配 / 已评估目标</th>'
               '<th>不使用别名的严格写法匹配</th>'
+              '<th>格式等价匹配</th>'
               '<th>全部计划目标 / 已评估试次</th><th>原格及引文严格匹配 / 已标注目标</th>'
               '<th>仅单元格编号一致 / 已标注目标</th>'
               '<th>未评估来源目标 / 缺参考答案试次</th></tr></thead><tbody>']
@@ -595,15 +683,26 @@ def _summary_html(summary: dict) -> str:
             label = {"raw": "模型原始输出（成功解析部分）", "candidates": "抽取结果（附检查状态）",
                      "current": "旧严格规则通过结果"}[phase]
             exact = "未评估" if score["matched_without_aliases"] is None else str(score["matched_without_aliases"])
+            formatted = "未评估" if score.get("matched_format_equivalent") is None else str(score["matched_format_equivalent"])
             output.append(f'<tr><td>{stage} / {label}</td><td>{matched} / {score["evaluated_expected_records"]}</td>'
                           f'<td>{exact} / {score["evaluated_expected_records"]}</td>'
+                          f'<td>{formatted}</td>'
                           f'<td>{score["expected_records"]} / {score["evaluated_trials"]}次</td>'
                           f'<td>{sources} / {score["expected_source_records"]}</td>'
                           f'<td>{cells} / {score["expected_source_records"]}</td>'
                           f'<td>{score["unassessed_source_records"]} / {score["trials_without_gold"]}次</td></tr>')
     output.append('</tbody></table><p>抽取结果完整交付，不等于全部科学关系已独立核验。'
-                  '旧版“检查后的可用结果”保留为严格规则对照，不代表全部抽取成果。</p>')
+                  '格式等价只比较声明的测量值和单位的外围空白、单层美元符；不进行单位换算或修改证据。</p>')
+    if quality.get("delivery_fidelity") is not None:
+        fidelity = quality["delivery_fidelity"]
+        output.append(f'<p>交付保真：{fidelity["unchanged_records"]}/{fidelity["expected_records"]} 条原样保留；'
+                      f'改动或遗漏 {fidelity["changed_records"]} 条，额外记录 {fidelity["extra_records"]} 条；'
+                      f'尚未评估 {fidelity["unassessed_trials"]} 次。保真不等于内容正确。</p>')
+    else:
+        output.append('<p>历史“检查后的可用结果”仅作为旧严格规则对照展示。</p>')
     output.append(f'<p>具有分项检查状态的步骤：{quality["classified_stages"]}；旧产物未分类不视为无问题。</p>')
+    output.append('<p>“格式与原文字面检查”包含检查失败和无法确认的情况；请查看字段状态区分。'
+                  '未确认不等于数值错误，不会自动调用 Jev。</p>')
     for category, label in _CHECK_CATEGORIES.items():
         counts = quality["check_categories"][category]
         output.append(f'<p>{label}：{counts["affected_records"]} 条记录 / '
@@ -624,7 +723,9 @@ def _issues_html(evaluation, reconciliation, case_id: str, known: set[str]) -> s
                if issue.get(key) is not None}
     fields = {key for key in groups if key[0] is not None and key[1] is not None}
     is_v2 = isinstance(evaluation, dict) and "candidates" in evaluation
-    heading = ('<h3>旧严格规则诊断（含关联未确认）</h3>' if is_v2 else
+    is_v3 = (evaluation or {}).get("schema_version") == "table-route-v3"
+    heading = ('<h3>原文与关系检查（不改写模型字段）</h3>' if is_v3 else
+               '<h3>旧严格规则诊断（含关联未确认）</h3>' if is_v2 else
                '<h3 class="bad">需要定位的问题</h3>')
     cell_class = "" if is_v2 else ' class="bad"'
     output = [heading,
@@ -644,7 +745,8 @@ def _issues_html(evaluation, reconciliation, case_id: str, known: set[str]) -> s
 def _pending_html(evaluation, reconciliation, case_id: str, known: set[str]) -> str:
     if isinstance(evaluation, dict) and "candidates" in evaluation:
         output = ['<h3>分项检查与优先检查入口</h3><p>关联未自动确认不会自动调用 Jev。'
-                  '明确问题和具体风险需要优先检查；它们仍在抽取结果中保留。</p>']
+                  '字面检查可能失败或无法确认，未确认不等于数值错误。'
+                  '请按字段状态区分；内容仍在抽取结果中保留。</p>']
         for category, label in _CHECK_CATEGORIES.items():
             issues = _category_issues(evaluation, reconciliation, category)
             counts = _diagnostic_counts(issues)
@@ -685,7 +787,7 @@ def _candidate_html(evaluation, reconciliation, case_id: str, known: set[str]) -
               '关系未确认时保留内容；明确错误和具体风险仍需检查。</p>']
     labels = {"located": "已定位", "missing": "缺失或无法定位", "ambiguous": "位置不唯一",
               "not_applicable": "不适用", "passed": "字面检查通过", "failed": "字面检查失败",
-              "locally_supported": "本地关联规则支持", "not_confirmed": "关联未自动确认",
+              "locally_supported": "本地关联规则支持", "not_confirmed": "未自动确认",
               "not_run": "未进行独立核验"}
     for record in records:
         output.append('<details open><summary>记录 ' + escape(str(record.get("record_id", "未提供编号")))
@@ -704,16 +806,21 @@ def _candidate_html(evaluation, reconciliation, case_id: str, known: set[str]) -
             output.append('</tbody></table>')
         else:
             output.append('<p>旧产物没有分项检查状态，不视为这些检查均已通过。</p>')
-        output.append('<details><summary>完整记录、出处及修改</summary><pre>'
+        output.append('<details><summary>完整记录、原始出处与检查信息</summary><pre>'
                       + escape(_text(record)) + '</pre></details></details>')
     evidence = (reconciliation or {}).get("evidence", (evaluation or {}).get("evidence"))
     if evidence is not None:
         output.append('<details><summary>实际输入的共享表格证据包</summary>'
                       '<p>完整表格、表题和脚注可查，不等于每个对象或条件已被程序证明。'
                       '未加入模型当次看不到的其他原文。</p><pre>' + escape(_text(evidence)) + '</pre></details>')
-    changes = (reconciliation or {}).get("all_changes", (evaluation or {}).get("all_changes", []))
-    output.append('<details><summary>全部工作副本修正（包含未通过旧严格规则的记录）</summary><pre>'
-                  + escape(_text(changes)) + '</pre>' + _source_links(changes, case_id, known) + '</details>')
+    if (evaluation or {}).get("schema_version") != "table-route-v3":
+        changes = (reconciliation or {}).get("all_changes", (evaluation or {}).get("all_changes", []))
+        output.append('<details><summary>全部工作副本修正（历史产物）</summary><pre>'
+                      + escape(_text(changes)) + '</pre>' + _source_links(changes, case_id, known) + '</details>')
+    else:
+        associations = {key: (reconciliation or {}).get(key, []) for key in ("associations", "conflicts")}
+        output.append('<details><summary>重复、历史关联与冲突注记（不替换本轮记录）</summary><pre>'
+                      + escape(_text(associations)) + '</pre></details>')
     return "".join(output)
 
 
@@ -735,6 +842,7 @@ def render_table_report(bundle: Path) -> str:
     def read(path: Path, default=None):
         return _read(path, default, root=root)
     manifest = read(root / "manifest.json", {})
+    observe_only = manifest.get("schema_version") == "table-a-0.3"
     cases = read(root / "cases.json", [])
     slots = read(root / "slots.json", [])
     _require_a_slots(slots)
@@ -768,7 +876,7 @@ def render_table_report(bundle: Path) -> str:
               '<meta name="viewport" content="width=device-width,initial-scale=1">'
               '<title>表格路线实验：输入、输出与错误定位</title>', f"<style>{style}</style></head><body>",
               '<h1>A 路线表格实验：每一步都能查看</h1>',
-              '<div class="notice"><p>A：模型标出字段与原格关系，程序回读原文。'
+              '<div class="notice"><p>A：模型标出字段与原格关系，程序检查原文与引用。'
               '用户不需要指定列号或表格布局。</p>'
               '<p>这里展示实际请求、模型返回和程序检查，不表示模型未公开的内部思维过程。'
               'success只表示该阶段完成，不代表内容正确。参考值匹配、来源检查和专家审核是不同结论。</p>'
@@ -814,7 +922,7 @@ def render_table_report(bundle: Path) -> str:
         output.append(_candidate_html(evaluation, reconciliation, case_id, known))
         output.append(_rejections_html(parsed))
         output.append(_pending_html(evaluation, reconciliation, case_id, known))
-        output.append('<details><summary>旧严格规则诊断（含关联未确认）</summary>'
+        output.append('<details><summary>原文与关系检查</summary>'
                       + _issues_html(evaluation, reconciliation, case_id, known) + '</details>')
         expected_codes = case.get("expected_diagnostics", {}).get(stage)
         if isinstance(expected_codes, list):
@@ -824,17 +932,25 @@ def render_table_report(bundle: Path) -> str:
                           + '</code>；实际检查代码：<code>' + escape(_text(observed_codes))
                           + '</code>。这是人为注入的测试条件，不发送给模型；额外问题仍需检查。</p>')
         output.append(_score_html("抽取结果：与冻结参考值比较",
-                                  score_table_records(_candidates(evaluation, reconciliation), case.get("gold", [])),
+                                  score_table_records(_candidates(evaluation, reconciliation), case.get("gold", []),
+                                                      task=case.get("task") if observe_only else None),
                                   case_id, known))
-        output.append('<details><summary>模型原始输出与旧严格结果对照</summary>')
+        output.append('<details><summary>模型原始输出与交付保真</summary>' if observe_only else
+                      '<details><summary>模型原始输出与旧严格结果对照</summary>')
         output.append(_score_html("模型原始输出（成功解析部分）：与参考值比较",
-                                  score_table_records(_records(parsed, "records"), case.get("gold", [])),
+                                  score_table_records(_records(parsed, "records"), case.get("gold", []),
+                                                      task=case.get("task") if observe_only else None),
                                   case_id, known))
-        current = _records(reconciliation, "current_results")
-        if current is None:
-            current = _records(evaluation, "current_results")
-        output.append(_score_html("旧严格规则通过结果：与参考值比较",
-                                  score_table_records(current, case.get("gold", [])), case_id, known))
+        if observe_only:
+            output.append('<p>交付字段、引用、关系及顺序与解析后的原始记录比较；不代表模型抽取正确。</p><pre>'
+                          + escape(_text(delivery_fidelity(_records(parsed, "records"),
+                                                           _candidates(evaluation, reconciliation)))) + '</pre>')
+        else:
+            current = _records(reconciliation, "current_results")
+            if current is None:
+                current = _records(evaluation, "current_results")
+            output.append(_score_html("旧严格规则通过结果：与参考值比较",
+                                      score_table_records(current, case.get("gold", [])), case_id, known))
         output.append('</details>')
         provenance = root / "replay-provenance" / slot["slot_id"]
         origin = read(provenance / "origin.json")

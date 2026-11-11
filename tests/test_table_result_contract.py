@@ -42,7 +42,7 @@ def test_empty_optional_binding_does_not_require_an_invented_relationship(relati
     assert parsed["record_indices"] == [0, 1]
     assert len(parse_route_response("A", text)["records"]) == 2
     result = evaluate(case, parsed)
-    assert len(result["current_results"]) == len(result["candidates"]) == 2
+    assert len(result["candidates"]) == len(result["candidates"]) == 2
     empty = next(r for r in result["candidates"] if r["values"]["unit"] is None)
     assert empty["field_checks"]["unit"]["relation_check"] == "not_applicable"
 
@@ -98,7 +98,7 @@ def test_no_valid_records_is_format_error_but_a_legitimate_empty_array_is_distin
     failed = evaluate(case, parse_route_response_partial("A", '{"records":[42]}'))
     empty = evaluate(case, parse_route_response_partial("A", '{"records":[]}'))
     assert failed["status"] == "format_error" and failed["parse_rejections"]
-    assert empty["status"] == "source_checked" and not empty["parse_rejections"]
+    assert empty["status"] == "checked" and not empty["parse_rejections"]
     assert failed["candidates"] == empty["candidates"] == []
 
 
@@ -108,7 +108,7 @@ def test_unknown_merge_relation_remains_delivered_without_semantic_acceptance():
     raw["records"][0].update(scope="individual", scope_sources=[])
     original = deepcopy(raw)
     result = evaluate(case, raw)
-    assert result["current_results"] == []
+    assert result["candidates"] and result["issues"]
     assert len(result["candidates"]) == 1
     candidate = result["candidates"][0]
     assert candidate["values"]["value"] == raw["records"][0]["fields"]["value"]["value"]
@@ -132,7 +132,7 @@ def test_optional_relation_does_not_turn_a_required_missing_value_into_success()
     assert candidate["field_checks"]["value"]["quote_location"] == "missing"
     assert candidate["field_checks"]["value"]["literal_check"] == "failed"
     assert candidate["field_checks"]["value"]["relation_check"] == "not_confirmed"
-    assert candidate["record_id"] not in {r["record_id"] for r in result["current_results"]}
+    assert candidate["record_id"] in {r["record_id"] for r in result["candidates"]}
 
 
 def test_relation_cannot_be_absent_for_null_value_with_nonempty_sources():
@@ -157,7 +157,7 @@ def test_partial_literal_is_still_an_error_in_delivered_result():
     assert "partial_literal_selection" in {i["code"] for i in candidate["mechanical_errors"]}
     assert candidate["field_checks"]["value"]["literal_check"] == "failed"
     assert candidate["values"]["value"] == "30"
-    assert record["record_id"] not in {r["record_id"] for r in result["current_results"]}
+    assert record["record_id"] in {r["record_id"] for r in result["candidates"]}
 
 
 def test_group_total_given_to_member_remains_a_priority_risk():
@@ -168,19 +168,19 @@ def test_group_total_given_to_member_remains_a_priority_risk():
     result = evaluate(case, raw)
     candidate = result["candidates"][0]
     assert "group_measurement_assigned_to_member" in {i["code"] for i in candidate["risk_diagnostics"]}
-    assert result["current_results"] == []
+    assert result["candidates"] and result["issues"]
     assert candidate["field_checks"]["object"]["relation_check"] == "not_confirmed"
 
 
-def test_all_working_changes_visible_even_when_geometry_does_not_pass():
+def test_position_diagnostics_remain_visible_when_geometry_is_unconfirmed():
     case = case_named("before_after")
     raw = deepcopy(case["replays"]["A"])
     raw["records"][0]["fields"]["unit"] = deepcopy(raw["records"][1]["fields"]["unit"])
     raw["records"][0]["anchors"][0]["offset"] = 99
     result = evaluate(case, raw)
-    assert any(c["record_id"] == "r1" and c["reason"] == "source_offset_corrected"
-               for c in result["all_changes"])
-    assert not any(c["record_id"] == "r1" for c in result["changes"])
+    assert any(i["record_id"] == "r1" and i["code"] == "source_offset_mismatch" for i in result["issues"])
+    assert result["candidates"][0]["anchors"][0]["offset"] == 99
+    assert "changes" not in result and "all_changes" not in result
 
 
 def test_evidence_is_exact_actual_table_input_not_additional_paper_context():
@@ -193,7 +193,7 @@ def test_evidence_is_exact_actual_table_input_not_additional_paper_context():
     assert table["entries"][0]["quote"] != "changed copy"
 
 
-def test_candidate_dedup_uses_resolved_positions_and_keeps_all_original_ids():
+def test_same_source_candidates_remain_independent_with_all_original_ids():
     case = case_named("paired_parameters")
     raw = deepcopy(case["replays"]["A"])
     first = raw["records"][0]
@@ -203,24 +203,27 @@ def test_candidate_dedup_uses_resolved_positions_and_keeps_all_original_ids():
     duplicate["fields"]["value"]["sources"][0]["offset"] = 0
     raw["records"].append(duplicate)
     result = evaluate(case, raw)
-    assert len(result["candidates"]) == 2
-    combined = next(c for c in result["candidates"] if "duplicate-fact" in c["record_ids"])
-    assert combined["input_indices"] == [0, 2]
-    assert len(combined["original_records"]) == 2
-    assert combined["original_records"][1]["anchors"][0]["offset"] == 99
+    assert len(result["candidates"]) == 3
+    separate = next(c for c in result["candidates"] if c["record_id"] == "duplicate-fact")
+    assert separate["input_indices"] == [2]
+    assert separate["record_ids"] == ["duplicate-fact"]
+    assert len(separate["original_records"]) == 1
+    assert separate["original_records"][0]["anchors"][0]["offset"] == 99
 
 
 def test_unconfirmed_new_result_cannot_silently_override_checked_history():
     case = case_named("before_after")
     original = evaluate(case)
-    old = deepcopy(original["current_results"][0])
+    old = deepcopy(original["candidates"][0])
+    old["status"] = "source_checked"
     old["values"]["value"] = "historic-conflict"
     raw = deepcopy(case["replays"]["A"])
     raw["records"][0]["fields"]["unit"] = deepcopy(raw["records"][1]["fields"]["unit"])
     result = reconcile_results([old], evaluate(case, raw), case["task"],
                                table_input=build_table_input(case["source"]))
     assert result["history"] == [old]
-    assert old in result["current_results"]
+    assert old not in result["candidates"]
+    assert len(result["candidates"]) == len(raw["records"])
     assert any(i["code"] == "conflicting_checked_records" for i in result["risk_diagnostics"])
     assert any(c["risk_diagnostics"] for c in result["candidates"])
 
@@ -268,7 +271,7 @@ def mixed_measurement_case(*, conditions_global=True, same_condition=False, sing
 def test_mixing_two_measurement_conditions_is_a_specific_priority_risk(conditions_global):
     table, task, record = mixed_measurement_case(conditions_global=conditions_global)
     result = evaluate_route("A", {"records": [record]}, table, task)
-    assert result["current_results"] == []
+    assert result["candidates"] and result["issues"]
     assert len(result["candidates"]) == 1
     risks = result["candidates"][0]["risk_diagnostics"]
     risk = next(i for i in risks if i["code"] == "mixed_measurement_conditions")
@@ -286,4 +289,4 @@ def test_consistent_or_single_measurement_does_not_invent_mixed_condition_risk(s
     if single:
         assert result["relationship_warnings"]
     else:
-        assert result["current_results"]
+        assert result["candidates"]

@@ -25,7 +25,7 @@ def _hashes(root: Path) -> dict:
 
 def _run(root: Path, cases: list[dict], *, partial: bool = False) -> dict:
     manifest = prepare_bundle(root, cases, replay_only=True)
-    assert manifest["schema_version"] == "table-a-0.2"
+    assert manifest["schema_version"] == "table-a-0.3"
     assert manifest["max_calls"] == len(cases)
     first = run_bundle(root)
     assert first["live_backend_invocations_this_run"] == 0
@@ -47,10 +47,13 @@ def _run(root: Path, cases: list[dict], *, partial: bool = False) -> dict:
         evaluation = read_json(slot / "evaluation.json")
         assert outcome["stage"] == "A" and outcome["mode"] == "replay"
         assert outcome["status"] == expected_status
-        assert result["schema_version"] == "table-route-v2"
+        assert result["schema_version"] == "table-route-v3"
+        assert result["processing_policy"] == "observe_only"
         assert result["semantic_verification"] == "not_run"
         assert result["evidence"]["table_input"] == inputs[case["id"]]
-        assert sum(len(r["record_ids"]) for r in result["candidates"]) == len(parsed["records"])
+        assert len(result["candidates"]) == len(parsed["records"])
+        for original, candidate in zip(parsed["records"], result["candidates"]):
+            assert all(candidate[key] == value for key, value in original.items())
         assert result["rejections"] == parsed["rejections"]
         for record in result["candidates"]:
             assert record["semantic_verification"] == "not_run"
@@ -65,7 +68,7 @@ def _run(root: Path, cases: list[dict], *, partial: bool = False) -> dict:
             assert len(parsed["rejections"]) == 1
             assert parsed["rejections"][0]["index"] == 2
             assert parsed["rejections"][0]["errors"][0]["loc"] == ["fields", "value"]
-            assert len(evaluation["current_results"]) == 2
+            assert "current_results" not in evaluation
         rows.append({"case_id": case["id"], "status": outcome["status"],
                      "result_count": len(result["candidates"]), "rejected_count": len(parsed["rejections"])})
     report = write_report(root)

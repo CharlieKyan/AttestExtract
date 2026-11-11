@@ -71,7 +71,7 @@ def test_import_validates_legacy_and_keeps_only_saved_a_answers(tmp_path, rounds
     old_cases = legacy_bundle(original, rounds)
     before = snapshot(original)
     manifest = runner.fork_replay(original, fork, {})
-    assert manifest["schema_version"] == "table-a-0.2"
+    assert manifest["schema_version"] == "table-a-0.3"
     assert manifest["rounds"] == manifest["max_calls"] == rounds
     assert manifest["replay_only"] is True
     bundle = runner.load_bundle(fork)

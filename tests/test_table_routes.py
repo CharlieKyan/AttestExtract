@@ -37,7 +37,7 @@ def evaluate(case, stage="A", parsed=None):
 
 def values(result):
     return [{"record_type": row["record_type"], "values": row["values"]}
-            for row in result["current_results"]]
+            for row in result["candidates"]]
 
 
 @pytest.mark.parametrize("case", CASES, ids=lambda case: case["id"])
@@ -55,8 +55,9 @@ def test_user_visible_fault_demos_retain_expected_error_locations(case, stage):
     result = evaluate(case, stage)
     assert set(case["expected_diagnostics"][stage]) <= {issue["code"] for issue in result["issues"]}
     if case["id"] == "fault_literal_repair":
-        assert values(result) == case["gold"]
-        assert any(change["before"] == "999" and change["after"] == "307" for change in result["changes"])
+        assert values(result) != case["gold"]
+        assert result["candidates"][-1]["values"]["value"] == "999"
+        assert {i["field"] for i in result["issues"] if i["code"] == "literal_value_mismatch"} == {"value", "unit"}
 
 
 def test_index_retains_physical_merge_once_and_exact_unicode_positions():
@@ -70,28 +71,28 @@ def test_index_retains_physical_merge_once_and_exact_unicode_positions():
     assert "hints" not in index
 
 
-def test_numeric_and_unit_errors_are_repaired_from_cited_cells():
+def test_numeric_and_unit_errors_are_reported_without_rewriting():
     case = case_named("before_after")
     proposed = deepcopy(case["replays"]["A"])
     proposed["records"][-1]["fields"]["value"]["value"] = "999"
     proposed["records"][-1]["fields"]["unit"]["value"] = "MPa"
     result = evaluate(case, parsed=proposed)
-    assert values(result) == case["gold"]
-    assert {(change["field"], change["before"], change["after"])
-            for change in result["changes"]} == {("value", "999", "307"), ("unit", "MPa", "min")}
+    assert values(result) != case["gold"]
+    assert result["candidates"][-1]["values"]["value"] == "999"
+    assert result["candidates"][-1]["values"]["unit"] == "MPa"
+    assert {i["field"] for i in result["issues"] if i["code"] == "literal_value_mismatch"} == {"value", "unit"}
     assert proposed["records"][-1]["fields"]["value"]["value"] == "999"
 
 
 @pytest.mark.parametrize("use_index", [False, True])
-def test_repair_changes_current_view_and_retains_original_history(use_index):
+def test_history_association_preserves_current_values_and_original_history(use_index):
     case = case_named("before_after")
     result = reconcile_results(case["previous"], evaluate(case), case["task"],
                                table_input=table(case) if use_index else None)
     assert values(result) == case["gold"]
-    replacement = next(change for change in result["changes"] if change.get("action") == "replaced")
-    assert replacement["before"]["parameter"] == "Pressure"
-    assert replacement["after"]["parameter"] == "Time"
-    assert replacement["after"]["unit"] == "min"
+    assert result["associations"][0]["status"] == "unique"
+    assert result["conflicts"][0]["code"] == "historical_value_conflict"
+    assert "changes" not in result
     assert result["history"] == case["previous"]
     assert result["expert_review_status"] == "not_reviewed"
 
@@ -103,7 +104,8 @@ def test_existing_checked_conflict_is_not_silently_overwritten(use_index):
     result = reconcile_results(case["previous"], evaluate(case), case["task"],
                                table_input=table(case) if use_index else None)
     assert any(issue["code"] == "conflicting_checked_records" for issue in result["unresolved"])
-    assert case["previous"][0] in result["current_results"]
+    assert case["previous"][0] in result["history"]
+    assert values(result) == case["gold"]
 
 
 @pytest.mark.parametrize("mutation,expected", [
@@ -125,7 +127,7 @@ def test_invalid_sources_identify_record_and_field(mutation, expected):
     result = evaluate(case, parsed=response)
     assert any(issue["code"] == expected and issue["record_id"] == "r1" and issue["field"] == field
                for issue in result["issues"])
-    assert all(record["record_id"] != "r1" for record in result["current_results"])
+    assert any(record["record_id"] == "r1" for record in result["candidates"])
 
 
 def test_equal_number_from_other_group_is_not_valid_evidence():
@@ -136,7 +138,7 @@ def test_equal_number_from_other_group_is_not_valid_evidence():
     response["records"][0]["fields"]["value"]["sources"] = [wrong]
     result = evaluate(case, parsed=response)
     assert any(issue["code"] == "relation_geometry_mismatch" for issue in result["issues"])
-    assert len(result["current_results"]) == 1
+    assert len(result["candidates"]) == len(response["records"])
 
 
 def test_group_total_cannot_be_distributed_to_a_member():
@@ -146,7 +148,7 @@ def test_group_total_cannot_be_distributed_to_a_member():
         "value": "M1", "sources": [{"ref": "table-0001-r0001-c0001", "quote": "M1"}], "relation": "row"}
     result = evaluate(case, parsed=proposed)
     assert "group_measurement_assigned_to_member" in {issue["code"] for issue in result["issues"]}
-    assert result["current_results"] == []
+    assert result["candidates"] and result["issues"]
 
 
 def test_merged_number_needs_collective_or_explicit_each_scope():
@@ -165,7 +167,7 @@ def test_negated_each_is_not_permission_to_distribute():
     for record in case["replays"]["A"]["records"]:
         record["scope_sources"][0]["quote"] = after
     result = evaluate(case)
-    assert result["current_results"] == []
+    assert result["candidates"] and result["issues"]
     assert result["issues"]
 
 
@@ -208,3 +210,16 @@ def test_malformed_json_is_not_repaired_or_silently_accepted(text):
 def test_invalid_physical_grid_does_not_produce_guessed_cells():
     with pytest.raises(ValueError, match="physical cell grid"):
         build_table_input("<table><tr><td>A</td><td>1</td></tr><tr><td>B</td></tr></table>")
+
+
+def test_narrow_each_quote_cannot_hide_negation_in_same_visible_entry():
+    case = case_named("explicit_each")
+    case["source"] = case["source"].replace("Each member has mass 5 kg.", "Not every member has mass 5 kg.")
+    for record in case["replays"]["A"]["records"]:
+        record["scope_sources"][0]["quote"] = "every"
+    original = deepcopy(case["replays"]["A"])
+    result = evaluate(case)
+    assert "distributive_wording_negated_or_conditional" in {i["code"] for i in result["issues"]}
+    assert len(result["candidates"]) == len(original["records"])
+    assert all(r["scope_sources"][0]["quote"] == "every" for r in result["candidates"])
+    assert case["replays"]["A"] == original

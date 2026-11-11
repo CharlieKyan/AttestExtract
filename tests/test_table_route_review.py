@@ -1,5 +1,7 @@
 """Independent review probes: wrong ownership and partial literals must not pass."""
 
+import pytest
+
 from attestextract.table_routes import build_table_input, evaluate_route
 
 
@@ -36,7 +38,7 @@ def test_two_value_anchors_cannot_join_before_pressure_to_after_time():
                   "time": binding(table, "400", "400", "anchor"),
                   "time_unit": binding(table, "min", "Time/min", "column", "min")}}
     result = evaluate_route("A", {"records": [record]}, table, spec)
-    assert result["current_results"] == []
+    assert result["candidates"] and result["issues"]
     assert any(issue.get("field") == "condition" for issue in result["issues"])
 
 
@@ -52,7 +54,7 @@ def test_horizontal_group_total_cannot_be_assigned_to_one_member_header():
                   "value": binding(table, "100", "100", "anchor"),
                   "unit": binding(table, "m", "Total length/m", "row", "m")}}
     result = evaluate_route("A", {"records": [record]}, table, spec)
-    assert result["current_results"] == []
+    assert result["candidates"] and result["issues"]
     assert any(issue.get("field") == "object" for issue in result["issues"])
 
 
@@ -71,19 +73,35 @@ def simple_record(source_value="100", claimed_value="10", selected_value="10", s
 def test_numeric_substring_cannot_turn_100_into_10():
     table, spec, record = simple_record()
     result = evaluate_route("A", {"records": [record]}, table, spec)
-    assert result["current_results"] == []
+    assert result["candidates"] and result["issues"]
     assert any(issue.get("field") == "value" for issue in result["issues"])
 
 
 def test_unit_substring_cannot_turn_mpa_into_pa():
     table, spec, record = simple_record(claimed_value="100", selected_value="100", selected_unit="Pa")
     result = evaluate_route("A", {"records": [record]}, table, spec)
-    assert result["current_results"] == []
+    assert result["candidates"] and result["issues"]
     assert any(issue.get("field") == "unit" for issue in result["issues"])
 
 
-def test_complete_literal_supports_an_actual_numeric_correction():
+def test_complete_literal_exposes_an_incorrect_value_without_correction():
     table, spec, record = simple_record(claimed_value="999", selected_value="100")
     result = evaluate_route("A", {"records": [record]}, table, spec)
-    assert [item["values"]["value"] for item in result["current_results"]] == ["100"]
-    assert any(change["before"] == "999" and change["after"] == "100" for change in result["changes"])
+    assert [item["values"]["value"] for item in result["candidates"]] == ["999"]
+    assert any(issue["code"] == "literal_value_mismatch" for issue in result["issues"])
+
+
+@pytest.mark.parametrize("source_value,claim,field_type", [
+    ("1e-999", 0, "number"),
+    ("9007199254740993", 9007199254740992, "integer"),
+    ("9007199254740993", 9007199254740992.0, "number"),
+])
+def test_numeric_comparison_does_not_accept_float_underflow_or_rounding(source_value, claim, field_type):
+    table, spec, record = simple_record(source_value=source_value, claimed_value=claim,
+                                        selected_value=source_value)
+    spec["record_types"][record["record_type"]]["fields"]["value"]["type"] = field_type
+    result = evaluate_route("A", {"records": [record]}, table, spec)
+    candidate = result["candidates"][0]
+    assert candidate["values"]["value"] == claim
+    assert candidate["field_checks"]["value"]["literal_check"] == "failed"
+    assert any(i["code"] == "literal_value_mismatch" for i in result["issues"])

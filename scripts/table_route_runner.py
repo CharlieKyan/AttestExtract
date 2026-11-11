@@ -35,7 +35,8 @@ DEFAULT_BACKEND = {
     "provider_options": {"reasoning": {"effort": "none"}},
 }
 ARTIFACTS = ("cases.json", "config.json", "slots.json", "table-inputs.json", "requests.json", "replay-overrides.json")
-SCHEMA_VERSION = "table-a-0.2"
+SCHEMA_VERSION = "table-a-0.3"
+OBSERVED_PREVIOUS_SCHEMA_VERSION = "table-a-0.2"
 PREVIOUS_A_SCHEMA_VERSION = "table-a-0.1"
 LEGACY_SCHEMA_VERSION = "table-routes-0.1"
 
@@ -171,7 +172,8 @@ def prepare_bundle(output: Path, cases: list[dict], backend_config: dict | None 
             set(item) != {"request.json", "response.json", "origin.json"}
             for item in provenance.values()):
         raise ConfigurationError("Replay provenance must describe known A slots and original request/response artifacts.")
-    manifest = {"schema_version": SCHEMA_VERSION, "max_calls": len(slots), "rounds": rounds,
+    manifest = {"schema_version": SCHEMA_VERSION, "processing_policy": "observe_only",
+                "max_calls": len(slots), "rounds": rounds,
                 "max_output_tokens": 4096, "created_at": datetime.now(timezone.utc).isoformat(),
                 "runtime": runtime_identity(), "artifacts": {key: digest(value) for key, value in artifacts.items()},
                 "replay_only": replay_only or bool(overrides) or bool(provenance),
@@ -198,7 +200,8 @@ def _load_bundle(root: Path, *, check_runtime: bool, allow_legacy: bool) -> dict
     legacy = manifest.get("schema_version") == LEGACY_SCHEMA_VERSION
     if manifest.get("schema_version") != SCHEMA_VERSION and not allow_legacy:
         raise ConfigurationError("Previous bundles are read-only. View the saved REPORT.html; use fork-replay to import saved A responses into a new offline bundle.")
-    if (manifest.get("schema_version") not in {SCHEMA_VERSION, PREVIOUS_A_SCHEMA_VERSION, LEGACY_SCHEMA_VERSION}
+    if (manifest.get("schema_version") not in {SCHEMA_VERSION, OBSERVED_PREVIOUS_SCHEMA_VERSION,
+                                              PREVIOUS_A_SCHEMA_VERSION, LEGACY_SCHEMA_VERSION}
             or set(manifest.get("artifacts", {})) != set(ARTIFACTS)):
         raise ConfigurationError("Invalid table experiment manifest.")
     values = {}
@@ -538,7 +541,8 @@ def run_bundle(root: Path, *, mode: str = "replay", environment: dict | None = N
                                                    table_input=table_input)
                 write_new(directory / "reconciliation.json", reconciliation)
                 write_new(directory / "results.json", {
-                    "schema_version": "table-route-v2", "candidates": reconciliation["candidates"],
+                    "schema_version": "table-route-v3", "processing_policy": "observe_only",
+                    "candidates": reconciliation["candidates"],
                     "evidence": reconciliation["evidence"], "rejections": parsed["rejections"],
                     "semantic_verification": "not_run"})
                 transport_failures = 0

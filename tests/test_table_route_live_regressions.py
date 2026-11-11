@@ -40,27 +40,29 @@ def test_broad_unit_evidence_preserves_supported_unit_instead_of_copying_header(
     table, task, record = sample(header, unit)
     original = deepcopy(record)
     result = evaluate_route("A", {"records": [record]}, table, task)
-    current = result["current_results"][0]
+    current = result["candidates"][0]
     assert current["values"]["unit"] == unit
-    assert current["fields"]["unit"]["sources"][0]["quote"] == unit
+    assert current["fields"]["unit"]["sources"][0]["quote"] == header
+    assert current["literal_evidence"]["unit"]["selected_quote"] == unit
     assert current["fields"]["unit"]["sources"][0]["ref"] == record["fields"]["unit"]["sources"][0]["ref"]
-    assert {c["reason"] for c in result["changes"]} == {"source_refined"}
+    assert current["field_checks"]["unit"]["literal_check"] == "passed"
+    assert "changes" not in result
     assert record == original
 
 
-def test_explicit_unique_unit_suffix_can_correct_an_incorrect_unit_value():
+def test_explicit_unit_suffix_reports_but_does_not_correct_incorrect_value():
     table, task, record = sample(unit="Pa")
     result = evaluate_route("A", {"records": [record]}, table, task)
-    assert result["current_results"][0]["values"]["unit"] == "MPa"
-    assert any(c["reason"] == "read_original_source" and c["before"] == "Pa" and c["after"] == "MPa"
-               for c in result["changes"])
+    assert result["candidates"][0]["values"]["unit"] == "Pa"
+    assert result["candidates"][0]["field_checks"]["unit"]["literal_check"] == "failed"
+    assert "partial_literal_selection" in {i["code"] for i in result["issues"]}
 
 
 def test_partial_unit_evidence_does_not_expand_outside_cited_range():
     table, task, record = sample(unit="Pa")
     record["fields"]["unit"]["sources"][0]["quote"] = "Pa"
     result = evaluate_route("A", {"records": [record]}, table, task)
-    assert result["current_results"] == []
+    assert result["candidates"] and result["issues"]
     assert "partial_literal_selection" in {i["code"] for i in result["issues"]}
 
 
@@ -68,23 +70,25 @@ def test_partial_unit_evidence_does_not_expand_outside_cited_range():
 def test_ambiguous_or_nonunit_passage_is_not_written_into_unit(header):
     table, task, record = sample(header, "Pa")
     result = evaluate_route("A", {"records": [record]}, table, task)
-    assert result["current_results"] == []
+    assert result["candidates"] and result["issues"]
     assert result["records"][0]["values"]["unit"] == "Pa"
-    assert "unit_source_not_scalar" in {i["code"] for i in result["issues"]}
+    assert result["candidates"][0]["field_checks"]["unit"]["literal_check"] == "failed"
 
 
-def test_only_mislabeled_anchor_or_cell_with_unique_axis_is_repaired():
+def test_mislabeled_anchor_or_cell_is_reported_without_rewriting():
     table, task, record = sample()
     record["fields"]["object"]["relation"] = "anchor"
     record["fields"]["unit"]["relation"] = "cell"
     result = evaluate_route("A", {"records": [record]}, table, task)
-    assert len(result["current_results"]) == 1
-    corrections = {(c["field"], c["after"]) for c in result["changes"] if c["reason"] == "relation_label_corrected"}
-    assert corrections == {("object", "row"), ("unit", "column")}
+    assert len(result["candidates"]) == 1
+    mismatches = {i["field"] for i in result["issues"] if i["code"] == "relation_geometry_mismatch"}
+    assert mismatches == {"object", "unit"}
+    assert result["candidates"][0]["fields"]["unit"]["relation"] == "cell"
+    assert result["candidates"][0]["field_checks"]["unit"]["literal_check"] == "passed"
     assert record["fields"]["object"]["relation"] == "anchor"
     record["fields"]["object"]["relation"] = "column"
     blocked = evaluate_route("A", {"records": [record]}, table, task)
-    assert blocked["current_results"] == []
+    assert blocked["candidates"] and blocked["issues"]
     assert "relation_geometry_mismatch" in {i["code"] for i in blocked["issues"]}
 
 
@@ -93,7 +97,7 @@ def test_only_mislabeled_anchor_or_cell_with_unique_axis_is_repaired():
 def test_supported_compound_unit_is_preserved(header, unit):
     table, task, record = sample(header, unit)
     result = evaluate_route("A", {"records": [record]}, table, task)
-    assert result["current_results"][0]["values"]["unit"] == unit
+    assert result["candidates"][0]["values"]["unit"] == unit
 
 
 @pytest.mark.parametrize("unit,claim", [("kg/m3", "m3"), ("m/s", "s"), ("Pa*s", "Pa"), ("Pa·s", "Pa")])
@@ -102,10 +106,11 @@ def test_compound_unit_is_read_whole_and_partial_evidence_is_rejected(unit, clai
     selection = record["fields"]["unit"]["sources"][0]
     selection["quote"] = unit
     result = evaluate_route("A", {"records": [record]}, table, task)
-    assert result["current_results"][0]["values"]["unit"] == unit
+    assert result["candidates"][0]["values"]["unit"] == claim
+    assert result["candidates"][0]["field_checks"]["unit"]["literal_check"] == "failed"
     selection["quote"] = claim
     partial = evaluate_route("A", {"records": [record]}, table, task)
-    assert partial["current_results"] == []
+    assert partial["candidates"] and partial["issues"]
     assert "partial_literal_selection" in {i["code"] for i in partial["issues"]}
 
 
@@ -115,12 +120,43 @@ def test_unit_fix_does_not_narrow_numeric_ranges_or_qualifiers(reading, claim):
     table, task, record = sample(reading=reading)
     record["fields"]["value"]["value"] = claim
     result = evaluate_route("A", {"records": [record]}, table, task)
-    assert result["current_results"][0]["values"]["value"] == reading
-    assert not any(c["reason"] == "source_refined" and c["field"] == "value" for c in result["changes"])
+    assert result["candidates"][0]["values"]["value"] == claim
+    assert "partial_literal_selection" in {i["code"] for i in result["issues"]}
 
 
 def test_a_whole_header_claim_is_not_accepted_as_a_scalar_unit():
     table, task, record = sample("Pressure/MPa", "Pressure/MPa")
     result = evaluate_route("A", {"records": [record]}, table, task)
-    assert result["current_results"] == []
+    assert result["candidates"] and result["issues"]
     assert "unit_source_not_scalar" in {i["code"] for i in result["issues"]}
+
+
+@pytest.mark.parametrize("unit,claim", [
+    ("m²", "m"), (r"\text{m}^{2}", "m"),
+    (r"\mathrm{kg}/\mathrm{m}^{3}", "kg"),
+    (r"\mathrm{kg}/\mathrm{m}^{3}", "m"),
+    ("m s-1", "m"), ("m s-1", "s-1"), ("mg L-1", "mg"),
+    (r"m s^{-1}", "m"), (r"m s^{-1}", "s^{-1}"),
+])
+def test_unit_claim_cannot_drop_exponents_or_explicit_factors(unit, claim):
+    table, task, record = sample("Quantity/" + unit, claim)
+    result = evaluate_route("A", {"records": [record]}, table, task)
+    candidate = result["candidates"][0]
+    assert candidate["values"]["unit"] == claim
+    assert candidate["field_checks"]["unit"]["literal_check"] == "failed"
+    assert "partial_literal_selection" in {i["code"] for i in result["issues"]}
+
+
+@pytest.mark.parametrize("unit", ["m²", r"\text{m}^{2}",
+                                  r"\mathrm{kg}/\mathrm{m}^{3}", "m s-1", "mg L-1", r"m s^{-1}"])
+def test_complete_unit_factors_are_supported_verbatim(unit):
+    table, task, record = sample("Quantity/" + unit, unit)
+    result = evaluate_route("A", {"records": [record]}, table, task)
+    assert result["candidates"][0]["field_checks"]["unit"]["literal_check"] == "passed"
+    assert result["candidates"][0]["values"]["unit"] == unit
+
+
+def test_unit_followed_by_ordinary_annotation_remains_supported():
+    table, task, record = sample("Length/m (dry)", "m")
+    result = evaluate_route("A", {"records": [record]}, table, task)
+    assert result["candidates"][0]["field_checks"]["unit"]["literal_check"] == "passed"
