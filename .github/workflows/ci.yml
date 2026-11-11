@@ -58,6 +58,8 @@ jobs:
               "provider_review_smoke.py",
           )
           provider_sources = {}
+          table_names = ("table_route_experiment.py", "table_route_runner.py", "table_results_smoke.py")
+          table_sources = {}
           tls_sources = {}
           with tarfile.open(source_archive) as archive:
               for name in provider_names:
@@ -66,6 +68,12 @@ jobs:
                   assert len(members) == 1, f"Source distribution must contain {name}"
                   provider_sources[name] = archive.extractfile(members[0]).read()
                   assert provider_sources[name] == Path("scripts", name).read_bytes()
+              for name in table_names:
+                  members = [member for member in archive.getmembers()
+                             if member.name.endswith("/scripts/" + name) and member.isfile()]
+                  assert len(members) == 1, f"Source distribution must contain {name}"
+                  table_sources[name] = archive.extractfile(members[0]).read()
+                  assert table_sources[name] == Path("scripts", name).read_bytes()
               for relative in ("scripts/tls_first_smoke.py",
                                "tests/fixtures/tls_local/localhost-cert.pem",
                                "tests/fixtures/tls_local/localhost-key.pem"):
@@ -89,7 +97,7 @@ jobs:
               assert set(examples) == {"ccus", "procurement"}
               for name, count in (("ccus", 2), ("procurement", 3)):
                   result = examples[name]
-                  assert result["package_version"] == "0.1.0.dev25"
+                  assert result["package_version"] == "0.1.0.dev26"
                   assert result["run"]["mode"] == "replay"
                   assert len(result["candidates"]) == count
                   assert result["review"] == []
@@ -99,7 +107,7 @@ jobs:
               assert set(archives) == {"attribute", "observation", "relation"}
               for name, candidate_count, record_count in (("attribute", 2, 1), ("observation", 2, 2), ("relation", 1, 1)):
                   archive = archives[name]
-                  assert archive["extraction"]["package_version"] == "0.1.0.dev25"
+                  assert archive["extraction"]["package_version"] == "0.1.0.dev26"
                   assert archive["extraction"]["run"]["mode"] == "replay"
                   assert len(archive["extraction"]["candidates"]) == candidate_count
                   assert len(archive["records"]) == record_count
@@ -113,7 +121,7 @@ jobs:
               subprocess.run([str(python), str(copied), "--mode", "mock", "--output-dir", str(acceptance)],
                              check=True, cwd=root, env=env)
               summary = json.loads((acceptance / "summary.json").read_text(encoding="utf-8"))
-              assert summary["package_version"] == "0.1.0.dev25"
+              assert summary["package_version"] == "0.1.0.dev26"
               assert summary["passed"] and summary["real_endpoint_calls"] == 0
               assert summary["mock_http_calls"] == 3
               assert [case["candidate_count"] for case in summary["cases"]] == [1, 2, 1]
@@ -206,7 +214,7 @@ jobs:
                               "--output-dir", str(tls_output)], check=True, cwd=root, env=env)
               tls = json.loads((tls_output / "summary.json").read_text(encoding="utf-8"))
               assert tls["passed"] and tls["real_endpoint_calls"] == 0 and tls["loopback_only"]
-              assert tls["package_version"] == "0.1.0.dev25"
+              assert tls["package_version"] == "0.1.0.dev26"
               assert tls["local_model_posts"] == 4 and tls["probe_attempts"] == 4
               assert tls["environment_restored"] and Path(tls["module_path"]).is_relative_to(environment)
               assert [case.get("actual_tls_version") for case in tls["cases"][:2]] == ["TLSv1.2", "TLSv1.3"]
@@ -229,3 +237,14 @@ jobs:
               assert reviewed["attach_review_new_calls"] == 0
               assert reviewed["historical_artifacts_unchanged"] and reviewed["strict_scores_preserved"]
               assert Path(reviewed["module_path"]).is_relative_to(environment)
+              for name, content in table_sources.items():
+                  (scripts / name).write_bytes(content)
+              table_output = root / "table-results"
+              subprocess.run([str(python), str(scripts / "table_results_smoke.py"),
+                              "--output-dir", str(table_output)], check=True, cwd=root, env=env)
+              tables = json.loads((table_output / "summary.json").read_text(encoding="utf-8"))
+              assert tables["passed"] and tables["real_model_calls"] == 0
+              assert tables["network_attempts"] == 0 and tables["planned_slots"] == 12
+              assert tables["completed_resume_new_calls"] == 0
+              assert tables["package_version"] == "0.1.0.dev26"
+              assert Path(tables["module_path"]).is_relative_to(environment)

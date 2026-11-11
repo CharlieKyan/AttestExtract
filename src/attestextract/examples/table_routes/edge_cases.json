@@ -1,0 +1,713 @@
+[
+  {
+    "id": "group_total",
+    "description": "Extract the group Total depth for G1. The total belongs to G1; individual member depths are not stated.",
+    "source": "# Synthetic grouped measurement\n\n<table><tr><td>Group</td><td>Member</td><td>Total depth/m</td></tr><tr><td rowspan=\"3\">G1</td><td>M1</td><td rowspan=\"3\">60</td></tr><tr><td>M2</td></tr><tr><td>M3</td></tr></table>\n",
+    "task": {
+      "name": "group_total",
+      "description": "Extract the group Total depth for G1. The total belongs to G1; individual member depths are not stated. Preserve source numbers and units; do not calculate or convert. Missing unit is null.",
+      "record_types": {
+        "measurement": {
+          "fields": {
+            "object": {
+              "type": "string",
+              "required": true
+            },
+            "parameter": {
+              "type": "string",
+              "required": true
+            },
+            "value": {
+              "type": "string",
+              "required": true
+            },
+            "unit": {
+              "type": "string",
+              "required": false
+            }
+          },
+          "identity_fields": [
+            "object",
+            "parameter"
+          ],
+          "condition_fields": [],
+          "measurement_groups": {
+            "observation": {
+              "value_field": "value",
+              "unit_field": "unit",
+              "condition_fields": []
+            }
+          }
+        }
+      }
+    },
+    "gold": [
+      {
+        "record_type": "measurement",
+        "values": {
+          "object": "G1",
+          "parameter": "Total depth",
+          "value": "60",
+          "unit": "m"
+        }
+      }
+    ],
+    "previous": [],
+    "replays": {
+      "A": {
+        "records": [
+          {
+            "record_id": "r1",
+            "record_type": "measurement",
+            "fields": {
+              "object": {
+                "value": "G1",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0001-c0000",
+                    "quote": "G1"
+                  }
+                ],
+                "relation": "group"
+              },
+              "parameter": {
+                "value": "Total depth",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0000-c0002",
+                    "quote": "Total depth"
+                  }
+                ],
+                "relation": "column"
+              },
+              "value": {
+                "value": "60",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0001-c0002",
+                    "quote": "60"
+                  }
+                ],
+                "relation": "anchor"
+              },
+              "unit": {
+                "value": "m",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0000-c0002",
+                    "quote": "m"
+                  }
+                ],
+                "relation": "column"
+              }
+            },
+            "anchors": [
+              {
+                "ref": "table-0001-r0001-c0002",
+                "quote": "60"
+              }
+            ],
+            "scope": "group",
+            "scope_sources": [
+              {
+                "ref": "table-0001-r0000-c0002",
+                "quote": "Total depth"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "replay_provenance": "Hand-authored synthetic replay; no model endpoint was called."
+  },
+  {
+    "id": "explicit_each",
+    "description": "Extract Mass for M1 and M2. The caption explicitly says each member has mass 5 kg.",
+    "source": "# Synthetic shared condition\n\n<table><caption>Each member has mass 5 kg.</caption><tr><td>Member</td><td>Mass/kg</td></tr><tr><td>M1</td><td rowspan=\"2\">5</td></tr><tr><td>M2</td></tr></table>\n",
+    "task": {
+      "name": "explicit_each",
+      "description": "Extract Mass for M1 and M2. The caption explicitly says each member has mass 5 kg. Preserve source numbers and units; do not calculate or convert. Missing unit is null.",
+      "record_types": {
+        "measurement": {
+          "fields": {
+            "object": {
+              "type": "string",
+              "required": true
+            },
+            "parameter": {
+              "type": "string",
+              "required": true
+            },
+            "value": {
+              "type": "string",
+              "required": true
+            },
+            "unit": {
+              "type": "string",
+              "required": false
+            }
+          },
+          "identity_fields": [
+            "object",
+            "parameter"
+          ],
+          "condition_fields": [],
+          "measurement_groups": {
+            "observation": {
+              "value_field": "value",
+              "unit_field": "unit",
+              "condition_fields": []
+            }
+          }
+        }
+      }
+    },
+    "gold": [
+      {
+        "record_type": "measurement",
+        "values": {
+          "object": "M1",
+          "parameter": "Mass",
+          "value": "5",
+          "unit": "kg"
+        }
+      },
+      {
+        "record_type": "measurement",
+        "values": {
+          "object": "M2",
+          "parameter": "Mass",
+          "value": "5",
+          "unit": "kg"
+        }
+      }
+    ],
+    "previous": [],
+    "replays": {
+      "A": {
+        "records": [
+          {
+            "record_id": "r1",
+            "record_type": "measurement",
+            "fields": {
+              "object": {
+                "value": "M1",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0001-c0000",
+                    "quote": "M1"
+                  }
+                ],
+                "relation": "row"
+              },
+              "parameter": {
+                "value": "Mass",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0000-c0001",
+                    "quote": "Mass"
+                  }
+                ],
+                "relation": "column"
+              },
+              "value": {
+                "value": "5",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0001-c0001",
+                    "quote": "5"
+                  }
+                ],
+                "relation": "anchor"
+              },
+              "unit": {
+                "value": "kg",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0000-c0001",
+                    "quote": "kg"
+                  }
+                ],
+                "relation": "column"
+              }
+            },
+            "anchors": [
+              {
+                "ref": "table-0001-r0001-c0001",
+                "quote": "5"
+              }
+            ],
+            "scope": "each",
+            "scope_sources": [
+              {
+                "ref": "context-1",
+                "quote": "Each member has mass 5 kg."
+              }
+            ]
+          },
+          {
+            "record_id": "r2",
+            "record_type": "measurement",
+            "fields": {
+              "object": {
+                "value": "M2",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0002-c0000",
+                    "quote": "M2"
+                  }
+                ],
+                "relation": "row"
+              },
+              "parameter": {
+                "value": "Mass",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0000-c0001",
+                    "quote": "Mass"
+                  }
+                ],
+                "relation": "column"
+              },
+              "value": {
+                "value": "5",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0001-c0001",
+                    "quote": "5"
+                  }
+                ],
+                "relation": "anchor"
+              },
+              "unit": {
+                "value": "kg",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0000-c0001",
+                    "quote": "kg"
+                  }
+                ],
+                "relation": "column"
+              }
+            },
+            "anchors": [
+              {
+                "ref": "table-0001-r0001-c0001",
+                "quote": "5"
+              }
+            ],
+            "scope": "each",
+            "scope_sources": [
+              {
+                "ref": "context-1",
+                "quote": "Each member has mass 5 kg."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "replay_provenance": "Hand-authored synthetic replay; no model endpoint was called."
+  },
+  {
+    "id": "footnote_condition",
+    "description": "Extract Mass for A and B with condition dry or wet from the table footnote. Exclude the marker from object name.",
+    "source": "# Synthetic footnote experiment\n\n<table><tr><td>Sample</td><td>Mass/g</td></tr><tr><td>A*</td><td>9</td></tr><tr><td>B</td><td>11</td></tr></table>\n\n* A was dry; B was wet.\n",
+    "task": {
+      "name": "footnote_condition",
+      "description": "Extract Mass for A and B with condition dry or wet from the table footnote. Exclude the marker from object name. Preserve source numbers and units; do not calculate or convert. Missing unit is null.",
+      "record_types": {
+        "measurement": {
+          "fields": {
+            "object": {
+              "type": "string",
+              "required": true
+            },
+            "condition": {
+              "type": "string",
+              "required": true
+            },
+            "parameter": {
+              "type": "string",
+              "required": true
+            },
+            "value": {
+              "type": "string",
+              "required": true
+            },
+            "unit": {
+              "type": "string",
+              "required": false
+            }
+          },
+          "identity_fields": [
+            "object",
+            "parameter"
+          ],
+          "condition_fields": [
+            "condition"
+          ],
+          "measurement_groups": {
+            "observation": {
+              "value_field": "value",
+              "unit_field": "unit",
+              "condition_fields": [
+                "condition"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "gold": [
+      {
+        "record_type": "measurement",
+        "values": {
+          "object": "A",
+          "condition": "dry",
+          "parameter": "Mass",
+          "value": "9",
+          "unit": "g"
+        }
+      },
+      {
+        "record_type": "measurement",
+        "values": {
+          "object": "B",
+          "condition": "wet",
+          "parameter": "Mass",
+          "value": "11",
+          "unit": "g"
+        }
+      }
+    ],
+    "previous": [],
+    "replays": {
+      "A": {
+        "records": [
+          {
+            "record_id": "r1",
+            "record_type": "measurement",
+            "fields": {
+              "object": {
+                "value": "A",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0001-c0000",
+                    "quote": "A"
+                  }
+                ],
+                "relation": "row"
+              },
+              "condition": {
+                "value": "dry",
+                "sources": [
+                  {
+                    "ref": "context-1",
+                    "quote": "dry"
+                  }
+                ],
+                "relation": "context"
+              },
+              "parameter": {
+                "value": "Mass",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0000-c0001",
+                    "quote": "Mass"
+                  }
+                ],
+                "relation": "column"
+              },
+              "value": {
+                "value": "9",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0001-c0001",
+                    "quote": "9"
+                  }
+                ],
+                "relation": "anchor"
+              },
+              "unit": {
+                "value": "g",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0000-c0001",
+                    "quote": "g"
+                  }
+                ],
+                "relation": "column"
+              }
+            },
+            "anchors": [
+              {
+                "ref": "table-0001-r0001-c0001",
+                "quote": "9"
+              }
+            ],
+            "scope": "individual",
+            "scope_sources": []
+          },
+          {
+            "record_id": "r2",
+            "record_type": "measurement",
+            "fields": {
+              "object": {
+                "value": "B",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0002-c0000",
+                    "quote": "B"
+                  }
+                ],
+                "relation": "row"
+              },
+              "condition": {
+                "value": "wet",
+                "sources": [
+                  {
+                    "ref": "context-1",
+                    "quote": "wet"
+                  }
+                ],
+                "relation": "context"
+              },
+              "parameter": {
+                "value": "Mass",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0000-c0001",
+                    "quote": "Mass"
+                  }
+                ],
+                "relation": "column"
+              },
+              "value": {
+                "value": "11",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0002-c0001",
+                    "quote": "11"
+                  }
+                ],
+                "relation": "anchor"
+              },
+              "unit": {
+                "value": "g",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0000-c0001",
+                    "quote": "g"
+                  }
+                ],
+                "relation": "column"
+              }
+            },
+            "anchors": [
+              {
+                "ref": "table-0001-r0002-c0001",
+                "quote": "11"
+              }
+            ],
+            "scope": "individual",
+            "scope_sources": []
+          }
+        ]
+      }
+    },
+    "mineru_content": [
+      {
+        "type": "table",
+        "table_body": "<table><tr><td>Sample</td><td>Mass/g</td></tr><tr><td>A*</td><td>9</td></tr><tr><td>B</td><td>11</td></tr></table>",
+        "table_footnote": [
+          "* A was dry; B was wet."
+        ]
+      }
+    ],
+    "replay_provenance": "Hand-authored synthetic replay; no model endpoint was called."
+  },
+  {
+    "id": "multiple_facts_in_cell",
+    "description": "Extract mass for A and B separately from the same source cell.",
+    "source": "# Synthetic compact observations\n\n<table><tr><td>Observations</td></tr><tr><td>A: mass 12 g; B: mass 18 g.</td></tr></table>\n",
+    "task": {
+      "name": "multiple_facts_in_cell",
+      "description": "Extract mass for A and B separately from the same source cell. Preserve source numbers and units; do not calculate or convert. Missing unit is null.",
+      "record_types": {
+        "measurement": {
+          "fields": {
+            "object": {
+              "type": "string",
+              "required": true
+            },
+            "parameter": {
+              "type": "string",
+              "required": true
+            },
+            "value": {
+              "type": "string",
+              "required": true
+            },
+            "unit": {
+              "type": "string",
+              "required": false
+            }
+          },
+          "identity_fields": [
+            "object",
+            "parameter"
+          ],
+          "condition_fields": [],
+          "measurement_groups": {
+            "observation": {
+              "value_field": "value",
+              "unit_field": "unit",
+              "condition_fields": []
+            }
+          }
+        }
+      }
+    },
+    "gold": [
+      {
+        "record_type": "measurement",
+        "values": {
+          "object": "A",
+          "parameter": "mass",
+          "value": "12",
+          "unit": "g"
+        }
+      },
+      {
+        "record_type": "measurement",
+        "values": {
+          "object": "B",
+          "parameter": "mass",
+          "value": "18",
+          "unit": "g"
+        }
+      }
+    ],
+    "previous": [],
+    "replays": {
+      "A": {
+        "records": [
+          {
+            "record_id": "r1",
+            "record_type": "measurement",
+            "fields": {
+              "object": {
+                "value": "A",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0001-c0000",
+                    "quote": "A"
+                  }
+                ],
+                "relation": "cell"
+              },
+              "parameter": {
+                "value": "mass",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0001-c0000",
+                    "quote": "mass",
+                    "offset": 3
+                  }
+                ],
+                "relation": "cell"
+              },
+              "value": {
+                "value": "12",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0001-c0000",
+                    "quote": "12"
+                  }
+                ],
+                "relation": "anchor"
+              },
+              "unit": {
+                "value": "g",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0001-c0000",
+                    "quote": "g",
+                    "offset": 11
+                  }
+                ],
+                "relation": "cell"
+              }
+            },
+            "anchors": [
+              {
+                "ref": "table-0001-r0001-c0000",
+                "quote": "12"
+              }
+            ],
+            "scope": "individual",
+            "scope_sources": []
+          },
+          {
+            "record_id": "r2",
+            "record_type": "measurement",
+            "fields": {
+              "object": {
+                "value": "B",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0001-c0000",
+                    "quote": "B"
+                  }
+                ],
+                "relation": "cell"
+              },
+              "parameter": {
+                "value": "mass",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0001-c0000",
+                    "quote": "mass",
+                    "offset": 17
+                  }
+                ],
+                "relation": "cell"
+              },
+              "value": {
+                "value": "18",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0001-c0000",
+                    "quote": "18"
+                  }
+                ],
+                "relation": "anchor"
+              },
+              "unit": {
+                "value": "g",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0001-c0000",
+                    "quote": "g",
+                    "offset": 25
+                  }
+                ],
+                "relation": "cell"
+              }
+            },
+            "anchors": [
+              {
+                "ref": "table-0001-r0001-c0000",
+                "quote": "18"
+              }
+            ],
+            "scope": "individual",
+            "scope_sources": []
+          }
+        ]
+      }
+    },
+    "replay_provenance": "Hand-authored synthetic replay; no model endpoint was called."
+  }
+]

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.0.dev26
+
+- Add a separate, A-only scientific-table experiment entry point with synthetic examples, immutable saved-response imports and source-linked reports. Ordinary extraction defaults remain unchanged.
+- Deliver complete extraction results with separate location, literal-integrity and relationship checks; retain the original strict view for compatibility. Unconfirmed relationships do not trigger extra model calls or establish semantic acceptance.
+- Permit omitted/null relationship metadata only for empty optional bindings, and isolate malformed records while preserving their original positions and errors. Damaged JSON, duplicate keys and truncation remain explicit failures.
+- Preserve original historical requests, response metadata and source provenance in offline forks. Version experiments as `table-a-0.2` and result exports as `table-route-v2`; previous bundles remain read-only.
+- Keep exact in-entry source repairs auditable, preserve group/condition and numeric-boundary risks, and expose complete model-visible table context. This release acceptance uses offline saved responses and synthetic tests, with no new paid model requests.
+
 ## 0.1.0.dev25
 
 - Accept explicit API base URL, key and unregistered raw model names through Python `extract()` and the matching CLI. No profile registration or synthetic generation is required before extracting the first real source chunk.

@@ -1,0 +1,1089 @@
+[
+  {
+    "id": "paired_parameters",
+    "description": "Extract Density and Porosity. Keep full parameter names without unit.",
+    "source": "# Synthetic material\n\n<table><tr><td>Parameter</td><td>Value</td><td>Parameter</td><td>Value</td></tr><tr><td>Density/(kg/m3)</td><td>2400</td><td>Porosity</td><td>0.12</td></tr></table>\n",
+    "task": {
+      "name": "paired_parameters",
+      "description": "Extract Density and Porosity. Keep full parameter names without unit. Preserve source numbers and units; do not calculate or convert. Missing unit is null.",
+      "record_types": {
+        "measurement": {
+          "fields": {
+            "parameter": {
+              "type": "string",
+              "required": true
+            },
+            "value": {
+              "type": "string",
+              "required": true
+            },
+            "unit": {
+              "type": "string",
+              "required": false
+            }
+          },
+          "identity_fields": [
+            "parameter"
+          ],
+          "condition_fields": [],
+          "measurement_groups": {
+            "observation": {
+              "value_field": "value",
+              "unit_field": "unit",
+              "condition_fields": []
+            }
+          }
+        }
+      }
+    },
+    "gold": [
+      {
+        "record_type": "measurement",
+        "values": {
+          "parameter": "Density",
+          "value": "2400",
+          "unit": "kg/m3"
+        }
+      },
+      {
+        "record_type": "measurement",
+        "values": {
+          "parameter": "Porosity",
+          "value": "0.12",
+          "unit": null
+        }
+      }
+    ],
+    "previous": [],
+    "replays": {
+      "A": {
+        "records": [
+          {
+            "record_id": "r1",
+            "record_type": "measurement",
+            "fields": {
+              "parameter": {
+                "value": "Density",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0001-c0000",
+                    "quote": "Density"
+                  }
+                ],
+                "relation": "row"
+              },
+              "value": {
+                "value": "2400",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0001-c0001",
+                    "quote": "2400"
+                  }
+                ],
+                "relation": "anchor"
+              },
+              "unit": {
+                "value": "kg/m3",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0001-c0000",
+                    "quote": "kg/m3"
+                  }
+                ],
+                "relation": "row"
+              }
+            },
+            "anchors": [
+              {
+                "ref": "table-0001-r0001-c0001",
+                "quote": "2400"
+              }
+            ],
+            "scope": "individual",
+            "scope_sources": []
+          },
+          {
+            "record_id": "r2",
+            "record_type": "measurement",
+            "fields": {
+              "parameter": {
+                "value": "Porosity",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0001-c0002",
+                    "quote": "Porosity"
+                  }
+                ],
+                "relation": "row"
+              },
+              "value": {
+                "value": "0.12",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0001-c0003",
+                    "quote": "0.12"
+                  }
+                ],
+                "relation": "anchor"
+              },
+              "unit": {
+                "value": null,
+                "sources": [],
+                "relation": "row"
+              }
+            },
+            "anchors": [
+              {
+                "ref": "table-0001-r0001-c0003",
+                "quote": "0.12"
+              }
+            ],
+            "scope": "individual",
+            "scope_sources": []
+          }
+        ]
+      }
+    },
+    "replay_provenance": "Hand-authored synthetic replay; no model endpoint was called."
+  },
+  {
+    "id": "before_after",
+    "description": "Extract S1 Pressure and Time before and after treatment. Preserve Before/After labels.",
+    "source": "# Synthetic experiment\n\n<table><tr><td rowspan=\"2\">Sample</td><td rowspan=\"2\">Condition</td><td colspan=\"2\">Measurement</td></tr><tr><td>Pressure/MPa</td><td>Time/min</td></tr><tr><td rowspan=\"2\">S1</td><td>Before</td><td>8.1</td><td>301</td></tr><tr><td>After</td><td>8.4</td><td>307</td></tr></table>\n",
+    "task": {
+      "name": "before_after",
+      "description": "Extract S1 Pressure and Time before and after treatment. Preserve Before/After labels. Preserve source numbers and units; do not calculate or convert. Missing unit is null.",
+      "record_types": {
+        "measurement": {
+          "fields": {
+            "object": {
+              "type": "string",
+              "required": true
+            },
+            "condition": {
+              "type": "string",
+              "required": true
+            },
+            "parameter": {
+              "type": "string",
+              "required": true
+            },
+            "value": {
+              "type": "string",
+              "required": true
+            },
+            "unit": {
+              "type": "string",
+              "required": false
+            }
+          },
+          "identity_fields": [
+            "object",
+            "parameter"
+          ],
+          "condition_fields": [
+            "condition"
+          ],
+          "measurement_groups": {
+            "observation": {
+              "value_field": "value",
+              "unit_field": "unit",
+              "condition_fields": [
+                "condition"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "gold": [
+      {
+        "record_type": "measurement",
+        "values": {
+          "object": "S1",
+          "condition": "Before",
+          "parameter": "Pressure",
+          "value": "8.1",
+          "unit": "MPa"
+        }
+      },
+      {
+        "record_type": "measurement",
+        "values": {
+          "object": "S1",
+          "condition": "Before",
+          "parameter": "Time",
+          "value": "301",
+          "unit": "min"
+        }
+      },
+      {
+        "record_type": "measurement",
+        "values": {
+          "object": "S1",
+          "condition": "After",
+          "parameter": "Pressure",
+          "value": "8.4",
+          "unit": "MPa"
+        }
+      },
+      {
+        "record_type": "measurement",
+        "values": {
+          "object": "S1",
+          "condition": "After",
+          "parameter": "Time",
+          "value": "307",
+          "unit": "min"
+        }
+      }
+    ],
+    "previous": [
+      {
+        "record_id": "old-time-as-pressure",
+        "record_type": "measurement",
+        "fields": {
+          "object": {
+            "value": "S1",
+            "sources": [
+              {
+                "ref": "table-0001-r0002-c0000",
+                "quote": "S1"
+              }
+            ],
+            "relation": "row"
+          },
+          "condition": {
+            "value": "After",
+            "sources": [
+              {
+                "ref": "table-0001-r0003-c0001",
+                "quote": "After"
+              }
+            ],
+            "relation": "row"
+          },
+          "parameter": {
+            "value": "Pressure",
+            "sources": [
+              {
+                "ref": "table-0001-r0001-c0003",
+                "quote": "Time"
+              }
+            ],
+            "relation": "column"
+          },
+          "value": {
+            "value": "307",
+            "sources": [
+              {
+                "ref": "table-0001-r0003-c0003",
+                "quote": "307"
+              }
+            ],
+            "relation": "anchor"
+          },
+          "unit": {
+            "value": "MPa",
+            "sources": [
+              {
+                "ref": "table-0001-r0001-c0003",
+                "quote": "min"
+              }
+            ],
+            "relation": "column"
+          }
+        },
+        "anchors": [
+          {
+            "ref": "table-0001-r0003-c0003",
+            "quote": "307"
+          }
+        ],
+        "scope": "individual",
+        "scope_sources": [],
+        "values": {
+          "object": "S1",
+          "condition": "After",
+          "parameter": "Pressure",
+          "value": "307",
+          "unit": "MPa"
+        }
+      }
+    ],
+    "replays": {
+      "A": {
+        "records": [
+          {
+            "record_id": "r1",
+            "record_type": "measurement",
+            "fields": {
+              "object": {
+                "value": "S1",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0002-c0000",
+                    "quote": "S1"
+                  }
+                ],
+                "relation": "row"
+              },
+              "condition": {
+                "value": "Before",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0002-c0001",
+                    "quote": "Before"
+                  }
+                ],
+                "relation": "row"
+              },
+              "parameter": {
+                "value": "Pressure",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0001-c0002",
+                    "quote": "Pressure"
+                  }
+                ],
+                "relation": "column"
+              },
+              "value": {
+                "value": "8.1",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0002-c0002",
+                    "quote": "8.1"
+                  }
+                ],
+                "relation": "anchor"
+              },
+              "unit": {
+                "value": "MPa",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0001-c0002",
+                    "quote": "MPa"
+                  }
+                ],
+                "relation": "column"
+              }
+            },
+            "anchors": [
+              {
+                "ref": "table-0001-r0002-c0002",
+                "quote": "8.1"
+              }
+            ],
+            "scope": "individual",
+            "scope_sources": []
+          },
+          {
+            "record_id": "r2",
+            "record_type": "measurement",
+            "fields": {
+              "object": {
+                "value": "S1",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0002-c0000",
+                    "quote": "S1"
+                  }
+                ],
+                "relation": "row"
+              },
+              "condition": {
+                "value": "Before",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0002-c0001",
+                    "quote": "Before"
+                  }
+                ],
+                "relation": "row"
+              },
+              "parameter": {
+                "value": "Time",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0001-c0003",
+                    "quote": "Time"
+                  }
+                ],
+                "relation": "column"
+              },
+              "value": {
+                "value": "301",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0002-c0003",
+                    "quote": "301"
+                  }
+                ],
+                "relation": "anchor"
+              },
+              "unit": {
+                "value": "min",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0001-c0003",
+                    "quote": "min"
+                  }
+                ],
+                "relation": "column"
+              }
+            },
+            "anchors": [
+              {
+                "ref": "table-0001-r0002-c0003",
+                "quote": "301"
+              }
+            ],
+            "scope": "individual",
+            "scope_sources": []
+          },
+          {
+            "record_id": "r3",
+            "record_type": "measurement",
+            "fields": {
+              "object": {
+                "value": "S1",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0002-c0000",
+                    "quote": "S1"
+                  }
+                ],
+                "relation": "row"
+              },
+              "condition": {
+                "value": "After",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0003-c0001",
+                    "quote": "After"
+                  }
+                ],
+                "relation": "row"
+              },
+              "parameter": {
+                "value": "Pressure",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0001-c0002",
+                    "quote": "Pressure"
+                  }
+                ],
+                "relation": "column"
+              },
+              "value": {
+                "value": "8.4",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0003-c0002",
+                    "quote": "8.4"
+                  }
+                ],
+                "relation": "anchor"
+              },
+              "unit": {
+                "value": "MPa",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0001-c0002",
+                    "quote": "MPa"
+                  }
+                ],
+                "relation": "column"
+              }
+            },
+            "anchors": [
+              {
+                "ref": "table-0001-r0003-c0002",
+                "quote": "8.4"
+              }
+            ],
+            "scope": "individual",
+            "scope_sources": []
+          },
+          {
+            "record_id": "r4",
+            "record_type": "measurement",
+            "fields": {
+              "object": {
+                "value": "S1",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0002-c0000",
+                    "quote": "S1"
+                  }
+                ],
+                "relation": "row"
+              },
+              "condition": {
+                "value": "After",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0003-c0001",
+                    "quote": "After"
+                  }
+                ],
+                "relation": "row"
+              },
+              "parameter": {
+                "value": "Time",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0001-c0003",
+                    "quote": "Time"
+                  }
+                ],
+                "relation": "column"
+              },
+              "value": {
+                "value": "307",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0003-c0003",
+                    "quote": "307"
+                  }
+                ],
+                "relation": "anchor"
+              },
+              "unit": {
+                "value": "min",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0001-c0003",
+                    "quote": "min"
+                  }
+                ],
+                "relation": "column"
+              }
+            },
+            "anchors": [
+              {
+                "ref": "table-0001-r0003-c0003",
+                "quote": "307"
+              }
+            ],
+            "scope": "individual",
+            "scope_sources": []
+          }
+        ]
+      }
+    },
+    "replay_provenance": "Hand-authored synthetic replay; no model endpoint was called."
+  },
+  {
+    "id": "transposed",
+    "description": "Extract Pressure and Recovery for E1 and E2.",
+    "source": "# Synthetic tests\n\n| Parameter | E1 | E2 |\n|---|---|---|\n| Pressure/MPa | 18.0 | 22.0 |\n| Recovery/% | 71.5 | 84.2 |\n",
+    "task": {
+      "name": "transposed",
+      "description": "Extract Pressure and Recovery for E1 and E2. Preserve source numbers and units; do not calculate or convert. Missing unit is null.",
+      "record_types": {
+        "measurement": {
+          "fields": {
+            "object": {
+              "type": "string",
+              "required": true
+            },
+            "parameter": {
+              "type": "string",
+              "required": true
+            },
+            "value": {
+              "type": "string",
+              "required": true
+            },
+            "unit": {
+              "type": "string",
+              "required": false
+            }
+          },
+          "identity_fields": [
+            "object",
+            "parameter"
+          ],
+          "condition_fields": [],
+          "measurement_groups": {
+            "observation": {
+              "value_field": "value",
+              "unit_field": "unit",
+              "condition_fields": []
+            }
+          }
+        }
+      }
+    },
+    "gold": [
+      {
+        "record_type": "measurement",
+        "values": {
+          "object": "E1",
+          "parameter": "Pressure",
+          "value": "18.0",
+          "unit": "MPa"
+        }
+      },
+      {
+        "record_type": "measurement",
+        "values": {
+          "object": "E1",
+          "parameter": "Recovery",
+          "value": "71.5",
+          "unit": "%"
+        }
+      },
+      {
+        "record_type": "measurement",
+        "values": {
+          "object": "E2",
+          "parameter": "Pressure",
+          "value": "22.0",
+          "unit": "MPa"
+        }
+      },
+      {
+        "record_type": "measurement",
+        "values": {
+          "object": "E2",
+          "parameter": "Recovery",
+          "value": "84.2",
+          "unit": "%"
+        }
+      }
+    ],
+    "previous": [],
+    "replays": {
+      "A": {
+        "records": [
+          {
+            "record_id": "r1",
+            "record_type": "measurement",
+            "fields": {
+              "object": {
+                "value": "E1",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0000-c0001",
+                    "quote": "E1"
+                  }
+                ],
+                "relation": "column"
+              },
+              "parameter": {
+                "value": "Pressure",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0001-c0000",
+                    "quote": "Pressure"
+                  }
+                ],
+                "relation": "row"
+              },
+              "value": {
+                "value": "18.0",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0001-c0001",
+                    "quote": "18.0"
+                  }
+                ],
+                "relation": "anchor"
+              },
+              "unit": {
+                "value": "MPa",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0001-c0000",
+                    "quote": "MPa"
+                  }
+                ],
+                "relation": "row"
+              }
+            },
+            "anchors": [
+              {
+                "ref": "table-0001-r0001-c0001",
+                "quote": "18.0"
+              }
+            ],
+            "scope": "individual",
+            "scope_sources": []
+          },
+          {
+            "record_id": "r2",
+            "record_type": "measurement",
+            "fields": {
+              "object": {
+                "value": "E1",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0000-c0001",
+                    "quote": "E1"
+                  }
+                ],
+                "relation": "column"
+              },
+              "parameter": {
+                "value": "Recovery",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0002-c0000",
+                    "quote": "Recovery"
+                  }
+                ],
+                "relation": "row"
+              },
+              "value": {
+                "value": "71.5",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0002-c0001",
+                    "quote": "71.5"
+                  }
+                ],
+                "relation": "anchor"
+              },
+              "unit": {
+                "value": "%",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0002-c0000",
+                    "quote": "%"
+                  }
+                ],
+                "relation": "row"
+              }
+            },
+            "anchors": [
+              {
+                "ref": "table-0001-r0002-c0001",
+                "quote": "71.5"
+              }
+            ],
+            "scope": "individual",
+            "scope_sources": []
+          },
+          {
+            "record_id": "r3",
+            "record_type": "measurement",
+            "fields": {
+              "object": {
+                "value": "E2",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0000-c0002",
+                    "quote": "E2"
+                  }
+                ],
+                "relation": "column"
+              },
+              "parameter": {
+                "value": "Pressure",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0001-c0000",
+                    "quote": "Pressure"
+                  }
+                ],
+                "relation": "row"
+              },
+              "value": {
+                "value": "22.0",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0001-c0002",
+                    "quote": "22.0"
+                  }
+                ],
+                "relation": "anchor"
+              },
+              "unit": {
+                "value": "MPa",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0001-c0000",
+                    "quote": "MPa"
+                  }
+                ],
+                "relation": "row"
+              }
+            },
+            "anchors": [
+              {
+                "ref": "table-0001-r0001-c0002",
+                "quote": "22.0"
+              }
+            ],
+            "scope": "individual",
+            "scope_sources": []
+          },
+          {
+            "record_id": "r4",
+            "record_type": "measurement",
+            "fields": {
+              "object": {
+                "value": "E2",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0000-c0002",
+                    "quote": "E2"
+                  }
+                ],
+                "relation": "column"
+              },
+              "parameter": {
+                "value": "Recovery",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0002-c0000",
+                    "quote": "Recovery"
+                  }
+                ],
+                "relation": "row"
+              },
+              "value": {
+                "value": "84.2",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0002-c0002",
+                    "quote": "84.2"
+                  }
+                ],
+                "relation": "anchor"
+              },
+              "unit": {
+                "value": "%",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0002-c0000",
+                    "quote": "%"
+                  }
+                ],
+                "relation": "row"
+              }
+            },
+            "anchors": [
+              {
+                "ref": "table-0001-r0002-c0002",
+                "quote": "84.2"
+              }
+            ],
+            "scope": "individual",
+            "scope_sources": []
+          }
+        ]
+      }
+    },
+    "replay_provenance": "Hand-authored synthetic replay; no model endpoint was called."
+  },
+  {
+    "id": "grouped_members",
+    "description": "Extract only G1 member M1 and M2 Length, retaining parent Group. Do not use G2 evidence.",
+    "source": "# Synthetic segments\n\n<table><tr><td>Group</td><td>Member</td><td>Length/m</td></tr><tr><td rowspan=\"2\">G1</td><td>M1</td><td>17</td></tr><tr><td>M2</td><td>23</td></tr><tr><td>G2</td><td>M3</td><td>17</td></tr></table>\n",
+    "task": {
+      "name": "grouped_members",
+      "description": "Extract only G1 member M1 and M2 Length, retaining parent Group. Do not use G2 evidence. Preserve source numbers and units; do not calculate or convert. Missing unit is null.",
+      "record_types": {
+        "measurement": {
+          "fields": {
+            "parent": {
+              "type": "string",
+              "required": true
+            },
+            "object": {
+              "type": "string",
+              "required": true
+            },
+            "parameter": {
+              "type": "string",
+              "required": true
+            },
+            "value": {
+              "type": "string",
+              "required": true
+            },
+            "unit": {
+              "type": "string",
+              "required": false
+            }
+          },
+          "identity_fields": [
+            "parent",
+            "object",
+            "parameter"
+          ],
+          "condition_fields": [],
+          "measurement_groups": {
+            "observation": {
+              "value_field": "value",
+              "unit_field": "unit",
+              "condition_fields": []
+            }
+          }
+        }
+      }
+    },
+    "gold": [
+      {
+        "record_type": "measurement",
+        "values": {
+          "parent": "G1",
+          "object": "M1",
+          "parameter": "Length",
+          "value": "17",
+          "unit": "m"
+        }
+      },
+      {
+        "record_type": "measurement",
+        "values": {
+          "parent": "G1",
+          "object": "M2",
+          "parameter": "Length",
+          "value": "23",
+          "unit": "m"
+        }
+      }
+    ],
+    "previous": [],
+    "replays": {
+      "A": {
+        "records": [
+          {
+            "record_id": "r1",
+            "record_type": "measurement",
+            "fields": {
+              "parent": {
+                "value": "G1",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0001-c0000",
+                    "quote": "G1"
+                  }
+                ],
+                "relation": "group"
+              },
+              "object": {
+                "value": "M1",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0001-c0001",
+                    "quote": "M1"
+                  }
+                ],
+                "relation": "row"
+              },
+              "parameter": {
+                "value": "Length",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0000-c0002",
+                    "quote": "Length"
+                  }
+                ],
+                "relation": "column"
+              },
+              "value": {
+                "value": "17",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0001-c0002",
+                    "quote": "17"
+                  }
+                ],
+                "relation": "anchor"
+              },
+              "unit": {
+                "value": "m",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0000-c0002",
+                    "quote": "m"
+                  }
+                ],
+                "relation": "column"
+              }
+            },
+            "anchors": [
+              {
+                "ref": "table-0001-r0001-c0002",
+                "quote": "17"
+              }
+            ],
+            "scope": "individual",
+            "scope_sources": []
+          },
+          {
+            "record_id": "r2",
+            "record_type": "measurement",
+            "fields": {
+              "parent": {
+                "value": "G1",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0001-c0000",
+                    "quote": "G1"
+                  }
+                ],
+                "relation": "group"
+              },
+              "object": {
+                "value": "M2",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0002-c0001",
+                    "quote": "M2"
+                  }
+                ],
+                "relation": "row"
+              },
+              "parameter": {
+                "value": "Length",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0000-c0002",
+                    "quote": "Length"
+                  }
+                ],
+                "relation": "column"
+              },
+              "value": {
+                "value": "23",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0002-c0002",
+                    "quote": "23"
+                  }
+                ],
+                "relation": "anchor"
+              },
+              "unit": {
+                "value": "m",
+                "sources": [
+                  {
+                    "ref": "table-0001-r0000-c0002",
+                    "quote": "m"
+                  }
+                ],
+                "relation": "column"
+              }
+            },
+            "anchors": [
+              {
+                "ref": "table-0001-r0002-c0002",
+                "quote": "23"
+              }
+            ],
+            "scope": "individual",
+            "scope_sources": []
+          }
+        ]
+      }
+    },
+    "replay_provenance": "Hand-authored synthetic replay; no model endpoint was called."
+  }
+]

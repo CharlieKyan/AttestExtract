@@ -16,7 +16,7 @@ from .registry import BackendRegistry, default_registry
 from .providers import available_models, resolve_model_config
 from .automatic import ModelConnection
 
-__version__ = "0.1.0.dev25"
+__version__ = "0.1.0.dev26"
 
 __all__ = [
     "__version__", "extract", "load_task", "TaskSpec", "RecordSpec", "FieldSpec",
