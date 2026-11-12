@@ -26,4 +26,5 @@ include scripts/minimal_api_smoke.py
 include scripts/table_route_experiment.py
 include scripts/table_route_runner.py
 include scripts/table_results_smoke.py
+include scripts/table_entry_smoke.py
 recursive-include tests/fixtures/tls_local *.pem

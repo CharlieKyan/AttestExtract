@@ -1,4 +1,4 @@
-"""Static, source-linked reports for the explicitly experimental table routes.
+"""Source-linked table reports and shared check labels.
 
 Model text is always escaped. The table shown here is reconstructed from indexed
 physical cells; untrusted source HTML is never executed in the report.
@@ -32,6 +32,25 @@ _CHECK_CATEGORIES = {
     "relationship_warnings": "关联未自动确认",
     "risk_diagnostics": "需要优先检查的具体风险",
 }
+
+
+def table_check_label(status, *, check: str | None = None) -> str:
+    """Plain-text labels shared by table reports and the document entry point.
+
+    Callers must escape the returned text for their output format. In particular,
+    local position checks do not establish scientific truth or member evidence.
+    """
+    if check == "member_evidence_check":
+        if status == "not_run":
+            return "未逐项核验成员及其出处"
+        if status == "not_applicable":
+            return "按模型范围声明不适用（未验证该声明）"
+    labels = {"located": "已定位", "missing": "缺失或无法定位", "ambiguous": "位置不唯一",
+              "not_applicable": "不适用", "passed": "字面检查通过", "failed": "字面检查失败",
+              "locally_supported": "局部位置规则符合（非科学核验）", "not_confirmed": "未自动确认",
+              "not_run": "未进行独立核验", "individual": "单一对象（模型声明）",
+              "group": "群体或累计（模型声明）", "each": "各成员分别适用（模型声明）"}
+    return labels.get(status, str(status)) if status is not None else "未评估"
 
 
 def _read(path: Path, default=None, *, root: Path):
@@ -784,28 +803,34 @@ def _candidate_html(evaluation, reconciliation, case_id: str, known: set[str]) -
         return '<h3>抽取结果（附检查状态）</h3><p>尚无可交付的解析结果；原始响应及格式错误仍可查看。</p>'
     output = ['<h3>抽取结果（附检查状态）</h3>',
               f'<p>共 {len(records)} 条。完整交付不等于全部科学关系已核验。'
+              '局部位置检查仅核对同行、同列、跨度或引用的上下文类型，不证明对象归属或共享单位适用。'
+              '范围引文可定位，也不证明累计包含哪些成员。'
               '关系未确认时保留内容；明确错误和具体风险仍需检查。</p>']
-    labels = {"located": "已定位", "missing": "缺失或无法定位", "ambiguous": "位置不唯一",
-              "not_applicable": "不适用", "passed": "字面检查通过", "failed": "字面检查失败",
-              "locally_supported": "本地关联规则支持", "not_confirmed": "未自动确认",
-              "not_run": "未进行独立核验"}
     for record in records:
         output.append('<details open><summary>记录 ' + escape(str(record.get("record_id", "未提供编号")))
                       + '</summary><pre>' + escape(_text(_record_values(record))) + '</pre>'
                       + _source_links(record, case_id, known))
         checks = record.get("field_checks")
         if isinstance(checks, dict):
-            output.append('<table><thead><tr><th>字段</th><th>原文定位</th><th>字面完整性</th>'
-                          '<th>关联关系</th><th>独立核验</th></tr></thead><tbody>')
+            output.append('<table><thead><tr><th>字段</th><th>原文定位</th><th>数值／单位字面检查</th>'
+                          '<th>局部位置关系</th><th>科学关系独立核验</th></tr></thead><tbody>')
             for field, check in checks.items():
                 output.append('<tr><td>' + escape(field) + '</td>')
                 for key in ("quote_location", "literal_check", "relation_check", "semantic_verification"):
-                    status = check.get(key, "未评估")
-                    output.append('<td>' + escape(labels.get(status, str(status))) + '</td>')
+                    output.append('<td>' + escape(table_check_label(check.get(key), check=key)) + '</td>')
                 output.append('</tr>')
             output.append('</tbody></table>')
         else:
             output.append('<p>旧产物没有分项检查状态，不视为这些检查均已通过。</p>')
+        scope = record.get("scope_check")
+        if isinstance(scope, dict):
+            output.append('<p>范围声明：' + escape(table_check_label(scope.get("declared_scope")))
+                          + '；范围引文定位：' + escape(table_check_label(scope.get("scope_quote_location")))
+                          + '；成员逐项出处核验：'
+                          + escape(table_check_label(scope.get("member_evidence_check"), check="member_evidence_check"))
+                          + '。</p>')
+        else:
+            output.append('<p>此产物未记录成员逐项出处核验状态，不能视为成员依据完整。</p>')
         output.append('<details><summary>完整记录、原始出处与检查信息</summary><pre>'
                       + escape(_text(record)) + '</pre></details></details>')
     evidence = (reconciliation or {}).get("evidence", (evaluation or {}).get("evidence"))

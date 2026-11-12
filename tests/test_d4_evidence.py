@@ -257,6 +257,7 @@ def test_old_identity_hash_omits_new_evidence_fields():
     assert grounded_candidate_id(digest, "item", {"value": field}, schema_version="0.4") != expected
 
 
+# Historical prose-protocol fixture; automatic table A is covered separately.
 def test_table_archive_preserves_hints_and_rejects_forged_cell_identity():
     source = '<table><tr><td>Sample</td><td>Length (m)</td></tr><tr><td>A</td><td>12</td></tr></table>'
     structure = build_structure(source, hints={"tables": {"table-0001": {
@@ -269,7 +270,7 @@ def test_table_archive_preserves_hints_and_rejects_forged_cell_identity():
                          "quotes": {"value": "12", "unit": "Length (m)"},
                          "measurements": {"reading": {"context_quote": "12", "value_text": "12",
                                                        "unit_text": "m", "unit_quote": "Length (m)"}}}]}
-    result = extract(document, task, backend=ReplayBackend([raw]))
+    result = extract(document, task, table_mode="text", backend=ReplayBackend([raw]))
     archive = create_archive(document, result)
     assert ExtractionArchive.model_validate_json(archive.model_dump_json()) == archive
     payload = archive.model_dump()
@@ -279,6 +280,7 @@ def test_table_archive_preserves_hints_and_rejects_forged_cell_identity():
         ExtractionArchive.model_validate(payload)
 
 
+# Historical prose-protocol fixture; automatic table A is covered separately.
 def test_default_table_inline_unit_archive_reuses_inferred_structure():
     document = Document.from_text("| Sample | Reading |\n| --- | --- |\n| A | 12 m |\n")
     assert document.structure is None
@@ -289,7 +291,7 @@ def test_default_table_inline_unit_archive_reuses_inferred_structure():
                          "quotes": {"value": "12 m", "unit": "12 m"},
                          "measurements": {"reading": {"context_quote": "12 m", "value_text": "12",
                                                        "unit_text": "m", "unit_quote": ""}}}]}
-    result = extract(document, task, backend=ReplayBackend([raw]))
+    result = extract(document, task, table_mode="text", backend=ReplayBackend([raw]))
     measurement = result.candidates[0].measurements["reading"]
     assert measurement.issues == [] and measurement.value.table_refs and measurement.unit.table_refs
     archive = create_archive(document, result)

@@ -73,7 +73,8 @@ def table_case(root, name, source, unit_quote):
                         "quotes": {"value": "7", "unit": unit_quote},
                         "measurements": {"distance": {"context_quote": "7", "value_text": "7",
                                                           "unit_text": "cm", "unit_quote": unit_quote}}}]}
-    result = extract(document, TABLE_TASK, backend=ReplayBackend([raw]))
+    # Retain this historical prose-protocol grounding fixture; table A has its own smoke.
+    result = extract(document, TABLE_TASK, backend=ReplayBackend([raw]), table_mode="text")
     measurement = result.candidates[0].measurements["distance"]
     assert measurement.issues == []
     assert measurement.value.table_refs[0].column == 1

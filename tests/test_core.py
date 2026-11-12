@@ -159,6 +159,7 @@ def test_equal_numbers_under_different_conditions_are_not_merged(task):
     assert {candidate.fields["condition"].value for candidate in result.candidates} == {"warm", "cold"}
 
 
+# Historical prose-protocol fixture; automatic table A is covered separately.
 def test_table_headers_and_later_rows_keep_original_offsets(task):
     text = "# Results\n\n| Sample | Value | Condition |\n| --- | --- | --- |\n| A | 12 | warm |\n| B | 13 | cold |\n"
     chunks = chunk_document(text, table_rows_per_chunk=1)
@@ -168,20 +169,21 @@ def test_table_headers_and_later_rows_keep_original_offsets(task):
     assert second_chunk.text == "".join(text[span.start:span.end] for span in second_chunk.segments)
 
     responses = [{"records": [record(subject="B", value=13, condition="cold")]} if "| B |" in chunk.text else {"records": []} for chunk in chunks]
-    result = extract(text, task, backend=replay(*responses), table_rows_per_chunk=1)
+    result = extract(text, task, table_mode="text", backend=replay(*responses), table_rows_per_chunk=1)
     candidate = result.candidates[0]
     assert not candidate.needs_review
     assert candidate.fields["value"].evidence.start == text.index("13")
     assert text[candidate.fields["subject"].evidence.start:candidate.fields["subject"].evidence.end] == "B"
 
 
+# Historical prose-protocol fixture; automatic table A is covered separately.
 def test_repeated_header_evidence_deduplicates_the_same_original_span():
     text = "| Sample | Value |\n| --- | --- |\n| A | 12 |\n| B | 13 |\n"
     task = {"name": "Headers", "record_types": {"header": {"fields": {"label": {"type": "string"}}}}}
     response = {"records": [{"record_type": "header", "fields": {"label": {"value": "Value", "quote": "Value"}}}]}
 
     def run():
-        return extract(text, task, backend=replay(response, response), table_rows_per_chunk=1)
+        return extract(text, task, table_mode="text", backend=replay(response, response), table_rows_per_chunk=1)
 
     result = run()
     assert result.run.chunk_count == 2

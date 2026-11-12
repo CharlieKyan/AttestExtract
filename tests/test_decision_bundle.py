@@ -212,12 +212,13 @@ def test_legacy_links_are_reanalyzed_separately_without_rewriting_originals(tmp_
     assert hashes(run) == original
 
 
+# Historical prose-protocol fixture; automatic table A is covered separately.
 def test_shared_candidate_has_one_logical_task_and_references_in_each_batch(tmp_path):
     run = tmp_path / "table"
     trace = RunTrace(run / "diagnostics")
     text = "| Sensor A reads 11. | Amount |\n| --- | --- |\n| X | 1 |\n| Y | 2 |\n"
     response = {"records": [RESPONSES[0]["records"][0]]}
-    result = extract(text, TASK, backend=ReplayBackend([response, response]),
+    result = extract(text, TASK, table_mode="text", backend=ReplayBackend([response, response]),
                      backend_identity="synthetic-shared-header", trace=trace,
                      table_rows_per_chunk=1, execution=ExecutionOptions(adaptive_chunking=False))
     trace.finish(result.model_dump(mode="json"))

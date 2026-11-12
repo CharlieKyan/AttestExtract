@@ -54,6 +54,9 @@ def split_chunk(text: str, parent: DocumentChunk, *, min_chars: int,
     Truncation recovery defaults to half the parent size. Initial planning can
     supply an estimated target directly, avoiding repeated arbitrary halvings.
     """
+    from .document_routing import is_table_chunk
+    if is_table_chunk(parent):
+        return []
     if parent.context_policy is not None:
         from .contextual_chunking import structured_chunks, enrich_chunk, merge_spans
         from .structure import build_structure
@@ -98,7 +101,15 @@ def split_chunk(text: str, parent: DocumentChunk, *, min_chars: int,
 def plan_chunks(text: str, task: TaskSpec, generation: GenerationOptions,
                 options: ExecutionOptions, *, max_chars: int = 6000,
                 table_rows_per_chunk: int = 12, context: ContextOptions | None = None,
-                structure=None) -> list[DocumentChunk]:
+                structure=None, table_mode: str = "text") -> list[DocumentChunk]:
+    if any(type(value) is not int or value < 1 for value in (max_chars, table_rows_per_chunk)):
+        raise ValueError("Chunk character and table-row limits must be positive integers.")
+    from .document_routing import plan_routed_chunks, routing_structure
+    routed = routing_structure(text, table_mode, structure)
+    if routed is not None:
+        return plan_routed_chunks(text, task, generation, options, max_chars=max_chars,
+                                  table_rows_per_chunk=table_rows_per_chunk, context=context,
+                                  structure=routed)
     queue = chunk_document(text, max_chars=max_chars, table_rows_per_chunk=table_rows_per_chunk,
                            context=context, structure=structure)
     limit = generation.max_output_tokens or options.planning_output_tokens

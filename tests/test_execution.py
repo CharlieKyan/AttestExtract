@@ -138,9 +138,10 @@ def test_budget_can_stop_midway_through_children_then_resume(tmp_path):
 
 @pytest.mark.parametrize("text,depth", [(TEXT, 0), ("| Item | Amount |\n| --- | --- |\n| A | 11 |\n", 3)])
 def test_depth_limit_and_atomic_table_fail_explicitly(tmp_path, text, depth):
+    # This fixture exercises the existing prose protocol, including its table text path.
     with pytest.raises(InvalidResponseError) as error:
         run(tmp_path / "trace", text=text, depth=depth, max_chars=1000,
-            handler=lambda *_: reply("partial", finish="length"))
+            handler=lambda *_: reply("partial", finish="length"), table_mode="text")
     assert error.value.code == "truncated_response"
     assert len(run.calls) == 1
     assert read(tmp_path / "trace/error.json")["stage"] == "model_response"

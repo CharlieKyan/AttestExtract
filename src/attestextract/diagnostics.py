@@ -144,11 +144,13 @@ class RunTrace:
 
     def finish(self, result_payload: dict[str, Any]) -> None:
         self.write_json("result.json", result_payload)
+        format_status = result_payload.get("format_status", "complete")
+        status = format_status if format_status in {"partial_format_error", "format_error"} else "succeeded"
         self._manifest.update(
-            status="succeeded", finished_at=_now(),
+            status=status, finished_at=_now(),
             package_version=result_payload.get("package_version"), run=result_payload.get("run"),
         )
-        self.event("complete", "succeeded", run=result_payload.get("run", {}))
+        self.event("complete", status, run=result_payload.get("run", {}))
         self.write_json("manifest.json", self._manifest)
 
     def checked(self, plan: dict[str, Any]) -> None:

@@ -49,7 +49,7 @@ def render_markdown_report(result: ExtractionResult, *, secrets: Iterable[str] =
     A matched quote establishes location only; this report accepts no facts.
     """
     secrets = tuple(secrets)
-    if result.schema_version == "0.5":
+    if result.run.routes:
         from .automatic_provenance import validate_automatic_provenance
         validate_automatic_provenance(result)
 
@@ -77,8 +77,8 @@ def render_markdown_report(result: ExtractionResult, *, secrets: Iterable[str] =
         f"- 文献：{cell(result.source.name or '未命名输入')}",
         f"- 任务：{cell(result.task.name)}",
         f"- 程序版本：{cell(result.package_version)}；结果格式：{cell(result.schema_version)}",
-        f"- 模型：{cell('按分块记录，见实际调用来源' if result.schema_version == '0.5' else result.run.model or '未报告')}；模式：{cell(result.run.mode)}",
-        f"- 模型回答协议：{cell(result.run.output_protocol)}",
+        f"- 模型：{cell('按分块记录，见实际调用来源' if result.run.routes else result.run.model or '未报告')}；模式：{cell(result.run.mode)}",
+        f"- 正文模型回答协议：{cell(result.run.output_protocol)}" if result.table_results else f"- 模型回答协议：{cell(result.run.output_protocol)}",
         f"- 分块：{result.run.chunk_count}；模型响应：{result.run.response_count}；HTTP/后端尝试：{result.run.request_attempts}",
         f"- 候选：{len(result.candidates)}；待复核候选：{pending}；复核项：{len(result.review)}",
         f"- 需复核问题：{blocking}；信息提示：{len(result.review) - blocking}（信息提示本身不阻止候选通过程序检查）",
@@ -89,7 +89,11 @@ def render_markdown_report(result: ExtractionResult, *, secrets: Iterable[str] =
         "字段状态：reported＝已报告；not_reported＝未报告；not_applicable＝任务声明不适用；required_missing＝必要信息缺失。", "",
         "关联检查仅覆盖任务配置的相同比较值，尚未实现完整的不同值矛盾检测；没有关联不表示没有冲突。", "",
     ]
-    if result.schema_version == "0.5":
+    if result.table_results:
+        lines += [f"- 表格：{len(result.table_results)}；表格记录：{sum(len(t.candidates) for t in result.table_results)}；"
+                  f"隔离记录：{sum(len(t.rejections) for t in result.table_results)}；格式状态：{cell(result.format_status)}", "",
+                  "正文候选与表格记录分别保存。表格交付格式 table-route-v3；字段、引文和顺序原样交付，不经过正文去重。", ""]
+    if result.run.routes:
         lines += ["## 实际调用来源", "",
                   "以下记录实际使用的路径，不代表模型返回的事实已核验。失败或结果未知的请求也占用调用额度。", "",
                   "| 分块 | 路径 | 请求模型 | 服务报告模型 | 接口 | 输出约束 | 成功尝试 |",
@@ -131,7 +135,7 @@ def render_markdown_report(result: ExtractionResult, *, secrets: Iterable[str] =
                      ", ".join(link.compared_fields), ", ".join(link.differing_fields), ", ".join(link.unresolved_fields))
             lines.append("| " + " | ".join(cell(item) for item in cells) + " |")
         lines.append("")
-    if not result.candidates:
+    if not result.candidates and not result.table_results:
         lines += ["没有生成候选；这不能证明原文没有可抽取信息。", ""]
     for index, candidate in enumerate(result.candidates, 1):
         state = "待复核" if candidate.needs_review else "结构与证据定位检查通过（仍为候选）"
@@ -209,4 +213,47 @@ def render_markdown_report(result: ExtractionResult, *, secrets: Iterable[str] =
                 label = "复核" if item.severity == "review" else "信息"
                 lines.append(f"- {label}：{cell(item.code)}{field}：{cell(item.message)}")
         lines.append("")
+    if result.table_results:
+        lines.extend(_table_result_lines(result, cell))
     return "\n".join(lines)
+
+
+def _table_result_lines(result: ExtractionResult, cell) -> list[str]:
+    from .table_reporting import table_check_label
+    lines = ["## 表格抽取结果", "",
+             "定位成功说明引用在原文中；字面检查核对数字或单位是否完整。局部位置规则只检查同行、同列等关系，"
+             "不证明对象、共享单位或累计成员的科学归属。科学核验未运行。", ""]
+    for table in result.table_results:
+        lines += [f"### {cell(table.table_id)}", "", f"- 运行分块：{cell(table.chunk_id)}；检查状态：{cell(table.status)}",
+                  f"- 合法记录：{len(table.candidates)}；隔离记录：{len(table.rejections)}。", ""]
+        for record in table.candidates:
+            scope = record.get("scope_check", {})
+            lines += [f"#### 记录 {cell(record['record_id'])}", "",
+                      f"- 模型范围声明：{cell(record['scope'])}；范围引文：{cell(table_check_label(scope.get('scope_quote_location')))}",
+                      "- 成员逐项出处：" + cell(table_check_label(scope.get("member_evidence_check"), check="member_evidence_check")),
+                      "- 科学核验：未运行。", "",
+                      "| 字段 | 模型原值 | 模型原引文 | 引文定位 | 数字/单位字面检查 | 局部位置规则 |",
+                      "| --- | --- | --- | --- | --- | --- |"]
+            for name, binding in record["fields"].items():
+                checks = record["field_checks"][name]
+                quotes = "; ".join(s["ref"] + ": " + s["quote"] for s in binding["sources"])
+                values = (name, json.dumps(binding["value"], ensure_ascii=False), quotes,
+                          table_check_label(checks["quote_location"]), table_check_label(checks["literal_check"]),
+                          table_check_label(checks["relation_check"]))
+                lines.append("| " + " | ".join(cell(value) for value in values) + " |")
+            lines.append("")
+            for issue in record["issues"]:
+                lines.append(f"- 检查意见：{cell(issue.get('field') or '记录')}：{cell(issue['code'])}")
+            lines.append("")
+        if table.rejections:
+            lines += ["隔离记录（原数组下标从0开始；原记录保存在JSON中）：", ""]
+            for rejection in table.rejections:
+                lines.append(f"- 下标 {rejection['index']}：{cell(json.dumps(rejection['errors'], ensure_ascii=False))}")
+            lines.append("")
+        lines += ["#### 表格原文索引", "", "以下是模型实际收到的原格、标题、表题和脚注；位置相对完整输入论文。", "",
+                  "| 编号 | 类型 | 原文位置 | 原文 |", "| --- | --- | --- | --- |"]
+        for entry in table.evidence["table_input"]["entries"]:
+            values = (entry["ref"], entry["kind"], f"[{entry['start']}, {entry['end']})", entry["quote"])
+            lines.append("| " + " | ".join(cell(value) for value in values) + " |")
+        lines.append("")
+    return lines

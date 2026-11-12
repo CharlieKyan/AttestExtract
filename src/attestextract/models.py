@@ -329,8 +329,25 @@ def _package_version() -> str:
     return __version__
 
 
+class TableExtractionResult(ContractModel):
+    """One complete table's model records, separate from prose post-processing."""
+
+    schema_version: Literal["table-route-v3"] = "table-route-v3"
+    processing_policy: Literal["observe_only"] = "observe_only"
+    table_id: str
+    chunk_id: str
+    status: Literal["checked", "issues_found", "partial_format_error", "format_error"]
+    candidates: list[dict[str, Any]]
+    evidence: dict[str, Any]
+    issues: list[dict[str, Any]]
+    rejections: list[dict[str, Any]]
+    parsed: dict[str, Any]
+    response: BackendResponse
+    semantic_verification: Literal["not_run"] = "not_run"
+
+
 class ExtractionResult(ContractModel):
-    schema_version: Literal["0.1", "0.2", "0.3", "0.4", "0.5"] = "0.4"
+    schema_version: Literal["0.1", "0.2", "0.3", "0.4", "0.5", "0.6"] = "0.4"
     package_version: str = Field(default_factory=_package_version)
     task: TaskSpec
     source: SourceInfo
@@ -338,13 +355,27 @@ class ExtractionResult(ContractModel):
     review: list[ReviewItem]
     links: list[CandidateLink] = Field(default_factory=list)
     run: RunInfo
+    table_results: list[TableExtractionResult] = Field(default_factory=list)
+    format_status: Literal["complete", "partial_format_error", "format_error"] = "complete"
+
+    @model_serializer(mode="wrap")
+    def _serialize_result(self, handler):
+        result = handler(self)
+        if self.schema_version != "0.6":
+            result.pop("table_results", None)
+            result.pop("format_status", None)
+        return result
 
     @model_validator(mode="after")
     def _provenance_version(self):
         automatic = bool(self.run.routes or self.run.chunk_provenance or self.run.generation_attempts)
-        if self.schema_version != "0.5" and automatic:
-            raise ValueError("Automatic provenance requires result schema 0.5.")
-        if self.schema_version == "0.5" and (not self.run.routes or self.run.backend != "automatic"
+        if self.schema_version not in {"0.5", "0.6"} and automatic:
+            raise ValueError("Automatic provenance requires result schema 0.5 or 0.6.")
+        if (self.schema_version == "0.5" or automatic) and (not self.run.routes or self.run.backend != "automatic"
                                              or self.run.model is not None):
             raise ValueError("Result schema 0.5 requires per-chunk automatic provenance.")
+        if bool(self.table_results) != (self.schema_version == "0.6"):
+            raise ValueError("Table results require result schema 0.6 and at least one table.")
+        if self.schema_version != "0.6" and self.format_status != "complete":
+            raise ValueError("Partial table format status requires result schema 0.6.")
         return self

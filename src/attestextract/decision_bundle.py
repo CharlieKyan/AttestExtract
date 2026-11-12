@@ -181,6 +181,8 @@ class DecisionBundle(ContractModel):
 
     @model_validator(mode="after")
     def verify_materials(self) -> DecisionBundle:
+        if self.extraction.table_results:
+            raise ValueError("Observe-only table results are not supported by the prose decision bundle; retain the complete extraction JSON.")
         if self.extraction.schema_version not in {"0.3", "0.4", "0.5"}:
             raise ValueError("Decision bundle 0.1 supports extraction schema 0.3, 0.4 and 0.5")
         # This verifies source identity, every original quote, field contracts,
@@ -320,6 +322,8 @@ def _prepare_decision_bundle(run_dir: str | Path) -> DecisionBundle:
         raise ValueError("The successful run manifest does not contain complete decision diagnostics")
     document = Document.model_validate(_read_json(_source_file(directory, "document.json")))
     extraction = ExtractionResult.model_validate(_read_json(_source_file(directory, "result.json")))
+    if extraction.table_results:
+        raise ValueError("Observe-only table results are not supported by the prose decision bundle; retain the complete extraction JSON.")
     task = TaskSpec.model_validate(_read_json(_source_file(directory, "task.json")))
     if task != extraction.task:
         raise ValueError("Saved task and extraction snapshot disagree")

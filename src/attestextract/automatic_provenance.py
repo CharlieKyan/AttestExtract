@@ -18,6 +18,8 @@ def validate_automatic_provenance(extraction: ExtractionResult, leaves: set[str]
         if (not candidate.chunk_ids or len(candidate.chunk_ids) != len(set(candidate.chunk_ids))
                 or set(candidate.chunk_ids) - leaves):
             raise ValueError("Automatic candidates must reference known final chunks")
+    if any(table.chunk_id not in leaves for table in extraction.table_results):
+        raise ValueError("Automatic table results must reference known final chunks")
     if run.backend != "automatic" or run.model is not None or not run.routes:
         raise ValueError("Automatic results must identify their models per chunk")
     config_keys = {"adapter", "model", "structured_output", "output_token_parameter", "generation"}

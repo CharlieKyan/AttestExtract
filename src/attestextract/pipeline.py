@@ -32,6 +32,7 @@ from .models import (
     BackendResponse, Candidate, CheckResult, ContextOptions, ContextPassage, ContractModel, DocumentChunk, EvidenceRef,
     ExtractionBackend, ExtractionRequest, ExtractionResult, FieldValue,
     ExecutionOptions, GenerationOptions, MeasurementInput, OutputProtocol, ReviewItem, RunInfo, Scalar, SourceInfo, TaskSpec,
+    TableExtractionResult,
 )
 
 
@@ -284,12 +285,18 @@ def _validated_response(
     trace: RunTrace | None, format_retries: int,
     generation: GenerationOptions,
     session: ExecutionSession | None = None,
-) -> tuple[_RawResponse, list[BackendResponse]]:
+    table_input: dict | None = None,
+) -> tuple[_RawResponse | dict, list[BackendResponse]]:
     """Regenerate only locally rejected output, keeping each attempt auditable."""
     output_protocol = output_protocol_for_backend(backend)
     request = _request(task, chunk, generation, output_protocol)
+    if table_input is not None:
+        from .table_routes import build_route_request
+        request = build_route_request("A", task.model_dump(mode="json"), table_input, chunk_id=chunk.chunk_id)
+        request = request.model_copy(update={"generation": generation})
+        format_retries = 0  # Table records are isolated, never regenerated or rewritten.
     first_attempt = 1
-    if session is not None:
+    if session is not None and table_input is None:
         first_attempt, feedback = session.format_attempt(chunk.chunk_id)
         if first_attempt == 2:
             request = _regeneration_request(request, feedback)
@@ -365,6 +372,17 @@ def _validated_response(
                                        attempts=response.attempts,
                                        code="truncated_response" if response.finish_reason == "length" else "invalid_response")
         try:
+            if table_input is not None:
+                raw = _parse_table_response(response.text, trace=trace, chunk_id=chunk.chunk_id, artifact_stem=stem)
+                if trace is not None:
+                    trace.write_json(f"tables/{chunk.chunk_id}/parsed.json", raw)
+                    table_status = ("partial_format_error" if raw["records"] else "format_error") if raw["rejections"] else "passed"
+                    trace.event("validation", table_status,
+                                chunk_id=chunk.chunk_id, record_count=len(raw["records"]),
+                                rejected_count=len(raw["rejections"]))
+                if session is not None:
+                    session.complete(chunk.chunk_id, response)
+                return raw, responses
             raw = _parse_response(response.text, trace=trace, chunk_id=chunk.chunk_id,
                                   format_attempt=format_attempt, allowed_keys=allowed_keys, output_protocol=output_protocol,
                                   artifact_stem=stem)
@@ -374,6 +392,8 @@ def _validated_response(
             _check_task_records(raw, task, trace=trace, chunk_id=chunk.chunk_id,
                                 format_attempt=format_attempt, output_protocol=output_protocol, artifact_stem=stem)
         except InvalidResponseError as exc:
+            if table_input is not None:
+                raise
             feedback = _format_feedback(exc.validation_details, task, output_protocol)
             if session is not None:
                 session.reject_format(chunk.chunk_id, feedback)
@@ -404,13 +424,28 @@ def _validated_response(
     raise AssertionError("Unreachable format retry state")  # pragma: no cover
 
 
-def _validate_cached_responses(task: TaskSpec, session: ExecutionSession) -> dict:
+def _parse_table_response(text: str, *, trace=None, chunk_id=None, artifact_stem=None) -> dict:
+    from .table_routes import parse_route_response_partial
+    try:
+        return parse_route_response_partial("A", text)
+    except ValueError as exc:
+        artifact = f"validation/{artifact_stem or chunk_id}.errors.json" if trace is not None else None
+        if trace is not None:
+            trace.write_json(artifact, {"phase": "table_parse", "message": str(exc)})
+        raise InvalidResponseError("Table response is not a complete valid JSON envelope; no records were salvaged.",
+                                   validation_artifact=artifact) from exc
+
+
+def _validate_cached_responses(task: TaskSpec, session: ExecutionSession, table_inputs: dict | None = None) -> dict:
     """Check every cached response before a live resume or an offline preview."""
     checked = {}
     allowed_keys = {name for record in task.record_types.values()
                     for name in (*record.fields, *record.measurement_groups)}
     protocol = session.state.output_protocol
     for key, response in session.cached.items():
+        if key in (table_inputs or {}):
+            checked[key] = _parse_table_response(response.text)
+            continue
         raw = _parse_response(response.text, output_protocol=protocol, allowed_keys=allowed_keys)
         _check_task_records(raw, task, trace=None, chunk_id=key, output_protocol=protocol)
         checked[key] = raw
@@ -419,32 +454,35 @@ def _validate_cached_responses(task: TaskSpec, session: ExecutionSession) -> dic
 
 def _validated_automatic_response(task: TaskSpec, chunk: DocumentChunk,
                                   backend: AutomaticBackend, trace: RunTrace | None,
-                                  session) -> tuple[_RawResponse, list[BackendResponse]]:
+                                  session, table_input: dict | None = None) -> tuple[_RawResponse | dict, list[BackendResponse]]:
     """Schedule each compatibility attempt through the shared execution ledger."""
     while True:
         route = session.route_for(chunk.chunk_id)
         attempt = session.attempt_session(chunk.chunk_id, route.route_id)
         try:
             return _validated_response(task, chunk, route.backend, trace, 0,
-                                       route.generation, attempt)
+                                       route.generation, attempt, table_input=table_input)
         except BackendError as exc:
-            if not session.advance(chunk.chunk_id, route.route_id, exc):
+            if not session.advance(chunk.chunk_id, route.route_id, exc,
+                                   allow_retry=table_input is None or not isinstance(exc, InvalidResponseError)):
                 raise
 
 
 def _responses_for_chunks(task: TaskSpec, chunks: list[DocumentChunk], backend: ExtractionBackend,
                           trace: RunTrace | None, format_retries: int, generation: GenerationOptions,
-                          session: ExecutionSession | None):
+                          session: ExecutionSession | None, table_inputs: dict | None = None):
+    table_inputs = table_inputs or {}
     if session is None:
         for chunk in chunks:
             if trace is not None:
                 trace.write_json(f"chunks/{chunk.chunk_id}.json", chunk.model_dump(mode="json"))
-            raw, responses = _validated_response(task, chunk, backend, trace, format_retries, generation)
+            raw, responses = _validated_response(task, chunk, backend, trace, format_retries, generation,
+                                                 table_input=table_inputs.get(chunk.chunk_id))
             yield chunk, raw, responses
         return
     # Validate ALL reused content before making any new call, even when an
     # earlier pending leaf precedes a damaged cached leaf in document order.
-    checked = _validate_cached_responses(task, session)
+    checked = _validate_cached_responses(task, session, table_inputs)
     session.event("started", **session.summary())
     queue = session.leaves()
     while queue:
@@ -458,6 +496,9 @@ def _responses_for_chunks(task: TaskSpec, chunks: list[DocumentChunk], backend: 
             yield chunk, checked[key], [session.cached[key]]
             continue
         try:
+            if key in table_inputs and session.state.nodes[key].calls:
+                raise InvalidResponseError("This table already has a failed or interrupted reservation. Inspect its saved response; resume will not resend it.",
+                                           attempts=0, code="table_call_already_reserved")
             # A saved truncation has already spent its call. Resume the split,
             # including when the truncated call was a format regeneration.
             if session.state.nodes[key].error_code == "truncated_response":
@@ -466,13 +507,15 @@ def _responses_for_chunks(task: TaskSpec, chunks: list[DocumentChunk], backend: 
                 raise InvalidResponseError("Resume the saved truncated chunk by subdivision when possible.",
                                            attempts=0, code="truncated_response")
             if isinstance(backend, AutomaticBackend):
-                raw, responses = _validated_automatic_response(task, chunk, backend, trace, session)
+                raw, responses = _validated_automatic_response(task, chunk, backend, trace, session,
+                                                               table_input=table_inputs.get(key))
             else:
-                raw, responses = _validated_response(task, chunk, backend, trace, format_retries, generation, session)
+                raw, responses = _validated_response(task, chunk, backend, trace, format_retries, generation, session,
+                                                     table_input=table_inputs.get(key))
         except Exception as exc:
             failed_stage = trace.stage if trace is not None else None
             session.failed(key, exc)
-            if isinstance(exc, BackendError) and exc.code == "truncated_response":
+            if key not in table_inputs and isinstance(exc, BackendError) and exc.code == "truncated_response":
                 children = session.subdivide(key)
                 if children:
                     queue[0:0] = children
@@ -597,6 +640,7 @@ def extract(
     resume_from: str | Path | None = None,
     backend_identity: str | None = None,
     context: ContextOptions | None = None,
+    table_mode: str = "auto",
 ) -> ExtractionResult:
     """Extract candidates. Matching evidence does not establish factual validity.
 
@@ -612,10 +656,17 @@ def extract(
     ``env_file``. ``model_options`` supplies advanced configuration overrides;
     explicit ``generation`` controls override only their non-None values. The
     backend path retains its existing defaults and does not read credentials.
+    Recognized tables use route A and are delivered in ``table_results`` without
+    prose deduplication. ``table_mode="text"`` explicitly uses the older prose
+    protocol for tables, including replay of old prose-protocol responses.
     """
     if resume_from is not None and trace is not None and trace.directory is not None:
         check_resume_paths(resume_from, [trace.directory])
     try:
+        if table_mode not in {"auto", "text"}:
+            raise ConfigurationError("table_mode must be auto or text.")
+        if any(type(value) is not int or value < 1 for value in (max_chunk_chars, table_rows_per_chunk)):
+            raise ConfigurationError("Chunk character and table-row limits must be positive integers.")
         if context is not None and not isinstance(context, ContextOptions):
             raise ConfigurationError("context must be a ContextOptions instance.")
         context = ContextOptions.model_validate(context.model_dump()) if context is not None else ContextOptions()
@@ -653,6 +704,7 @@ def extract(
             max_chunk_chars=max_chunk_chars, table_rows_per_chunk=table_rows_per_chunk,
             trace=trace, format_retries=format_retries, generation=options,
             execution=execution, resume_from=resume_from, backend_identity=backend_identity, context=context,
+            table_mode=table_mode,
         )
     except Exception as exc:
         if trace is not None:
@@ -675,6 +727,7 @@ def _extract(
     resume_from: str | Path | None = None,
     backend_identity: str | None = None,
     context: ContextOptions | None = None,
+    table_mode: str = "auto",
 ) -> ExtractionResult:
     started = time.perf_counter()
     output_protocol = output_protocol_for_backend(backend)
@@ -703,6 +756,9 @@ def _extract(
     from .structure import build_structure
     structure = document.structure or build_structure(text)
     chunk_structure = structure if document.structure is not None or context.mode != "none" else None
+    routed_tables = table_mode == "auto" and bool(structure.tables)
+    if routed_tables:
+        chunk_structure = structure
     if trace is not None:
         trace.write_json("document.json", document.model_dump(mode="json"))
         trace.event("document", "completed", character_count=len(text), document_id=document.document_id)
@@ -716,7 +772,7 @@ def _extract(
         trace.event("chunking", "started", max_chunk_chars=max_chunk_chars, table_rows_per_chunk=table_rows_per_chunk)
     session = None
     automatic = isinstance(backend, AutomaticBackend)
-    if automatic and execution is None:
+    if (automatic or routed_tables) and execution is None:
         execution = ExecutionOptions()
     if execution is not None:
         prepare = prepare_execution
@@ -726,11 +782,22 @@ def _extract(
         session = prepare(text, spec, backend, generation, execution, max_chars=max_chunk_chars,
                                     table_rows_per_chunk=table_rows_per_chunk, format_retries=format_retries,
                                     source_name=source_name, backend_identity=backend_identity, trace=trace,
-                                    resume_from=resume_from, context=context, structure=chunk_structure)
+                                    resume_from=resume_from, context=context, structure=chunk_structure,
+                                    table_mode=table_mode)
         chunks = [session.chunks[key] for key in session.state.roots]
     else:
         chunks = chunk_document(text, max_chars=max_chunk_chars, table_rows_per_chunk=table_rows_per_chunk,
                                 context=context, structure=chunk_structure)
+    table_inputs = {}
+    if routed_tables:
+        from .document_routing import table_input_for_chunk
+        table_inputs = {chunk.chunk_id: value for chunk in chunks
+                        if (value := table_input_for_chunk(text, chunk, structure)) is not None}
+        if trace is not None:
+            trace.write_json("table-routing.json", {"mode": table_mode, "route": "A",
+                             "table_chunks": list(table_inputs), "processing_policy": "observe_only"})
+            for key, value in table_inputs.items():
+                trace.write_json(f"tables/{key}/input.json", value)
     coverage = coverage_report(text, chunks, max_chars=max_chunk_chars)
     if trace is not None:
         trace.write_json("structure.json", structure.model_dump(mode="json"))
@@ -748,6 +815,7 @@ def _extract(
                     oversized_chunks=sum(len(chunk.text) > max_chunk_chars for chunk in chunks))
     source_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
     candidates: list[Candidate] = []
+    table_results: list[TableExtractionResult] = []
     review: list[ReviewItem] = []
     # Deduplicate only when all reported values have an exact original span.
     # Unlocated/ambiguous candidates retain their chunk and occurrence identity.
@@ -756,13 +824,29 @@ def _extract(
     request_attempts = 0
     usage: dict[str, int] = {}
     model: str | None = None
-    for chunk, raw, responses in _responses_for_chunks(spec, chunks, backend, trace, format_retries, generation, session):
+    for chunk, raw, responses in _responses_for_chunks(spec, chunks, backend, trace, format_retries, generation, session,
+                                                       table_inputs=table_inputs):
         response_count += len(responses)
         for response in responses:
             request_attempts += response.attempts
             model = response.model or model
             for name, count in response.usage.items():
                 usage[name] = usage.get(name, 0) + count
+        if chunk.chunk_id in table_inputs:
+            from .table_routes import evaluate_route
+            table_input = table_inputs[chunk.chunk_id]
+            evaluation = evaluate_route("A", raw, table_input, spec.model_dump(mode="json"))
+            table_result = TableExtractionResult(
+                table_id=table_input["table_id"], chunk_id=chunk.chunk_id, status=evaluation["status"],
+                candidates=evaluation["candidates"], evidence=evaluation["evidence"], issues=evaluation["issues"],
+                rejections=raw["rejections"], parsed=raw, response=responses[-1],
+            )
+            table_results.append(table_result)
+            if trace is not None:
+                trace.write_json(f"tables/{chunk.chunk_id}/results.json", table_result.model_dump(mode="json"))
+                trace.event("table", "completed", chunk_id=chunk.chunk_id, status=table_result.status,
+                            candidate_count=len(table_result.candidates), rejected_count=len(table_result.rejections))
+            continue
         for ordinal, record in enumerate(raw.records):
             if trace is not None:
                 trace.event("validation", "record_started", chunk_id=chunk.chunk_id, ordinal=ordinal)
@@ -896,7 +980,8 @@ def _extract(
                         candidate_count=len(chunk_candidates), review_count=sum(item.severity == "review" for item in chunk_reviews),
                         info_count=sum(item.severity == "info" for item in chunk_reviews))
     if trace is not None:
-        trace.event("extraction", "completed", candidate_count=len(candidates),
+        trace.event("extraction", "completed", candidate_count=len(candidates) + sum(len(t.candidates) for t in table_results),
+                    table_count=len(table_results),
                     review_count=sum(item.severity == "review" for item in review),
                     info_count=sum(item.severity == "info" for item in review))
     if session is not None:
@@ -909,14 +994,18 @@ def _extract(
         usage = session.state.usage
         model = session.state.model or model
     provenance = session.provenance_dump() if automatic else {}
+    table_errors = any(table.rejections for table in table_results)
+    format_status = ("partial_format_error" if candidates or any(table.candidates for table in table_results)
+                     else "format_error") if table_errors else "complete"
     return ExtractionResult(
-        schema_version="0.5" if automatic else "0.4", task=spec,
+        schema_version="0.6" if table_results else "0.5" if automatic else "0.4", task=spec,
         source=SourceInfo(name=source_name, sha256=source_hash, character_count=len(text), document_id=document.document_id),
         candidates=candidates, review=review, links=link_candidates(candidates, spec),
+        table_results=table_results, format_status=format_status,
         run=RunInfo(
             backend=backend.name, mode=mode, output_protocol=output_protocol,
             chunk_count=len(session.leaves()) if session else len(chunks), response_count=response_count,
-            candidate_count=len(candidates), request_attempts=request_attempts,
+            candidate_count=len(candidates) + sum(len(table.candidates) for table in table_results), request_attempts=request_attempts,
             model=None if automatic else model, usage=usage, elapsed_seconds=time.perf_counter() - started,
             **provenance,
         ),

@@ -17,7 +17,7 @@ from typing import Literal
 from pydantic import Field, ValidationError, model_validator
 
 from .models import ContractModel, ExtractionRequest, GenerationOptions, Scalar, TaskSpec
-from .structure import build_structure
+from .structure import build_structure, validate_structure
 
 
 class Selection(ContractModel):
@@ -52,9 +52,12 @@ class DirectOutput(ContractModel):
 
 
 def build_table_input(source: str, *, table_id: str | None = None,
-                      mineru_content: object = None) -> dict:
+                      mineru_content: object = None, structure=None) -> dict:
     """Build a neutral index with no manually supplied semantic header hints."""
-    structure = build_structure(source, mineru_content=mineru_content)
+    if structure is not None and mineru_content is not None:
+        raise ValueError("Supply either structure or mineru_content, not both")
+    structure = structure if structure is not None else build_structure(source, mineru_content=mineru_content)
+    validate_structure(source, structure)
     if table_id is None and len(structure.tables) != 1:
         raise ValueError("Select table_id when the document does not contain exactly one table")
     table = next((t for t in structure.tables if table_id is None or t.table_id == table_id), None)
@@ -591,8 +594,29 @@ def _field_checks(record: dict, task: TaskSpec) -> dict:
                 location = "located"
             relation = "locally_supported" if location == "located" and not issues and spec is not None else "not_confirmed"
         checks[name] = {"quote_location": location, "literal_check": literal,
-                        "relation_check": relation, "semantic_verification": "not_run", **classified}
+                        "relation_check": relation, "relation_check_basis": "local_position_rules",
+                        "semantic_verification": "not_run", **classified}
     return checks
+
+
+def _scope_check(record: dict) -> dict:
+    """Separate locating a scope quote from verifying every named member.
+
+    No member verifier runs here. A located total row or an explicit list of
+    names is not a proof of membership, completeness or shared applicability.
+    """
+    collective = record["scope"] in {"group", "each"}
+    if not record["scope_sources"]:
+        location = "missing" if collective else "not_applicable"
+    elif any(issue["code"] == "source_quote_ambiguous" and issue.get("field") == "scope_sources"
+             for issue in record["issues"]):
+        location = "ambiguous"
+    elif len(record["resolved_scope_sources"]) != len(record["scope_sources"]):
+        location = "missing"
+    else:
+        location = "located"
+    return {"declared_scope": record["scope"], "scope_quote_location": location,
+            "member_evidence_check": "not_run" if collective else "not_applicable"}
 
 
 def _candidate_view(records: list[dict], originals: list[dict], indices: list[int],
@@ -610,6 +634,7 @@ def _candidate_view(records: list[dict], originals: list[dict], indices: list[in
             seen[key] = record["record_id"]
         candidate.update(deepcopy(_classify_issues(candidate["issues"])))
         candidate["field_checks"] = _field_checks(candidate, task)
+        candidate["scope_check"] = _scope_check(candidate)
         candidates.append(candidate)
     return candidates
 

@@ -397,7 +397,12 @@ def prepare_execution(text: str, task: TaskSpec, backend: Any, generation: Gener
                       table_rows_per_chunk: int = 12, format_retries: int = 0,
                       source_name: str | None = None, backend_identity: str | None = None,
                       trace: RunTrace | None = None, resume_from: str | Path | None = None,
-                      context: ContextOptions | None = None, structure=None) -> ExecutionSession:
+                      context: ContextOptions | None = None, structure=None,
+                      table_mode: str = "text") -> ExecutionSession:
+    from .document_routing import ROUTING_REVISION, routing_structure
+    routed = routing_structure(text, table_mode, structure)
+    if routed is not None:
+        structure = routed
     builtin = type(backend) in (_CompatibleBackend, _ResponsesBackend)
     if backend_identity is None:
         if builtin:
@@ -411,7 +416,7 @@ def prepare_execution(text: str, task: TaskSpec, backend: Any, generation: Gener
     if not isinstance(backend_identity, str) or not backend_identity:
         raise ConfigurationError("backend_identity must be a nonempty string; do not include credentials.")
     chunks = plan_chunks(text, task, generation, options, max_chars=max_chars, table_rows_per_chunk=table_rows_per_chunk,
-                         context=context, structure=structure)
+                         context=context, structure=structure, table_mode=table_mode)
     output_protocol = output_protocol_for_backend(backend)
     identity = {"engine_revision": ENGINE_REVISION, "output_protocol": output_protocol, "source": hashlib.sha256(text.encode("utf-8")).hexdigest(),
                           "source_name": source_name, "task": task.model_dump(mode="json"),
@@ -421,10 +426,12 @@ def prepare_execution(text: str, task: TaskSpec, backend: Any, generation: Gener
                           "max_chars": max_chars, "table_rows_per_chunk": table_rows_per_chunk,
                           "context": (context or ContextOptions()).model_dump(),
                           "structure": structure.model_dump(mode="json") if structure is not None else None}
+    if routed is not None:
+        identity["table_routing"] = {"mode": "auto", "revision": ROUTING_REVISION}
     transport = {key: getattr(backend, key, None) for key in (
         "timeout", "read_timeout", "tls_mode", "max_attempts")} if builtin else {}
     legacy_compatibility = None
-    if builtin and resume_from is not None:
+    if builtin and resume_from is not None and routed is None:
         from .execution_migration import Dev19Migration
         legacy_compatibility = Dev19Migration(backend, task, generation, identity)
     return ExecutionSession(text, chunks, options, digest(identity), trace=trace, resume_from=resume_from,

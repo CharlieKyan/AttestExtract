@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.0.dev28
+
+- Route recognized complete Markdown/HTML tables through A from the ordinary Python `extract()` and CLI `extract` entry points. Keep prose and table body ranges disjoint, retain full-document offsets and supplied MinerU structure, and share the existing call budget and checkpoint ledger.
+- Deliver tables in the separate `table_results` collection under result schema `0.6`, including original responses, partial parses, unchanged candidates, evidence and diagnostics. Prose candidates retain their existing behavior; explicit `table_mode="text"` / `--tables text` supports historical prose-protocol fixtures and checkpoints.
+- Make local position checks visibly distinct from scientific verification. Add an independent scope/member-evidence status; a located cumulative label does not establish a complete member list. No Jev calls or automatic field rewrites are introduced.
+- Keep complete tables atomic. Table format failures, empty responses and truncation do not trigger format regeneration or subdivision; completed tables resume from checked caches, while incomplete table reservations are not silently resent. Partial record failures are saved and reported consistently, with CLI exit code 2.
+- Reject unsupported table-result acceptance archives and decision bundles explicitly instead of silently exporting only prose. Add synthetic unified-entry installation acceptance and offline regression of saved real table answers; no new paid endpoint tests were performed.
+
 ## 0.1.0.dev27
 
 - Replace automatic table-field correction with `observe_only` delivery. Preserve every legal parsed record, its fields, citations and ordering; diagnose unknown or missing task fields without deleting or inventing them.

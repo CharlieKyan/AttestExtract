@@ -1,5 +1,11 @@
 # AttestExtract
 
+Dev28 routes recognized complete Markdown/HTML tables through A from the normal
+Python `extract` and CLI entry points. Prose and immutable table records share
+one result, budget and recovery flow; local position checks and unperformed
+scientific/member checks are shown separately. Start with the offline `--check`
+example in the [unified table extraction guide](docs/TABLE_EXTRACTION.md).
+
 Dev27 makes the separate A-route table experiment deliver parsed model fields
 unchanged, with evidence and relationship checks beside them. It does not rewrite
 values or citations, merge records, or replace them with historical results.

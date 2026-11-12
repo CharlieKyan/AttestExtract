@@ -49,9 +49,10 @@ def response(*, parameter="厚度", quantity="17.5", unit="m", condition=None, g
     return record
 
 
+# Historical prose-protocol fixture; automatic table A is covered separately.
 def run(*, source="样品甲厚度17.5 m。", record=None, grouped=True):
     document = Document.from_text(source, source_name="synthetic.txt")
-    result = extract(document, task(grouped=grouped), backend=ReplayBackend([
+    result = extract(document, task(grouped=grouped), table_mode="text", backend=ReplayBackend([
         {"records": [flat_record(record or response(grouped=grouped))]},
     ]))
     return document, result

@@ -68,8 +68,9 @@ def record(context="厚度17.5 m", value="17.5", unit="m", *,
     }
 
 
+# Historical prose-protocol fixture; automatic table A is covered separately.
 def run(task, source, *records):
-    return extract(source, task, backend=ReplayBackend([{"records": [flat_record(item) for item in records]}]))
+    return extract(source, task, table_mode="text", backend=ReplayBackend([{"records": [flat_record(item) for item in records]}]))
 
 
 def flat_record(record):
@@ -234,6 +235,7 @@ def test_repeated_measurement_context_has_no_guessed_global_position(task):
     assert result.candidates[0].needs_review
 
 
+# Historical prose-protocol fixture; automatic table A is covered separately.
 def test_table_header_unit_maps_to_original_header_in_later_chunk(task):
     header = "| 样品 | 厚度 (m) | 温度 (℃) |"
     row = "| 样品乙 | 17.5 | 20 |"
@@ -241,7 +243,7 @@ def test_table_header_unit_maps_to_original_header_in_later_chunk(task):
     response = record(row, subject="样品乙", unit_quote=header)
     chunks = chunk_document(source, table_rows_per_chunk=1)
     responses = [{"records": [flat_record(response)]} if row in chunk.text else {"records": []} for chunk in chunks]
-    result = extract(source, task, backend=ReplayBackend(responses), table_rows_per_chunk=1)
+    result = extract(source, task, table_mode="text", backend=ReplayBackend(responses), table_rows_per_chunk=1)
     measurement = result.candidates[0].measurements["reading"]
     assert measurement.unit_source == "table_header"
     assert_exact_span(measurement.value, source, "17.5", source.index("17.5"))

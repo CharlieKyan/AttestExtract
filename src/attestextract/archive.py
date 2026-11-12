@@ -226,6 +226,8 @@ class ExtractionArchive(ContractModel):
 
     @model_validator(mode="after")
     def verify_links(self) -> ExtractionArchive:
+        if self.extraction.table_results:
+            raise ValueError("Table results are observe-only and cannot enter the prose acceptance archive. Save the complete ExtractionResult JSON instead.")
         if self.extraction.schema_version == "0.5":
             from .automatic_provenance import validate_automatic_provenance
             validate_automatic_provenance(self.extraction)

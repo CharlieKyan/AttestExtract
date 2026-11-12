@@ -4,6 +4,7 @@ from .decisions import DecisionBackend, DecisionResult, DecisionTask, validate_d
 from .models import (
     BackendResponse, Candidate, EvidenceRef, ExtractionBackend, ExtractionRequest, GenerationOptions,
     ContextOptions, ExecutionOptions, ExtractionResult, FieldSpec, RecordSpec, TaskSpec, OutputProtocol, RangeBinding,
+    TableExtractionResult,
 )
 from .pipeline import extract, load_task
 from .documents import Document, DocumentMetadata
@@ -16,7 +17,7 @@ from .registry import BackendRegistry, default_registry
 from .providers import available_models, resolve_model_config
 from .automatic import ModelConnection
 
-__version__ = "0.1.0.dev27"
+__version__ = "0.1.0.dev28"
 
 __all__ = [
     "__version__", "extract", "load_task", "TaskSpec", "RecordSpec", "FieldSpec",
@@ -32,4 +33,5 @@ __all__ = [
     "ContextOptions", "DocumentStructure", "build_structure",
     "OutputProtocol", "RangeBinding",
     "ModelConnection",
+    "TableExtractionResult",
 ]

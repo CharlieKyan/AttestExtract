@@ -115,6 +115,8 @@ def _parser() -> argparse.ArgumentParser:
     live.add_argument("--max-chunk-chars", type=int, default=6000, help="Initial chunk character target (default: 6000; atomic table rows may exceed it)")
     live.add_argument("--context", choices=("none", "structure", "neighbors"), default="none",
                       help="Source context policy; neighbors includes structure (default: none until quality validation)")
+    live.add_argument("--tables", choices=("auto", "text"), default="auto",
+                      help="Recognized complete tables use route A by default; text explicitly retains the older prose protocol")
     live.add_argument("--neighbor-chars", type=int, default=500, help="Maximum characters per neighboring paragraph side (default: 500)")
     live.add_argument("--mineru-content-list", type=Path, help="Optional MinerU content_list JSON mapped to the unchanged input")
     live.add_argument("--structure-hints", type=Path, help="Optional JSON table header_rows/row_header_columns hints")
@@ -131,7 +133,8 @@ def _demo(example: str) -> dict:
     source_name = f"{example}.{extension}"
     text = resources.joinpath(source_name).read_bytes().decode("utf-8")
     response = json.loads(resources.joinpath(f"{example}.response.json").read_text(encoding="utf-8"))
-    result = extract(text, task, backend=ReplayBackend([response]), source_name=source_name)
+    # These published demo responses use the historical prose protocol.
+    result = extract(text, task, backend=ReplayBackend([response]), source_name=source_name, table_mode="text")
     return result.model_dump(mode="json")
 
 
@@ -456,12 +459,18 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
             session = prepare(text, task, backend, config.generation, execution,
                                         max_chars=args.max_chunk_chars, format_retries=config.format_retries,
                                         source_name=args.input.name, backend_identity=backend_identity,
-                                        resume_from=args.resume, context=context, structure=structure)
+                                        resume_from=args.resume, context=context, structure=structure, table_mode=args.tables)
             from .pipeline import _validate_cached_responses
-            _validate_cached_responses(task, session)
+            from .document_routing import table_input_for_chunk
+            table_inputs = {key: value for key, chunk in session.chunks.items()
+                            if (value := table_input_for_chunk(text, chunk, session.structure)) is not None}
+            _validate_cached_responses(task, session, table_inputs)
             plan = {"mode": "local_check", "network_calls": 0, "model": config.model,
                     "character_count": len(text), "chunk_count": len(session.leaves()),
                     "context": context.model_dump(),
+                    "table_routing": {"mode": args.tables, "table_chunks": list(table_inputs),
+                                      "table_count": len(table_inputs), "processing_policy": "observe_only",
+                                      "notice": "Complete tables are atomic; no automatic table format retry or truncation split."},
                     "coverage": coverage_report(text, list(session.chunks.values()), max_chars=args.max_chunk_chars),
                     "structure_diagnostics": structure.diagnostics if structure is not None else [],
                     "execution": session.summary(), "execution_options": execution.model_dump(mode="json"),
@@ -490,7 +499,7 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
         result = extract(document, task, backend=backend, source_name=args.input.name, trace=trace,
                          format_retries=config.format_retries, generation=config.generation,
                          execution=execution, resume_from=args.resume, backend_identity=backend_identity,
-                         max_chunk_chars=args.max_chunk_chars, context=context)
+                         max_chunk_chars=args.max_chunk_chars, context=context, table_mode=args.tables)
         if trace is not None:
             trace.event("output", "started")
         payload = result.model_dump(mode="json")
@@ -505,6 +514,9 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
             if trace.directory is not None and args.progress != "quiet":
                 print(f"Run diagnostics: {trace.directory}", file=sys.stderr)
                 print(f"Resume checkpoint: {trace.directory / 'execution/checkpoint.json'}", file=sys.stderr)
+        if result.format_status != "complete":
+            print("attestextract: " + result.format_status + "; legal records saved; inspect table_results.rejections.", file=sys.stderr)
+            return 2
         return 0
     except KeyboardInterrupt as exc:
         if trace is not None:

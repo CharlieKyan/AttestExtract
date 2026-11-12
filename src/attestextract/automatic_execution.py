@@ -178,7 +178,7 @@ class AutomaticExecutionSession(ExecutionSession):
             self.state.usage[key] = self.state.usage.get(key, 0) + value
         self.save()
 
-    def advance(self, chunk_id: str, route_id: str, exc: Exception) -> bool:
+    def advance(self, chunk_id: str, route_id: str, exc: Exception, *, allow_retry: bool = True) -> bool:
         history = self.attempts_for(chunk_id)
         if not history:
             return False
@@ -187,6 +187,9 @@ class AutomaticExecutionSession(ExecutionSession):
         if previous.status not in {"rejected", "completed"}:
             previous.status = "failed"
             previous.error_code = getattr(exc, "code", "execution_error")
+        if not allow_retry:
+            self.save()
+            return False
         local_format = isinstance(exc, InvalidResponseError) and exc.validation_details is not None
         regenerate = (local_format and self.state.format_retries == 1
                       and self.state.format_regenerations.get(chunk_id, 0) == 0)
@@ -333,9 +336,14 @@ def prepare_automatic_execution(text: str, task: TaskSpec, backend: Any, generat
                                 table_rows_per_chunk: int = 12, format_retries: int = 0,
                                 source_name: str | None = None, backend_identity: str | None = None,
                                 trace=None, resume_from=None, context: ContextOptions | None = None,
-                                structure=None) -> AutomaticExecutionSession:
+                                structure=None, table_mode: str = "text") -> AutomaticExecutionSession:
+    from .document_routing import ROUTING_REVISION, routing_structure
+    routed = routing_structure(text, table_mode, structure)
+    if routed is not None:
+        structure = routed
     chunks = plan_chunks(text, task, generation, options, max_chars=max_chars,
-                         table_rows_per_chunk=table_rows_per_chunk, context=context, structure=structure)
+                         table_rows_per_chunk=table_rows_per_chunk, context=context, structure=structure,
+                         table_mode=table_mode)
     identity = {"engine_revision": ENGINE_REVISION, "output_protocol": "flat-v1",
                 "source": hashlib.sha256(text.encode("utf-8")).hexdigest(), "source_name": source_name,
                 "task": task.model_dump(mode="json"), "automatic_plan": backend.identity_snapshot(),
@@ -344,6 +352,8 @@ def prepare_automatic_execution(text: str, task: TaskSpec, backend: Any, generat
                 "table_rows_per_chunk": table_rows_per_chunk,
                 "context": (context or ContextOptions()).model_dump(),
                 "structure": structure.model_dump(mode="json") if structure is not None else None}
+    if routed is not None:
+        identity["table_routing"] = {"mode": "auto", "revision": ROUTING_REVISION}
     return AutomaticExecutionSession(text, chunks, options, digest(identity), backend=backend, trace=trace,
                                      resume_from=resume_from, format_retries=format_retries,
                                      output_protocol="flat-v1", structure=structure,
