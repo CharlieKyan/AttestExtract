@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.0.dev30
+
+- Add `output_dir` to Python and `--output-dir` to CLI: one new or empty run directory saves results, review report, diagnostics and checkpoints without overwriting history.
+- Enable managed execution by default for ordinary Python model selection, aligning preset prose extraction with CLI budgets and adaptive chunking. Legacy backend injection remains available.
+- Add optional Python console progress and owned trace completion/failure handling; preserve partial table results and explicit exceptions.
+- Verify the installed package through ordinary Python and CLI outputs, no-overwrite checks, offline preview, completed-run reuse and a simulated read timeout. No paid model calls.
+
 ## 0.1.0.dev29
 
 - Accept `prompt_description`, a complete `field_list`, and optional annotated `examples` through Python `extract()` and the existing CLI `--task` file. Compile observations offline before model configuration or credential prompts; examples never reduce the declared scope.

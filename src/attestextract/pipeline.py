@@ -639,6 +639,8 @@ def extract(
     max_chunk_chars: int = 6000,
     table_rows_per_chunk: int = 12,
     trace: RunTrace | None = None,
+    output_dir: str | Path | None = None,
+    progress: str | None = None,
     format_retries: int = 0,
     generation: GenerationOptions | None = None,
     execution: ExecutionOptions | None = None,
@@ -657,8 +659,12 @@ def extract(
 
     Failure of any chunk raises an explicit exception; a partial run is never
     returned as a successful empty extraction. Backends receive source text.
-    An optional trace records diagnostics; its owner calls ``finish`` after
-    successfully saving the result. Failures mark the trace failed immediately.
+    ``output_dir`` saves result.json, report.md and diagnostics in a new or
+    empty run directory. It owns progress and trace lifecycle, including failure
+    checkpoints. It cannot be combined with a caller-owned ``trace``. Without
+    output_dir, an optional caller trace keeps its existing lifecycle: its owner
+    calls ``finish`` after saving the result. ``progress`` accepts normal, quiet
+    or verbose; output_dir defaults to normal, other calls remain silent.
     ``format_retries=1`` permits one additional generation for a locally invalid
     response per chunk. It can incur extra model charges and defaults to zero.
 
@@ -666,14 +672,23 @@ def extract(
     latter resolves service presets and credentials, optionally from an explicit
     ``env_file``. ``model_options`` supplies advanced configuration overrides;
     explicit ``generation`` controls override only their non-None values. The
-    backend path retains its existing defaults and does not read credentials.
+    Model-selected calls use the CLI execution defaults, including a bounded
+    call ledger. Backend injection retains its existing defaults unless output_dir
+    is supplied, and does not read credentials.
     Recognized tables use route A and are delivered in ``table_results`` without
     prose deduplication. ``table_mode="text"`` explicitly uses the older prose
     protocol for tables, including replay of old prose-protocol responses.
     """
     if resume_from is not None and trace is not None and trace.directory is not None:
         check_resume_paths(resume_from, [trace.directory])
+    console = None
+    directory = None
+    owns_trace = False
     try:
+        if trace is not None and (output_dir is not None or progress is not None):
+            raise ConfigurationError("Pass output_dir/progress or a caller-owned trace, not both.")
+        if progress is not None and progress not in ("normal", "quiet", "verbose"):
+            raise ConfigurationError("progress must be normal, quiet or verbose.")
         task = resolve_task(task, prompt_description=prompt_description,
                             field_list=field_list, examples=examples)
         if table_mode not in {"auto", "text"}:
@@ -683,14 +698,14 @@ def extract(
         if context is not None and not isinstance(context, ContextOptions):
             raise ConfigurationError("context must be a ContextOptions instance.")
         context = ContextOptions.model_validate(context.model_dump()) if context is not None else ContextOptions()
-        if resume_from is not None and execution is None:
+        if execution is None and (resume_from is not None or model is not None or output_dir is not None):
             execution = ExecutionOptions()
         if execution is not None:
             if not isinstance(execution, ExecutionOptions):
                 raise ConfigurationError("execution must be an ExecutionOptions instance.")
             execution = ExecutionOptions.model_validate(execution.model_dump())
-        if resume_from is not None and (trace is None or trace.directory is None):
-            raise ConfigurationError("Resuming extraction needs a new persistent RunTrace directory.")
+        if resume_from is not None and output_dir is None and (trace is None or trace.directory is None):
+            raise ConfigurationError("Resuming extraction needs a new output_dir or persistent RunTrace directory.")
         if type(format_retries) is not int or format_retries not in (0, 1):
             raise ConfigurationError("format_retries must be 0 or 1.")
         if generation is not None and not isinstance(generation, GenerationOptions):
@@ -705,24 +720,51 @@ def extract(
                 raise ConfigurationError("Pass either backend= or model= with its configuration, not both.")
         elif model is None:
             raise ConfigurationError("Provide backend= or a provider:model identifier in model=.")
-        else:
+        if output_dir is not None or progress is not None:
+            from .progress import ConsoleProgress
+            from .run_output import prepare_run_directory
+
+            if output_dir is not None:
+                directory = prepare_run_directory(output_dir, resume_from=resume_from)
+            console = ConsoleProgress(progress or "normal")
+            trace = RunTrace(directory / "diagnostics" if directory is not None else None,
+                             secrets=[api_key] if api_key else [], on_event=console)
+            owns_trace = True
+        if backend is None:
             backend, options = _selected_backend(
                 model, env_file=env_file, api_key=api_key, api_key_env=api_key_env,
                 base_url=base_url, region=region, model_options=model_options,
                 generation=options if generation is not None else None,
                 format_retries=format_retries, trace=trace, fallback=fallback,
             )
-        return _extract(
+        result = _extract(
             text, task, backend=backend, source_name=source_name,
             max_chunk_chars=max_chunk_chars, table_rows_per_chunk=table_rows_per_chunk,
             trace=trace, format_retries=format_retries, generation=options,
             execution=execution, resume_from=resume_from, backend_identity=backend_identity, context=context,
             table_mode=table_mode,
         )
-    except Exception as exc:
+        if directory is not None:
+            from .run_output import save_run_result
+
+            save_run_result(result, directory, trace)
+        elif owns_trace:
+            trace.finish(result.model_dump(mode="json"))
+        return result
+    except (Exception, KeyboardInterrupt) as exc:
         if trace is not None:
             trace.fail(exc)
         raise
+    finally:
+        if console is not None:
+            console.close()
+            if console.mode != "quiet" and directory is not None and trace is not None:
+                console._write(trace._mask_text(f"Run output: {directory}"))
+                checkpoint = directory / "diagnostics/execution/checkpoint.json"
+                if checkpoint.is_file():
+                    console._write(trace._mask_text(f"Resume checkpoint: {checkpoint}"))
+                    console._write("To resume in Python, keep the same inputs and model, set resume_from to this "
+                                   "checkpoint and output_dir to a new directory; additional model calls may occur.")
 
 
 def _extract(

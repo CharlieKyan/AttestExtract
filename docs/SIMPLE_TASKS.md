@@ -29,6 +29,7 @@ result = extract(
     model=os.environ["ATTESTEXTRACT_MODEL"],
     base_url=os.environ["ATTESTEXTRACT_BASE_URL"],
     api_key=os.environ["ATTESTEXTRACT_API_KEY"],
+    output_dir="outputs/sample-run-1",
 )
 for candidate in result.candidates:
     print(candidate.record_type, {name: field.value for name, field in candidate.fields.items()})
@@ -36,7 +37,11 @@ for table in result.table_results:
     print(table.table_id, table.candidates)
 ```
 
-运行这段代码会调用所选服务。程序返回候选，不会自动将它们标为专家确认；Python 返回对象，CLI 默认另外保存报告和运行诊断。
+运行这段代码会调用所选服务。程序返回候选，不会自动将它们标为专家确认。从dev30起，Python指定`output_dir`后同时保存`result.json`、`report.md`及`diagnostics/`，包括任务、原回答和恢复检查点。该目录是本次运行的确切目录，必须不存在或为空；框架不覆盖已有结果。省略`output_dir`仍可只取内存结果，不默认向当前目录写文件。
+
+普通`model=`入口默认启用与CLI相同的执行管理，包括有限调用预算、自适应分块和已有截断细分策略。旧后端注入在没有指定输出或执行选项时保留原行为。`progress="quiet"`关闭进度；指定输出目录时默认显示正常进度。高级调用者不能将自动输出与自管`trace`混用。
+
+Python在创建运行诊断后的失败会保留诊断并抛出异常；参数或任务校验错误可能在创建目录前发生。不要将异常当作空结果。表格部分格式失败仍返回并保存合法候选，须查看`result.format_status`，只有`complete`才表示格式处理完整。`output_dir`保存的是候选和运行状态，不是专家接受档案。高级`backend=`注入配合持久化输出时仍须提供绑定模型及配置的`backend_identity`，普通模型入口自动处理该身份。
 
 已有模型预设、后端注入、配置文件继续有效。任务材料独立于模型连接；原有 `extract(text, task, ...)` 不变。不能同时提供 `task` 和新任务关键词。
 
@@ -65,14 +70,18 @@ for table in result.table_results:
 准备原文 `paper.md` 和 DeepSeek 凭据后，直接运行：
 
 ```powershell
-attestextract extract --input paper.md --task task.json --model-id deepseek:deepseek-flash
+attestextract extract --input paper.md --task task.json --model-id deepseek:deepseek-flash --output-dir outputs/run-1
 ```
 
 DeepSeek 预设读取 `DEEPSEEK_API_KEY`；显式使用已有 `.env` 时增加 `--env-file .env`。Qwen 可改为 `--model-id qwen:qwen3.8-27b` 并提供对应凭据。自定义兼容服务使用 `--base-url` 和原始 `--model`，密钥通过 `ATTESTEXTRACT_API_KEY` 或终端隐藏输入提供；无需设置 TLS、Schema 或预先创建 profile。连接与有限兜底边界见[最少模型输入](MINIMAL_API.md)。
 
 原有 `--task` TaskSpec 文件仍可读取。文件不能混合 `record_types` 与简便输入键。
 
-终端会显示目标数与示例数；默认输出到原文旁的 `outputs/<run>/`，原文位于 `inputs/` 时使用同级 `outputs/`。打开 `report.md` 查看每个目标、候选原值、条件、原文位置和复核项。完整值、表格及诊断保存在 `result.json` 和 `diagnostics/`。
+终端会显示目标数与示例数。`--output-dir`管理结果、报告与诊断三者，不能同时指定高级的`--output`、`--report`或`--log-dir`。省略所有输出参数时仍默认保存到原文旁的`outputs/<run>/`，原文位于`inputs/`时使用同级`outputs/`。打开`report.md`查看每个目标、候选原值、条件、原文位置和复核项。完整值、表格及诊断保存在`result.json`和`diagnostics/`。
+
+四篇论文应逐篇调用，使用四个独立目录；各篇预算分别计算，不是共享批次预算。失败后停止循环并保留该篇目录，已完成论文无需重跑。Python恢复时用相同原文、任务和模型，传`resume_from="outputs/run-1"`及新的`output_dir="outputs/run-1-resumed"`。CLI失败信息提供指向新目录的完整恢复命令；不覆盖旧运行，也不重新发放历史调用额度。
+
+在VSCode中，先在终端使用目标解释器执行`python -m pip install ...`，再在`.py`文件中`import attestextract`并调用`extract()`。安装命令不是Python语句；不在每次抽取时动态安装依赖。选择与安装时相同的虚拟环境解释器。开发版本需安装明确版本的wheel或Git标签，不能仅凭Git已发布就假定PyPI已有该版本。
 
 需要提前了解分块和预算时，可选择运行同一命令加 `--check`；它不联网、不是必经步骤，也不验证服务可用性或科学抽取质量。
 

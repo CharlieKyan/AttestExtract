@@ -31,6 +31,7 @@ from .storage import _reject_constant, _unique_object
 from .providers import available_models, resolve_model_config, resolve_model_credentials
 from .progress import ConsoleProgress
 from .reporting import render_markdown_report
+from .run_output import prepare_run_directory, save_run_result
 from .registry import BackendRegistry, default_registry
 from .automatic import AutomaticBackend, ModelConnection, build_automatic_backend
 from .task_input import task_summary
@@ -80,6 +81,8 @@ def _parser() -> argparse.ArgumentParser:
     live.add_argument("--task", type=Path, required=True,
                       help="JSON with prompt_description, field_list and optional examples, or a legacy TaskSpec")
     live.add_argument("--output", type=Path, help="Destination JSON; omitted: new outputs/<run>/ beside input (a sibling of inputs/ when applicable), with report and diagnostics")
+    live.add_argument("--output-dir", type=Path,
+                      help="Exact new or empty run directory for result.json, report.md and diagnostics; cannot combine with --output, --report or --log-dir")
     live.add_argument("--report", type=Path, help="Also write a readable Markdown review of candidates and evidence")
     live.add_argument("--base-url", help="OpenAI-compatible API base URL, or ATTESTEXTRACT_BASE_URL")
     live.add_argument("--model", help="Model name, or ATTESTEXTRACT_MODEL")
@@ -151,6 +154,14 @@ def _write(payload: dict, output: Path | None, *, announce: bool = True) -> None
 
 
 def _default_outputs(args: argparse.Namespace) -> Path | None:
+    if args.output_dir is not None:
+        if any(value is not None for value in (args.output, args.report, args.log_dir)):
+            raise ConfigurationError("--output-dir cannot be combined with --output, --report or --log-dir.")
+        directory = args.output_dir.resolve()
+        args.output = directory / "result.json"
+        args.report = directory / "report.md"
+        args.log_dir = directory / "diagnostics"
+        return directory
     if args.output is not None:
         return
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + uuid4().hex[:8]
@@ -165,7 +176,7 @@ def _default_outputs(args: argparse.Namespace) -> Path | None:
     return directory
 
 
-def _check_output_paths(args: argparse.Namespace) -> None:
+def _check_output_paths(args: argparse.Namespace, *, require_parents: bool = True) -> None:
     """Reject accidental input overwrites and unwritable layouts before model calls."""
     outputs = [args.output.resolve()]
     if args.report is not None:
@@ -189,7 +200,7 @@ def _check_output_paths(args: argparse.Namespace) -> None:
             raise ConfigurationError(f"{label} must be outside --log-dir; diagnostics writes its own result.json.")
         if args.log_dir is not None and args.log_dir.resolve().is_relative_to(target):
             raise ConfigurationError("Output files cannot be parent directories of --log-dir.")
-        if target.is_dir() or not target.parent.is_dir():
+        if target.is_dir() or (require_parents and not target.parent.is_dir()):
             raise ConfigurationError("Output files need an existing parent directory and cannot be directories.")
 
 
@@ -198,7 +209,7 @@ def _resume_command(args: argparse.Namespace, checkpoint: Path) -> str:
     import shlex
 
     command = [str(Path(sys.executable).resolve()), "-m", "attestextract", "extract"]
-    omitted = {"command", "output", "report", "log_dir", "resume", "check"}
+    omitted = {"command", "output", "output_dir", "report", "log_dir", "resume", "check"}
     for name, value in vars(args).items():
         if name in omitted or value is None:
             continue
@@ -206,6 +217,11 @@ def _resume_command(args: argparse.Namespace, checkpoint: Path) -> str:
             value = value.resolve()
         command.extend(["--" + name.replace("_", "-"), str(value)])
     command.extend(["--resume", str(checkpoint.resolve())])
+    if args.output_dir is not None:
+        directory = args.output_dir.resolve()
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + uuid4().hex[:8]
+        destination = directory.with_name(f"{directory.name}-resume-{stamp}")
+        command.extend(["--output-dir", str(destination)])
     if any(any(ord(ch) < 32 for ch in part) for part in command):
         return "Resume command unavailable: an argument contains control characters; use the saved checkpoint path."
     if os.name == "nt":
@@ -310,7 +326,11 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
         if args.resume is not None:
             check_resume_paths(args.resume, [path for path in (args.output, args.report, args.log_dir) if path is not None])
         if default_directory is not None:
-            default_directory.mkdir(parents=True, exist_ok=False)
+            if args.output_dir is not None:
+                _check_output_paths(args, require_parents=False)
+                prepare_run_directory(default_directory, resume_from=args.resume)
+            else:
+                default_directory.mkdir(parents=True, exist_ok=False)
         _check_output_paths(args)
         if args.max_chunk_chars < 1:
             raise ConfigurationError("--max-chunk-chars must be positive.")
@@ -504,17 +524,24 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
                          format_retries=config.format_retries, generation=config.generation,
                          execution=execution, resume_from=args.resume, backend_identity=backend_identity,
                          max_chunk_chars=args.max_chunk_chars, context=context, table_mode=args.tables)
-        if trace is not None:
-            trace.event("output", "started")
         payload = result.model_dump(mode="json")
-        _write(payload, args.output, announce=args.progress != "quiet")
-        if args.report is not None:
-            report = render_markdown_report(result, secrets=[api_key] if api_key else [])
-            args.report.write_bytes(report.encode("utf-8"))
+        if args.output_dir is not None:
+            save_run_result(result, args.output_dir.resolve(), trace)
             if args.progress != "quiet":
+                print(f"Wrote {args.output}", file=sys.stderr)
                 print(f"Wrote {args.report}", file=sys.stderr)
+        else:
+            if trace is not None:
+                trace.event("output", "started")
+            _write(payload, args.output, announce=args.progress != "quiet")
+            if args.report is not None:
+                report = render_markdown_report(result, secrets=[api_key] if api_key else [])
+                args.report.write_bytes(report.encode("utf-8"))
+                if args.progress != "quiet":
+                    print(f"Wrote {args.report}", file=sys.stderr)
+            if trace is not None:
+                trace.finish(payload)
         if trace is not None:
-            trace.finish(payload)
             if trace.directory is not None and args.progress != "quiet":
                 print(f"Run diagnostics: {trace.directory}", file=sys.stderr)
                 print(f"Resume checkpoint: {trace.directory / 'execution/checkpoint.json'}", file=sys.stderr)
