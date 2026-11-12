@@ -64,6 +64,9 @@ class ConsoleProgress:
             if self._read_timeout is not None:
                 policy = f"TLS policy {event.get('tls_mode', '?')}; " if self.mode == "verbose" else ""
                 self._write(f"Connection: {policy}read timeout {self._read_timeout:g}s; stop on read timeout")
+        elif stage == "configuration" and kind == "task_ready":
+            self._write(f"Task: {event['record_type_count']} targets; {event['example_count']} examples; "
+                        "target list retained in full")
         elif stage == "transport" and kind == "tls_selected":
             suffix = "; compatibility fallback selected automatically" if event.get("fallback") else ""
             self._write(f"Connection ready{suffix}; {event.get('probe_requests', 0)} probe request(s), no generation")

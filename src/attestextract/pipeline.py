@@ -27,6 +27,7 @@ from .prompting import build_messages, build_output_schema
 from .structure_diagnostics import diagnose_structure
 from .output_protocol import output_protocol_for_backend
 from .schema_diagnostics import assess_schema_compliance
+from .task_input import resolve_task, task_from_json, task_summary
 from .validation import contract_details, details, error_path, issue
 from .models import (
     BackendResponse, Candidate, CheckResult, ContextOptions, ContextPassage, ContractModel, DocumentChunk, EvidenceRef,
@@ -63,11 +64,12 @@ class _FlatResponse(ContractModel):
 
 
 def load_task(path: str | Path) -> TaskSpec:
-    """Read and validate a UTF-8 JSON task specification."""
+    """Read a simple task file or a legacy TaskSpec, without model calls."""
     try:
-        return TaskSpec.model_validate(_load_json(Path(path).read_text(encoding="utf-8-sig")))
-    except (OSError, UnicodeError, ValueError) as exc:
+        text = Path(path).read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeError) as exc:
         raise TaskValidationError("Could not read a valid UTF-8 JSON task specification") from exc
+    return task_from_json(text)
 
 
 def _response_error(
@@ -619,8 +621,11 @@ def _selected_backend(
 
 def extract(
     text: str | Document,
-    task: TaskSpec | dict[str, Any],
+    task: TaskSpec | dict[str, Any] | None = None,
     *,
+    prompt_description: str | None = None,
+    field_list: dict[str, str] | None = None,
+    examples: list[dict[str, Any]] | None = None,
     backend: ExtractionBackend | None = None,
     model: str | None = None,
     api_key: str | None = None,
@@ -644,6 +649,12 @@ def extract(
 ) -> ExtractionResult:
     """Extract candidates. Matching evidence does not establish factual validity.
 
+    Supply either ``task`` or ``prompt_description`` and a complete ``field_list``
+    mapping target names to definitions. Optional annotated ``examples`` guide
+    the model without changing the target list. Simple tasks compile offline
+    to observations with entity, value, unit and conditions; only value is
+    business-required. Validation runs before credentials or backend setup.
+
     Failure of any chunk raises an explicit exception; a partial run is never
     returned as a successful empty extraction. Backends receive source text.
     An optional trace records diagnostics; its owner calls ``finish`` after
@@ -663,6 +674,8 @@ def extract(
     if resume_from is not None and trace is not None and trace.directory is not None:
         check_resume_paths(resume_from, [trace.directory])
     try:
+        task = resolve_task(task, prompt_description=prompt_description,
+                            field_list=field_list, examples=examples)
         if table_mode not in {"auto", "text"}:
             raise ConfigurationError("table_mode must be auto or text.")
         if any(type(value) is not int or value < 1 for value in (max_chunk_chars, table_rows_per_chunk)):
@@ -769,6 +782,7 @@ def _extract(
         raise TaskValidationError("Task does not match the task specification contract") from exc
     if trace is not None:
         trace.write_json("task.json", spec.model_dump(mode="json"))
+        trace.event("configuration", "task_ready", **task_summary(spec))
         trace.event("chunking", "started", max_chunk_chars=max_chunk_chars, table_rows_per_chunk=table_rows_per_chunk)
     session = None
     automatic = isinstance(backend, AutomaticBackend)

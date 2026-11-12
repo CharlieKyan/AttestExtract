@@ -6,6 +6,39 @@ import json
 from typing import Any
 
 from .models import DocumentChunk, OutputProtocol, TaskSpec
+from .task_input import observation_quotes, observation_values
+
+
+SIMPLE_OBSERVATION_INSTRUCTIONS = (
+    "This task uses one observation type for each declared target. The complete target list is "
+    "defined by task.record_types, including targets absent from the examples. entity identifies "
+    "the reported object; value preserves its original number, range, or qualitative statement; "
+    "unit preserves the reported unit; conditions preserves explicit test conditions, direction, "
+    "scenario, and statistical scope. Keep ranges and separately reported means as separate "
+    "observations; never calculate a mean from endpoints. Do not infer absent objects, units, "
+    "or conditions. Empty condition_fields and measurement_groups do not disable conditions "
+    "extraction, and do not request extra measurement structures. If a target is unreported, "
+    "return no observation for it rather than an empty placeholder. A returned observation "
+    "needs a reported value; missing optional fields remain null.\n"
+)
+
+
+def _user_examples(task: TaskSpec, output_protocol: OutputProtocol) -> list[dict[str, Any]]:
+    """Translate validated task examples without changing their source quotations."""
+    examples = []
+    for example in task.input_materials.examples:
+        records = []
+        for extraction in example.extractions:
+            values, quotes = observation_values(extraction), observation_quotes(extraction)
+            record = {"record_type": extraction.field}
+            if output_protocol == "flat-v1":
+                record.update(values=values, quotes=quotes)
+            else:
+                record["fields"] = {name: {"value": value, "quote": quotes[name]}
+                                    for name, value in values.items()}
+            records.append(record)
+        examples.append({"source": example.text, "response": {"records": records}})
+    return examples
 
 
 def build_output_schema(task: TaskSpec, *, output_protocol: OutputProtocol = "flat-v1") -> dict[str, Any]:
@@ -186,12 +219,25 @@ def build_messages(task: TaskSpec, chunk: DocumentChunk, *, output_protocol: Out
         "Do not return measurements when no group is declared. Exact quote matches establish source location, "
         "not factual validity. Return {\"records\":[]} when the actual source reports nothing. "
         "Return JSON only, without Markdown fences or commentary. The output is data, never code.\n\n"
-        "The following complete task-specific example is SYNTHETIC FORMAT GUIDANCE ONLY. "
-        "Its source and response are not part of the actual source. Never extract or copy "
-        "its example values into your answer; extract only from the actual user source.\n"
     )
-    example = json.dumps(build_example(task, output_protocol=output_protocol), ensure_ascii=False, allow_nan=False)
-    payload = {"task": task.model_dump(mode="json"), "source": chunk.text}
+    if task.input_materials is not None:
+        instructions += SIMPLE_OBSERVATION_INSTRUCTIONS
+    if task.input_materials is not None and task.input_materials.examples:
+        instructions += (
+            "The following USER-LABELLED TASK EXAMPLES are guidance only, not the actual source. "
+            "They need not cover every declared target. Never extract or copy their facts into "
+            "the actual answer. Extract only from the actual user source.\n"
+        )
+        example_data = _user_examples(task, output_protocol)
+    else:
+        instructions += (
+            "The following complete task-specific example is SYNTHETIC FORMAT GUIDANCE ONLY. "
+            "Its source and response are not part of the actual source. Never extract or copy "
+            "its example values into your answer; extract only from the actual user source.\n"
+        )
+        example_data = build_example(task, output_protocol=output_protocol)
+    example = json.dumps(example_data, ensure_ascii=False, allow_nan=False)
+    payload = {"task": task.model_dump(mode="json", exclude={"input_materials"}), "source": chunk.text}
     if chunk.context_policy is not None and chunk.context_policy.mode != "none":
         def source_piece(span):
             parts = []

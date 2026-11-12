@@ -1,0 +1,15 @@
+{
+  "prompt_description": "Extract explicitly reported properties of each sample. Keep different objects, conditions and statistics separate; preserve original values and units without calculation.",
+  "field_list": {
+    "mass": "Reported sample mass, including ranges and explicitly reported means.",
+    "length": "Reported sample length; keep the direction or measurement conditions."
+  },
+  "examples": [
+    {
+      "text": "Sample B has mass 2 g at 20 C.",
+      "extractions": [
+        {"field": "mass", "entity": "Sample B", "value": "2", "unit": "g", "conditions": "20 C", "quote": "Sample B has mass 2 g at 20 C."}
+      ]
+    }
+  ]
+}

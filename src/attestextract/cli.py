@@ -33,6 +33,7 @@ from .progress import ConsoleProgress
 from .reporting import render_markdown_report
 from .registry import BackendRegistry, default_registry
 from .automatic import AutomaticBackend, ModelConnection, build_automatic_backend
+from .task_input import task_summary
 
 
 def _output_token_limit(value: str) -> int | str:
@@ -76,7 +77,8 @@ def _parser() -> argparse.ArgumentParser:
 
     live = commands.add_parser("extract", help="Extract UTF-8 text or Markdown using a configured model")
     live.add_argument("--input", type=Path, required=True, help="UTF-8 .txt or .md input")
-    live.add_argument("--task", type=Path, required=True, help="JSON task specification")
+    live.add_argument("--task", type=Path, required=True,
+                      help="JSON with prompt_description, field_list and optional examples, or a legacy TaskSpec")
     live.add_argument("--output", type=Path, help="Destination JSON; omitted: new outputs/<run>/ beside input (a sibling of inputs/ when applicable), with report and diagnostics")
     live.add_argument("--report", type=Path, help="Also write a readable Markdown review of candidates and evidence")
     live.add_argument("--base-url", help="OpenAI-compatible API base URL, or ATTESTEXTRACT_BASE_URL")
@@ -320,6 +322,9 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
         api_key = os.environ.get(args.api_key_env or "ATTESTEXTRACT_API_KEY")
         trace = RunTrace(args.log_dir, secrets=[api_key] if api_key else [], on_event=progress)
         trace.event("configuration", "started")
+        trace.event("configuration", "task_validation_started")
+        task = load_task(args.task)
+        trace.write_json("task.json", task.model_dump(mode="json"))
         environment = load_env_file(args.env_file) if args.env_file else os.environ
         overrides = {name: getattr(args, name) for name in (
             "adapter", "base_url", "model", "api_key_env", "timeout", "read_timeout", "tls_mode", "max_attempts",
@@ -394,9 +399,6 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
         if args.input.suffix.lower() not in {".txt", ".md"}:
             raise ValueError("Input must be a UTF-8 .txt or .md file; convert PDFs externally first")
         if trace is not None:
-            trace.event("configuration", "task_validation_started")
-        task = load_task(args.task)
-        if trace is not None:
             trace.event("document", "started")
         text = args.input.read_bytes().decode("utf-8")
         context = ContextOptions(mode=args.context, neighbor_chars=args.neighbor_chars)
@@ -452,6 +454,7 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
                         read_timeout=config.read_timeout or config.timeout or 180,
                         tls_mode=config.tls_mode)
         if args.check:
+            trace.event("configuration", "task_ready", **task_summary(task))
             prepare = prepare_execution
             if automatic:
                 from .automatic_execution import prepare_automatic_execution
@@ -466,6 +469,7 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
                             if (value := table_input_for_chunk(text, chunk, session.structure)) is not None}
             _validate_cached_responses(task, session, table_inputs)
             plan = {"mode": "local_check", "network_calls": 0, "model": config.model,
+                    "task": task_summary(task),
                     "character_count": len(text), "chunk_count": len(session.leaves()),
                     "context": context.model_dump(),
                     "table_routing": {"mode": args.tables, "table_chunks": list(table_inputs),

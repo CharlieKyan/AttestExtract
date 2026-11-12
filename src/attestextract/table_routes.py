@@ -17,6 +17,8 @@ from typing import Literal
 from pydantic import Field, ValidationError, model_validator
 
 from .models import ContractModel, ExtractionRequest, GenerationOptions, Scalar, TaskSpec
+from .evidence import is_missing
+from .prompting import SIMPLE_OBSERVATION_INSTRUCTIONS
 from .structure import build_structure, validate_structure
 
 
@@ -111,10 +113,24 @@ def build_route_request(stage: str, task: dict, table_input: dict, *,
                         chunk_id: str = "table") -> ExtractionRequest:
     if stage != "A":
         raise ValueError("Only table route A is supported")
-    TaskSpec.model_validate(task)
+    spec = TaskSpec.model_validate(task)
     schema = DirectOutput.model_json_schema()
-    payload = {"task": task, "table": table_input, "schema": schema}
-    return ExtractionRequest(messages=[{"role": "system", "content": _COMMON},
+    payload = {"task": {name: value for name, value in task.items() if name != "input_materials"},
+               "table": table_input, "schema": schema}
+    instructions = _COMMON
+    if spec.input_materials is not None:
+        instructions += SIMPLE_OBSERVATION_INSTRUCTIONS
+        if spec.input_materials.examples:
+            instructions += (
+                "task_examples are USER-LABELLED TASK SEMANTIC GUIDANCE ONLY, not actual table "
+                "evidence or the output format. Their text and facts must never be copied into "
+                "this table's results. Do not invent table cells, row/column relations, anchors "
+                "or scope for these examples. Extract only from table using the supplied "
+                "Binding/anchors/scope output schema.\n"
+            )
+            payload["task_examples"] = [example.model_dump(mode="json")
+                                        for example in spec.input_materials.examples]
+    return ExtractionRequest(messages=[{"role": "system", "content": instructions},
                                        {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}],
                              chunk_id=chunk_id, output_schema=schema,
                              generation=GenerationOptions(temperature=0.0, max_output_tokens=4096))
@@ -457,9 +473,10 @@ def _check_record(record: dict, table_input: dict, task: TaskSpec) -> dict:
         required = field_spec is not None and (field_spec.required or any(
             record["fields"].get(k, {}).get("value") in vals for k, vals in field_spec.required_when.items()))
         literal_checks[name] = "not_confirmed" if name in literal_fields else "not_applicable"
+        if required and is_missing(value):
+            issues.append(_problem("required_value_missing", rid, name))
         if value is None:
             if required:
-                issues.append(_problem("required_value_missing", rid, name))
                 literal_checks[name] = "failed" if name in literal_fields else "not_applicable"
             elif not binding["sources"]:
                 literal_checks[name] = "not_applicable"
@@ -488,6 +505,11 @@ def _check_record(record: dict, table_input: dict, task: TaskSpec) -> dict:
         type_valid = field_spec is None or type(value) in types[field_spec.type]
         if not type_valid:
             issues.append(_problem("field_type_mismatch", rid, name))
+        if is_missing(value):
+            # Preserve blank model values and their supplied evidence without calling
+            # an empty value a successful literal match.
+            literal_checks[name] = "failed" if required and name in literal_fields else "not_applicable"
+            continue
         if name not in literal_fields:
             continue
         if len(sources) != 1 or len(binding["sources"]) != 1:
@@ -581,7 +603,7 @@ def _field_checks(record: dict, task: TaskSpec) -> dict:
         literal = record["literal_checks"].get(name, "not_confirmed")
         if binding is None:
             location, relation = "missing", "not_confirmed"
-        elif binding["value"] is None and not binding["sources"]:
+        elif is_missing(binding["value"]) and not binding["sources"]:
             location = "missing" if any(i["code"] == "required_value_missing" for i in issues) else "not_applicable"
             relation = "not_confirmed" if location == "missing" else "not_applicable"
         else:

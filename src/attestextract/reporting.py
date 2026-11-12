@@ -11,6 +11,7 @@ import string
 
 from .diagnostics import redact_text
 from .models import EvidenceRef, ExtractionResult
+from .evidence import is_missing
 
 
 def _cell(value: str, secrets: Iterable[str]) -> str:
@@ -93,6 +94,21 @@ def render_markdown_report(result: ExtractionResult, *, secrets: Iterable[str] =
         lines += [f"- 表格：{len(result.table_results)}；表格记录：{sum(len(t.candidates) for t in result.table_results)}；"
                   f"隔离记录：{sum(len(t.rejections) for t in result.table_results)}；格式状态：{cell(result.format_status)}", "",
                   "正文候选与表格记录分别保存。表格交付格式 table-route-v3；字段、引文和顺序原样交付，不经过正文去重。", ""]
+    if result.task.input_materials is not None:
+        observations = [(item.record_type, item.fields.get("value").value if "value" in item.fields else None)
+                        for item in result.candidates]
+        observations.extend((item.get("record_type"), item.get("fields", {}).get("value", {}).get("value"))
+                            for table in result.table_results for item in table.candidates)
+        present = Counter(name for name, value in observations if not is_missing(value))
+        missing = Counter(name for name, value in observations if is_missing(value))
+        lines += ["## 本次抽取范围", "",
+                  "完整清单决定目标，示例不会缩小范围。有值候选仅表示 value 非空，不代表事实、对象或条件已核验。",
+                  "缺值记录保留供复核，不计入有值候选；零条候选也不能证明原文没有报告该信息。", "",
+                  "| 目标字段 | 定义 | 有值候选 | 缺值候选 |",
+                  "| --- | --- | ---: | ---: |"]
+        for name, spec in result.task.record_types.items():
+            lines.append(f"| {cell(name)} | {cell(spec.description)} | {present[name]} | {missing[name]} |")
+        lines.append("")
     if result.run.routes:
         lines += ["## 实际调用来源", "",
                   "以下记录实际使用的路径，不代表模型返回的事实已核验。失败或结果未知的请求也占用调用额度。", "",

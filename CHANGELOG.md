@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.0.dev29
+
+- Accept `prompt_description`, a complete `field_list`, and optional annotated `examples` through Python `extract()` and the existing CLI `--task` file. Compile observations offline before model configuration or credential prompts; examples never reduce the declared scope.
+- Validate example structure and source quotations with explicit errors and conservative alignment warnings. Preserve original task inputs and compiler revision in snapshots and recovery identities; legacy TaskSpec serialization and no-example prompts remain compatible.
+- Supply task examples to both prose and table routes without confusing their output contracts or fabricating table relationships. Preserve range/qualitative strings and explicitly reported statistics; no extra preparation or verification model calls are added.
+- Mark blank required table values as missing while retaining the original records and evidence. Table routing compatibility changes to `dev29-table-a-2`; old results remain readable, but prior table checkpoints require a fresh run.
+- Report every declared simple-task target, valued candidates and missing-value candidates, without equating those counts with scientific validity. Add synthetic installed-package acceptance and offline public-entry regressions; live scientific quality remains separately evaluated.
+
 ## 0.1.0.dev28
 
 - Route recognized complete Markdown/HTML tables through A from the ordinary Python `extract()` and CLI `extract` entry points. Keep prose and table body ranges disjoint, retain full-document offsets and supplied MinerU structure, and share the existing call budget and checkpoint ledger.

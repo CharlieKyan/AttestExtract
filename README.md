@@ -1,5 +1,12 @@
 # AttestExtract
 
+Dev29 accepts a task description, a complete field-name/definition mapping and
+optional annotated examples in the normal Python and CLI entry points. The task
+compiles offline before model configuration; examples guide extraction without
+limiting the declared targets. CLI users keep everything in one task JSON file.
+See [simple task inputs](docs/SIMPLE_TASKS.md) for complete examples, validation,
+source preservation and recovery boundaries. No onboarding model calls are added.
+
 Dev28 routes recognized complete Markdown/HTML tables through A from the normal
 Python `extract` and CLI entry points. Prose and immutable table records share
 one result, budget and recovery flow; local position checks and unperformed
@@ -44,7 +51,7 @@ identities. See [D4 evidence and context](docs/D4_EVIDENCE.md) and the
 
 Schema-driven extraction from text and tables, with source-linked evidence and pluggable decision backends.
 
-**Early prototype · `0.1.0.dev25` · Python 3.11+**
+**Early prototype · `0.1.0.dev29` · Python 3.11+**
 
 dev18 adds offline `prepare-decisions` / `check-decisions`: validated successful-run materials cover every candidate and empty chunk; simulated suggestions are checked and recorded without applying them. Equal values with uncertain identity, conditions or evidence now produce insufficient-context associations. That release used flat-v1 / result schema 0.3; dev19 uses schema 0.4. No Jev inference or extra model calls are introduced. See [offline decision materials](docs/DECISION_MATERIALS.md).
 

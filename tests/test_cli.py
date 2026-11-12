@@ -61,7 +61,11 @@ def test_extract_without_model_configuration_fails_without_replay(tmp_path):
     task = tmp_path / "task.json"
     output = tmp_path / "result.json"
     source.write_text("A result.", encoding="utf-8")
-    task.write_text("{}", encoding="utf-8")
+    # Task validation now precedes model configuration. Keep this test focused
+    # on missing model settings by supplying a valid legacy task.
+    task.write_text(json.dumps({"name": "Synthetic", "record_types": {
+        "result": {"fields": {"value": {"type": "string"}}},
+    }}), encoding="utf-8")
     process = run_cli(
         "extract", "--input", str(source), "--task", str(task), "--output", str(output),
         cwd=tmp_path,

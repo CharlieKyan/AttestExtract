@@ -59,7 +59,7 @@ jobs:
           )
           provider_sources = {}
           table_names = ("table_route_experiment.py", "table_route_runner.py", "table_results_smoke.py",
-                         "table_entry_smoke.py")
+                         "table_entry_smoke.py", "simple_task_smoke.py")
           table_sources = {}
           tls_sources = {}
           with tarfile.open(source_archive) as archive:
@@ -98,7 +98,7 @@ jobs:
               assert set(examples) == {"ccus", "procurement"}
               for name, count in (("ccus", 2), ("procurement", 3)):
                   result = examples[name]
-                  assert result["package_version"] == "0.1.0.dev28"
+                  assert result["package_version"] == "0.1.0.dev29"
                   assert result["run"]["mode"] == "replay"
                   assert len(result["candidates"]) == count
                   assert result["review"] == []
@@ -108,7 +108,7 @@ jobs:
               assert set(archives) == {"attribute", "observation", "relation"}
               for name, candidate_count, record_count in (("attribute", 2, 1), ("observation", 2, 2), ("relation", 1, 1)):
                   archive = archives[name]
-                  assert archive["extraction"]["package_version"] == "0.1.0.dev28"
+                  assert archive["extraction"]["package_version"] == "0.1.0.dev29"
                   assert archive["extraction"]["run"]["mode"] == "replay"
                   assert len(archive["extraction"]["candidates"]) == candidate_count
                   assert len(archive["records"]) == record_count
@@ -122,7 +122,7 @@ jobs:
               subprocess.run([str(python), str(copied), "--mode", "mock", "--output-dir", str(acceptance)],
                              check=True, cwd=root, env=env)
               summary = json.loads((acceptance / "summary.json").read_text(encoding="utf-8"))
-              assert summary["package_version"] == "0.1.0.dev28"
+              assert summary["package_version"] == "0.1.0.dev29"
               assert summary["passed"] and summary["real_endpoint_calls"] == 0
               assert summary["mock_http_calls"] == 3
               assert [case["candidate_count"] for case in summary["cases"]] == [1, 2, 1]
@@ -215,7 +215,7 @@ jobs:
                               "--output-dir", str(tls_output)], check=True, cwd=root, env=env)
               tls = json.loads((tls_output / "summary.json").read_text(encoding="utf-8"))
               assert tls["passed"] and tls["real_endpoint_calls"] == 0 and tls["loopback_only"]
-              assert tls["package_version"] == "0.1.0.dev28"
+              assert tls["package_version"] == "0.1.0.dev29"
               assert tls["local_model_posts"] == 4 and tls["probe_attempts"] == 4
               assert tls["environment_restored"] and Path(tls["module_path"]).is_relative_to(environment)
               assert [case.get("actual_tls_version") for case in tls["cases"][:2]] == ["TLSv1.2", "TLSv1.3"]
@@ -247,7 +247,7 @@ jobs:
               assert tables["passed"] and tables["real_model_calls"] == 0
               assert tables["network_attempts"] == 0 and tables["planned_slots"] == 12
               assert tables["completed_resume_new_calls"] == 0
-              assert tables["package_version"] == "0.1.0.dev28"
+              assert tables["package_version"] == "0.1.0.dev29"
               assert Path(tables["module_path"]).is_relative_to(environment)
               entry_output = root / "table-entry"
               subprocess.run([str(python), str(scripts / "table_entry_smoke.py"),
@@ -257,5 +257,17 @@ jobs:
               assert entry["record_count"] == 3 and entry["isolated_records"] == 1
               assert entry["resume_new_calls"] == 2 and entry["completed_resume_new_calls"] == 0
               assert entry["cli_exit_status"] == 2 and entry["historical_artifacts_unchanged"]
-              assert entry["package_version"] == "0.1.0.dev28"
+              assert entry["package_version"] == "0.1.0.dev29"
               assert Path(entry["module_path"]).is_relative_to(environment)
+              simple_output = root / "simple-task"
+              subprocess.run([str(python), str(scripts / "simple_task_smoke.py"),
+                              "--output-dir", str(simple_output)], check=True, cwd=root, env=env)
+              simple = json.loads((simple_output / "summary.json").read_text(encoding="utf-8"))
+              assert simple["passed"] and simple["real_model_calls"] == simple["network_attempts"] == 0
+              assert simple["target_count"] == 3 and simple["example_target_count"] == 1
+              assert simple["prose_records"] == 2 and simple["table_records"] == 1
+              assert simple["completed_resume_new_calls"] == simple["cli_check_synthetic_calls"] == 0
+              assert simple["cli_exit_status"] == 0 and simple["synthetic_backend_generate_calls"] == 4
+              assert simple["historical_artifacts_unchanged"] and simple["report_includes_unobserved_target"]
+              assert simple["package_version"] == entry["package_version"]
+              assert Path(simple["module_path"]).is_relative_to(environment)

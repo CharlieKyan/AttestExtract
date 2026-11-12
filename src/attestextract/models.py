@@ -67,16 +67,59 @@ class RecordSpec(ContractModel):
         return self
 
 
+class TaskExampleExtraction(ContractModel):
+    """One user-labelled observation; source quotations remain unchanged."""
+
+    field: str = Field(min_length=1)
+    value: str = Field(min_length=1)
+    entity: str | None = None
+    unit: str | None = None
+    conditions: str | None = None
+    quote: str = ""
+    quotes: dict[str, str] = Field(default_factory=dict)
+
+
+class TaskInputExample(ContractModel):
+    text: str = Field(min_length=1)
+    extractions: list[TaskExampleExtraction]
+
+
+class SimpleTaskInput(ContractModel):
+    """The complete target list and optional user-labelled examples."""
+
+    prompt_description: str = Field(min_length=1)
+    field_list: dict[str, str] = Field(min_length=1)
+    examples: list[TaskInputExample] = Field(default_factory=list)
+
+
+class TaskInputMaterials(SimpleTaskInput):
+    """Versioned inputs bound to a deterministically compiled task."""
+
+    input_version: Literal["0.1"] = "0.1"
+    compiler_revision: Literal["simple-observation-v1"] = "simple-observation-v1"
+
+
 class TaskSpec(ContractModel):
     name: str = Field(min_length=1)
     description: str = ""
     record_types: dict[str, RecordSpec] = Field(min_length=1)
+    input_materials: TaskInputMaterials | None = None
 
     @model_validator(mode="after")
     def check_names(self) -> TaskSpec:
         if not self.name.strip() or any(not name.strip() for name in self.record_types):
             raise ValueError("Task and record type names must not be blank")
+        if self.input_materials is not None:
+            from .task_input import validate_compiled_task
+            validate_compiled_task(self)
         return self
+
+    @model_serializer(mode="wrap")
+    def _serialize_task(self, handler):
+        result = handler(self)
+        if self.input_materials is None:
+            result.pop("input_materials", None)
+        return result
 
 
 class SourceSpan(ContractModel):
