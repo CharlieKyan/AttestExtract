@@ -22,11 +22,11 @@ def validate_retry_options(backend, options, resume_from, table_mode):
         raise ConfigurationError("Table retry requires max_attempts=1; HTTP retries cannot be stacked.")
 
 
-def read_original(execution_dir, key, node):
+def read_original(execution_dir, key, node, *, table_input=None, task=None):
     from .execution import digest
     import re
 
-    if not re.fullmatch(r"table-[0-9]{4,}", key):
+    if not re.fullmatch(r"table-[0-9]{4,}(?:\.[12])*", key):
         raise ValueError("table retry node must identify a table")
     if (node.table_retry_pending and (node.table_retries_reserved or node.status != "pending" or node.calls != 1)
             or node.table_retries_reserved and node.calls != 2
@@ -36,7 +36,11 @@ def read_original(execution_dir, key, node):
     if digest(payload) != node.table_original_hash:
         raise ValueError("original table response checksum")
     response = BackendResponse.model_validate(payload)
-    if response.finish_reason not in (None, "stop") or not parse_route_response_partial("A", response.text)["rejections"]:
+    parsed = parse_route_response_partial("A", response.text)
+    if table_input is not None:
+        from .table_windows import filter_window_records
+        parsed = filter_window_records(parsed, table_input, task)
+    if response.finish_reason not in (None, "stop") or not parsed["rejections"]:
         raise ValueError("original table response was not a complete rejected table")
     return response
 
@@ -54,6 +58,10 @@ def select_table_retries(session):
             selected.append(key)
         elif key in session.cached and not node.table_retries_reserved and node.calls == 1:
             parsed = parse_route_response_partial("A", session.cached[key].text)
+            from .document_routing import table_input_for_chunk
+            from .table_windows import filter_window_records
+            table_input = table_input_for_chunk(session.text, session.chunks[key], session.structure)
+            parsed = filter_window_records(parsed, table_input, session.task)
             if parsed["rejections"]:
                 selected.append(key)
     if not selected:

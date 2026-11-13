@@ -92,7 +92,11 @@ def render_markdown_report(result: ExtractionResult, *, secrets: Iterable[str] =
         "关联检查仅覆盖任务配置的相同比较值，尚未实现完整的不同值矛盾检测；没有关联不表示没有冲突。", "",
     ]
     if result.table_results:
-        lines += [f"- 表格：{len(result.table_results)}；表格记录：{sum(len(t.candidates) for t in result.table_results)}；"
+        windows = sum(table.chunk_id != table.table_id for table in result.table_results)
+        table_count = (f"原表格：{len({table.table_id for table in result.table_results})}；"
+                       f"表格处理块：{len(result.table_results)}；细分窗口：{windows}"
+                       if windows else f"表格：{len(result.table_results)}")
+        lines += [f"- {table_count}；表格记录：{sum(len(t.candidates) for t in result.table_results)}；"
                   f"隔离记录：{sum(len(t.rejections) for t in result.table_results)}；格式状态：{cell(result.format_status)}", "",
                   "正文候选与表格记录分别保存。表格交付格式 table-route-v3；字段、引文和顺序原样交付，不经过正文去重。", ""]
     if result.task.input_materials is not None:
@@ -242,8 +246,14 @@ def _table_result_lines(result: ExtractionResult, cell) -> list[str]:
              "定位成功说明引用在原文中；字面检查核对数字或单位是否完整。局部位置规则只检查同行、同列等关系，"
              "不证明对象、共享单位或累计成员的科学归属。科学核验未运行。", ""]
     for table in result.table_results:
-        lines += [f"### {cell(table.table_id)}", "", f"- 运行分块：{cell(table.chunk_id)}；检查状态：{cell(table.status)}",
+        window = table.chunk_id != table.table_id
+        title = (f"原表 {cell(table.table_id)} · 窗口 {cell(table.chunk_id)}" if window else cell(table.table_id))
+        lines += [f"### {title}", "", f"- 运行分块：{cell(table.chunk_id)}；检查状态：{cell(table.status)}",
                   f"- 合法记录：{len(table.candidates)}；隔离记录：{len(table.rejections)}。", ""]
+        if window:
+            owned = table.evidence["table_input"].get("window", {}).get("owned_cell_refs", [])
+            lines += ["- 本窗口负责的原格：" + cell("、".join(owned)),
+                      "- 完整原表作为共享上下文；其他窗口的格子不属于本窗口的观测目标。", ""]
         for record in table.candidates:
             scope = record.get("scope_check", {})
             lines += [f"#### 记录 {cell(record['record_id'])}", "",

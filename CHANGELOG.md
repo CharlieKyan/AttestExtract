@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.0.dev33
+
+- Subdivide known table length truncations by physical rows or cells, with disjoint observation ownership and unchanged full-table context. Retain raw failures and spent calls; enforce existing depth and cumulative call limits. Unknown transport outcomes remain stopped.
+- Validate and migrate eligible dev31/dev32 single-attempt root checkpoints without changing generation settings or reissuing completed requests. Root requests and schemas must match; damaged caches, failure metadata and split trees fail before generation.
+- Quarantine observations using out-of-window anchors or declared value sources, while permitting shared identity, units and conditions. Preserve child artifact/provenance IDs and distinct review IDs. Result schema 0.6 and observe-only semantics remain; no scientific field correction or Jev integration is added.
+
 ## 0.1.0.dev32
 
 - Add concise annotation JSON and Markdown to managed outputs and offline review exports. Show all fields, conditions and quotations together per exact object label without changing, merging or selecting observations.

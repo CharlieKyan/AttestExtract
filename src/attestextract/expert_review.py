@@ -122,8 +122,11 @@ def _table_item(result: ExtractionResult, table_index: int, index: int, simple: 
                 entry["location_status"] = "located"
                 entry["span"] = {"start": matches[0]["selected_start"], "end": matches[0]["selected_end"]}
             evidence.append(entry)
+    # Model record IDs are local to one response. Split windows retain the
+    # original table ID, so their leaf chunk identifies the response namespace.
+    response_scope = table.chunk_id if table.chunk_id != table.table_id else table.table_id
     item = {
-        "candidate_id": f"{table.table_id}:{record.get('record_id', 'unknown')}",
+        "candidate_id": f"{response_scope}:{record.get('record_id', 'unknown')}",
         "record_type": record.get("record_type"),
         "status": "quarantined" if rejected else record.get("check_status", "not_checked"),
         "semantic_verification": "not_run", "source_kind": "table",

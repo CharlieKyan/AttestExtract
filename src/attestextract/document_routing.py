@@ -10,11 +10,11 @@ from .models import ContextOptions, DocumentChunk, SourceSpan
 from .structure import build_structure, validate_structure
 
 
-ROUTING_REVISION = "dev31-table-a-3"
+ROUTING_REVISION = "dev33-table-windows-1"
 
 
 def is_table_chunk(chunk: DocumentChunk) -> bool:
-    return re.fullmatch(r"table-[0-9]{4,}", chunk.chunk_id) is not None
+    return re.fullmatch(r"table-[0-9]{4,}(?:\.[12])*", chunk.chunk_id) is not None
 
 
 def routing_structure(text: str, table_mode: str, structure=None):
@@ -40,12 +40,14 @@ def table_input_for_chunk(text: str, chunk: DocumentChunk, structure=None) -> di
     if not is_table_chunk(chunk):
         return None
     detected = routing_structure(text, "auto", structure)
-    index = int(chunk.chunk_id.split("-")[1]) - 1
+    root_id = chunk.chunk_id.split(".")[0]
+    index = int(root_id.split("-")[1]) - 1
     if detected is None or not 0 <= index < len(detected.tables):
         raise ConfigurationError("Table chunk does not identify a table in the current source.")
     table = detected.tables[index]
     body = merge_spans(chunk.body_segments or chunk.segments)
-    if not any(span.start <= table.span.start and table.span.end <= span.end for span in body):
+    window = chunk.chunk_id != root_id
+    if not window and not any(span.start <= table.span.start and table.span.end <= span.end for span in body):
         raise ConfigurationError("Table chunk does not own the complete original table.")
     for span in body:
         before = text[span.start:min(span.end, table.span.start)]
@@ -53,7 +55,11 @@ def table_input_for_chunk(text: str, chunk: DocumentChunk, structure=None) -> di
         if before.strip() or after.strip():
             raise ConfigurationError("Table chunk contains unrelated prose in its owned source range.")
     from .table_routes import build_table_input
-    return build_table_input(text, table_id=table.table_id, structure=detected)
+    table_input = build_table_input(text, table_id=table.table_id, structure=detected)
+    if window:
+        from .table_windows import add_table_window
+        return add_table_window(table_input, chunk)
+    return table_input
 
 
 def plan_routed_chunks(text, task, generation, options, *, max_chars, table_rows_per_chunk,

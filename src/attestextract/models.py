@@ -373,7 +373,7 @@ def _package_version() -> str:
 
 
 class TableExtractionResult(ContractModel):
-    """One complete table's model records, separate from prose post-processing."""
+    """One table or owned window's records, separate from prose post-processing."""
 
     schema_version: Literal["table-route-v3"] = "table-route-v3"
     processing_policy: Literal["observe_only"] = "observe_only"

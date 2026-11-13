@@ -359,7 +359,14 @@ def prepare_automatic_execution(text: str, task: TaskSpec, backend: Any, generat
                 "structure": structure.model_dump(mode="json") if structure is not None else None}
     if routed is not None:
         identity["table_routing"] = {"mode": "auto", "revision": ROUTING_REVISION}
-    return AutomaticExecutionSession(text, chunks, options, digest(identity), backend=backend, trace=trace,
+    table_migration = None
+    if routed is not None and resume_from is not None:
+        from .table_window_migration import TableWindowMigration
+        table_migration = TableWindowMigration(backend, task, generation, identity, text, structure)
+    session = AutomaticExecutionSession(text, chunks, options, digest(identity), backend=backend, trace=trace,
                                      resume_from=resume_from, format_retries=format_retries,
                                      output_protocol="flat-v1", structure=structure,
-                                     transport_settings=backend.transport_settings)
+                                     transport_settings=backend.transport_settings, table_migration=table_migration,
+                                     task=task)
+    session.plan_saved_table_splits()
+    return session

@@ -1,5 +1,11 @@
 # AttestExtract
 
+Dev33 subdivides known table length truncations into bounded row/cell windows,
+preserving full table context, original cell references and spent calls. Verified
+dev31/dev32 root checkpoints can reuse completed chunks; unknown transport outcomes
+are not resent. Windows reduce output responsibility, not input tokens. See
+[table recovery](docs/TABLE_EXTRACTION.md#预算格式错误与恢复).
+
 Dev32 adds a simpler `annotation.json` / `annotation.md` view: values, units,
 conditions and quotations appear together under each exact object label. Technical
 source pointers live in `annotation.sources.json`; detailed review and raw results
@@ -65,7 +71,7 @@ identities. See [D4 evidence and context](docs/D4_EVIDENCE.md) and the
 
 Schema-driven extraction from text and tables, with source-linked evidence and pluggable decision backends.
 
-**Early prototype · `0.1.0.dev32` · Python 3.11+**
+**Early prototype · `0.1.0.dev33` · Python 3.11+**
 
 dev18 adds offline `prepare-decisions` / `check-decisions`: validated successful-run materials cover every candidate and empty chunk; simulated suggestions are checked and recorded without applying them. Equal values with uncertain identity, conditions or evidence now produce insufficient-context associations. That release used flat-v1 / result schema 0.3; dev19 uses schema 0.4. No Jev inference or extra model calls are introduced. See [offline decision materials](docs/DECISION_MATERIALS.md).
 

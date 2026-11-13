@@ -376,6 +376,8 @@ def _validated_response(
         try:
             if table_input is not None:
                 raw = _parse_table_response(response.text, trace=trace, chunk_id=chunk.chunk_id, artifact_stem=stem)
+                from .table_windows import filter_window_records
+                raw = filter_window_records(raw, table_input, task)
                 if trace is not None:
                     trace.write_json(f"tables/{chunk.chunk_id}/parsed.json", raw)
                     table_status = ("partial_format_error" if raw["records"] else "format_error") if raw["rejections"] else "passed"
@@ -446,7 +448,8 @@ def _validate_cached_responses(task: TaskSpec, session: ExecutionSession, table_
     protocol = session.state.output_protocol
     for key, response in session.cached.items():
         if key in (table_inputs or {}):
-            checked[key] = _parse_table_response(response.text)
+            from .table_windows import filter_window_records
+            checked[key] = filter_window_records(_parse_table_response(response.text), table_inputs[key], task)
             continue
         raw = _parse_response(response.text, output_protocol=protocol, allowed_keys=allowed_keys)
         _check_task_records(raw, task, trace=None, chunk_id=key, output_protocol=protocol)
@@ -498,9 +501,6 @@ def _responses_for_chunks(task: TaskSpec, chunks: list[DocumentChunk], backend: 
             yield chunk, checked[key], [session.cached[key]]
             continue
         try:
-            if key in table_inputs and session.state.nodes[key].calls and not session.table_retry_allowed(key):
-                raise InvalidResponseError("This table already has a failed or interrupted reservation. Inspect its saved response; resume will not resend it.",
-                                           attempts=0, code="table_call_already_reserved")
             # A saved truncation has already spent its call. Resume the split,
             # including when the truncated call was a format regeneration.
             if session.state.nodes[key].error_code == "truncated_response":
@@ -508,6 +508,9 @@ def _responses_for_chunks(task: TaskSpec, chunks: list[DocumentChunk], backend: 
                     trace.stage = "model_response"
                 raise InvalidResponseError("Resume the saved truncated chunk by subdivision when possible.",
                                            attempts=0, code="truncated_response")
+            if key in table_inputs and session.state.nodes[key].calls and not session.table_retry_allowed(key):
+                raise InvalidResponseError("This table already has a failed or interrupted reservation. Inspect its saved response; resume will not resend it.",
+                                           attempts=0, code="table_call_already_reserved")
             if isinstance(backend, AutomaticBackend):
                 raw, responses = _validated_automatic_response(task, chunk, backend, trace, session,
                                                                table_input=table_inputs.get(key))
@@ -517,9 +520,16 @@ def _responses_for_chunks(task: TaskSpec, chunks: list[DocumentChunk], backend: 
         except Exception as exc:
             failed_stage = trace.stage if trace is not None else None
             session.failed(key, exc)
-            if key not in table_inputs and isinstance(exc, BackendError) and exc.code == "truncated_response":
+            if isinstance(exc, BackendError) and exc.code == "truncated_response":
                 children = session.subdivide(key)
                 if children:
+                    if key in table_inputs:
+                        from .document_routing import table_input_for_chunk
+                        for child_id in children:
+                            table_inputs[child_id] = table_input_for_chunk(
+                                session.text, session.chunks[child_id], session.structure)
+                            if trace is not None:
+                                trace.write_json(f"tables/{child_id}/input.json", table_inputs[child_id])
                     queue[0:0] = children
                     continue
                 if trace is not None:
@@ -853,7 +863,8 @@ def _extract(
     table_inputs = {}
     if routed_tables:
         from .document_routing import table_input_for_chunk
-        table_inputs = {chunk.chunk_id: value for chunk in chunks
+        table_chunks = session.chunks.values() if session is not None else chunks
+        table_inputs = {chunk.chunk_id: value for chunk in table_chunks
                         if (value := table_input_for_chunk(text, chunk, structure)) is not None}
         if trace is not None:
             trace.write_json("table-routing.json", {"mode": table_mode, "route": "A",

@@ -156,12 +156,13 @@ class ExecutionSession:
                  resume_from: str | Path | None = None, format_retries: int = 0,
                  output_protocol: OutputProtocol = "flat-v1", structure=None,
                  transport_settings: dict[str, Any] | None = None, legacy_compatibility=None,
-                 table_migration=None) -> None:
+                 table_migration=None, task: TaskSpec | None = None) -> None:
         from . import __version__
         if resume_from is not None and trace is not None and trace.directory is not None:
             check_resume_paths(resume_from, [trace.directory])
         self.text, self.options, self.trace = text, options, trace
         self.structure = structure
+        self.task = task
         self._legacy_compatibility = legacy_compatibility
         self._table_migration = table_migration
         self.retry_tables = False
@@ -237,7 +238,10 @@ class ExecutionSession:
                 visited.add(key)
                 self.chunks[key] = chunk
                 if node.status == "split":
-                    children = split_chunk(self.text, chunk, min_chars=self.options.min_chunk_chars, structure=self.structure)
+                    from .document_routing import is_table_chunk
+                    if is_table_chunk(chunk) and node.error_code != "truncated_response":
+                        raise ValueError("table split requires a known truncation")
+                    children = self._split_children(chunk)
                     if depth >= self.options.max_split_depth or not children or node.children != [c.chunk_id for c in children]:
                         raise ValueError("split tree")
                     pending[0:0] = [(child, depth + 1) for child in children]
@@ -258,7 +262,9 @@ class ExecutionSession:
                     raise ValueError("unexpected cache")
                 if node.table_original_hash is not None:
                     from .table_retry import read_original
-                    self.table_originals[key] = read_original(path.parent, key, node)
+                    from .document_routing import table_input_for_chunk
+                    table_input = table_input_for_chunk(self.text, chunk, self.structure)
+                    self.table_originals[key] = read_original(path.parent, key, node, table_input=table_input, task=self.task)
                 elif node.table_retry_pending or node.table_retries_reserved:
                     raise ValueError("missing original table response")
             if visited != set(state.nodes) or sum(n.calls for n in state.nodes.values()) != state.calls_used:
@@ -408,8 +414,12 @@ class ExecutionSession:
 
     def subdivide(self, chunk_id: str) -> list[str]:
         node = self.state.nodes[chunk_id]
-        children = [] if node.depth >= self.options.max_split_depth else split_chunk(
-            self.text, self.chunks[chunk_id], min_chars=self.options.min_chunk_chars, structure=self.structure)
+        from .document_routing import is_table_chunk
+        if is_table_chunk(self.chunks[chunk_id]) and (
+                node.status != "failed" or not node.calls or node.error_code != "truncated_response"):
+            self.event("unsplittable", chunk_id=chunk_id, reason="no_known_table_truncation")
+            return []
+        children = [] if node.depth >= self.options.max_split_depth else self._split_children(self.chunks[chunk_id])
         if not children:
             self.event("unsplittable", chunk_id=chunk_id, depth=node.depth)
             return []
@@ -421,6 +431,22 @@ class ExecutionSession:
         self.save()
         self.event("split", chunk_id=chunk_id, children=node.children, leaf_chunks=len(self.leaves()))
         return node.children
+
+    def _split_children(self, chunk: DocumentChunk) -> list[DocumentChunk]:
+        from .document_routing import is_table_chunk
+        if is_table_chunk(chunk):
+            from .table_windows import split_table_chunk
+            return split_table_chunk(self.text, chunk, structure=self.structure)
+        return split_chunk(self.text, chunk, min_chars=self.options.min_chunk_chars, structure=self.structure)
+
+    def plan_saved_table_splits(self) -> None:
+        """Expand known failures offline; never reserve or repeat their requests."""
+        from .document_routing import is_table_chunk
+        for key in self.leaves():
+            node = self.state.nodes[key]
+            if (is_table_chunk(self.chunks[key]) and node.status == "failed"
+                    and node.error_code == "truncated_response" and node.calls):
+                self.subdivide(key)
 
 
 def prepare_execution(text: str, task: TaskSpec, backend: Any, generation: GenerationOptions,
@@ -467,14 +493,16 @@ def prepare_execution(text: str, task: TaskSpec, backend: Any, generation: Gener
         legacy_compatibility = Dev19Migration(backend, task, generation, identity)
     table_migration = None
     if retry_tables:
-        from .table_retry import Dev30TableMigration, validate_retry_options
+        from .table_retry import validate_retry_options
         validate_retry_options(backend, options, resume_from, table_mode)
-        if type(backend) is _CompatibleBackend and routed is not None:
-            table_migration = Dev30TableMigration(backend, task, generation, identity, text, structure)
+    if builtin and routed is not None and resume_from is not None:
+        from .table_window_migration import TableWindowMigration
+        table_migration = TableWindowMigration(backend, task, generation, identity, text, structure,
+                                              allow_dev30=retry_tables and type(backend) is _CompatibleBackend)
     session = ExecutionSession(text, chunks, options, digest(identity), trace=trace, resume_from=resume_from,
                             format_retries=format_retries, output_protocol=output_protocol, structure=structure,
                             transport_settings=transport, legacy_compatibility=legacy_compatibility,
-                            table_migration=table_migration)
+                            table_migration=table_migration, task=task)
     if not retry_tables and any(node.table_retry_pending for node in session.state.nodes.values()):
         # A preview is a saved plan, not authorization to generate. Reject before
         # the processing loop can mark a still-unreserved retry as failed.
@@ -482,4 +510,6 @@ def prepare_execution(text: str, task: TaskSpec, backend: Any, generation: Gener
     if retry_tables:
         from .table_retry import select_table_retries
         select_table_retries(session)
+    else:
+        session.plan_saved_table_splits()
     return session

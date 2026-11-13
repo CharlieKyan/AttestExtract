@@ -191,6 +191,19 @@ def _build_table_request(task: dict, table_input: dict, *, chunk_id: str,
     payload = {"task": {name: value for name, value in task.items() if name != "input_materials"},
                "table": table_input, "schema": schema}
     instructions = _COMMON
+    from .table_windows import window_owned_refs
+    if window_owned_refs(table_input) is not None:
+        instructions += (
+            "This request owns only table.window.owned_cell_refs. Extract observations whose "
+            "anchors are entirely in those cells; do not output observations anchored elsewhere. "
+            "Observed value sources must also be owned, regardless of their declared relation: "
+            "this includes simple-task value, declared measurement-group value fields, and numeric "
+            "fields other than declared identities, units or conditions. "
+            "The complete original table is SHARED CONTEXT: other cells, merged labels, headers, "
+            "units, captions and footnotes may support identity or conditions, but are not extra "
+            "observation targets. Keep all original references and merged-cell scope. "
+            "Do not distribute a group or total measurement to individual members.\n"
+        )
     if not legacy:
         instructions += _FORMAT_INSTRUCTIONS
         payload["table_request_revision"] = TABLE_REQUEST_REVISION
@@ -741,6 +754,8 @@ def _candidate_view(records: list[dict], originals: list[dict], indices: list[in
 def evaluate_route(stage: str, parsed: dict, table_input: dict, task: dict) -> dict:
     if not isinstance(parsed, dict) or set(parsed) not in ({"records"}, {"records", "record_indices", "rejections"}):
         raise ValueError("Expected strict or partial table parse result")
+    from .table_windows import filter_window_records
+    parsed = filter_window_records(parsed, table_input, task)
     rejections = deepcopy(parsed.get("rejections", []))
     indices = deepcopy(parsed.get("record_indices", list(range(len(parsed["records"])))))
     if len(indices) != len(parsed["records"]) or any(type(i) is not int or i < 0 for i in indices):

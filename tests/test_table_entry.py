@@ -124,18 +124,18 @@ def test_whole_response_failure_does_not_salvage_or_retry(text, tmp_path):
     assert retry.requests == []
 
 
-def test_table_truncation_never_splits_even_on_resume(tmp_path):
+def test_table_truncation_with_splitting_disabled_stops_without_resending(tmp_path):
     backend = Backend(finish_reason="length")
     with pytest.raises(InvalidResponseError):
         extract(TABLE, TASK, backend=backend, trace=RunTrace(tmp_path / "trace"), backend_identity="synthetic",
-                execution=ExecutionOptions(min_chunk_chars=1, max_model_calls=9))
+                execution=ExecutionOptions(min_chunk_chars=1, max_model_calls=9, max_split_depth=0))
     assert len(backend.requests) == 1
     state = json.loads((tmp_path / "trace/execution/checkpoint.json").read_text())["state"]
     assert list(state["nodes"]) == ["table-0001"]
     retry = Backend()
-    with pytest.raises(InvalidResponseError, match="will not resend"):
+    with pytest.raises(InvalidResponseError, match="subdivision"):
         extract(TABLE, TASK, backend=retry, trace=RunTrace(tmp_path / "resume"), backend_identity="synthetic",
-                execution=ExecutionOptions(min_chunk_chars=1, max_model_calls=9), resume_from=tmp_path / "trace")
+                execution=ExecutionOptions(min_chunk_chars=1, max_model_calls=9, max_split_depth=0), resume_from=tmp_path / "trace")
     assert not retry.requests
 
 
