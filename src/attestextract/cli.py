@@ -159,6 +159,7 @@ def _export_review(args: argparse.Namespace) -> int:
     save_expert_review(result, directory, source_result=str(source))
     print(f"Wrote {directory / 'review.json'}")
     print(f"Wrote {directory / 'review.md'}")
+    print(f"Start with {directory / 'annotation.md'} or {directory / 'annotation.json'}")
     print("Offline display only; observations were not merged, corrected or accepted.")
     return 0
 

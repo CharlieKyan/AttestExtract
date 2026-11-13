@@ -36,6 +36,9 @@ def test_offline_export_accepts_old_result_without_modifying_original(tmp_path, 
     view = json.loads((out / "review.json").read_text(encoding="utf-8"))
     assert view["source_result"] == str(source.resolve())
     assert (out / "review.md").is_file()
+    assert (out / "annotation.md").is_file()
+    assert (out / "annotation.json").is_file()
+    assert (out / "annotation.sources.json").is_file()
     assert "Offline display only" in capsys.readouterr().out
 
 

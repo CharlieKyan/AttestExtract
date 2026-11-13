@@ -94,6 +94,8 @@ def test_default_output_directory_includes_expert_review(tmp_path):
     review = read(output / "review.json")
     assert review["rows"][0]["fields"]["mass"][0]["value"] == "17"
     assert (output / "review.md").is_file()
+    assert (output / "annotation.md").is_file()
+    assert (output / "annotation.json").is_file()
     assert read(output / "diagnostics/manifest.json")["status"] == "succeeded"
 
 

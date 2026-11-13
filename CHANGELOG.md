@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.0.dev32
+
+- Add concise annotation JSON and Markdown to managed outputs and offline review exports. Show all fields, conditions and quotations together per exact object label without changing, merging or selecting observations.
+- Move technical provenance to a separate annotation source map; retain detailed review files, substantive warnings, quarantined declarations and explicit unverified status. No extraction prompts, model calls or recovery identities change.
+
 ## 0.1.0.dev31
 
 - Align the table request schema with the local conditional `relation` requirement and include an isolated synthetic format example; never fill missing relationships or replace source references automatically.

@@ -370,3 +370,5 @@ def save_expert_review(result: ExtractionResult, directory: Path, *, secrets: It
         stream.write("\n")
     with (directory / "review.md").open("x", encoding="utf-8", newline="") as stream:
         stream.write(markdown)
+    from .annotation_view import save_annotation
+    save_annotation(result, directory, secrets=secrets, source_result=source_result)
