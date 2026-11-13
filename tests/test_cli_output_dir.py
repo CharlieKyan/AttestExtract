@@ -85,6 +85,28 @@ def test_output_dir_saves_complete_result_report_and_checkpoint(tmp_path, existi
     assert not (tmp_path / "outputs").exists()
 
 
+def test_default_output_directory_includes_expert_review(tmp_path):
+    args, registry, calls = setup_cli(tmp_path)
+    assert cli.main(args, registry=registry) == 0
+    outputs = list((tmp_path / "outputs").iterdir())
+    assert len(outputs) == 1 and len(calls) == 1
+    output = outputs[0]
+    review = read(output / "review.json")
+    assert review["rows"][0]["fields"]["mass"][0]["value"] == "17"
+    assert (output / "review.md").is_file()
+    assert read(output / "diagnostics/manifest.json")["status"] == "succeeded"
+
+
+def test_default_output_keeps_explicit_report_location(tmp_path):
+    args, registry, calls = setup_cli(tmp_path)
+    report = tmp_path / "chosen-report.md"
+    assert cli.main([*args, "--report", str(report)], registry=registry) == 0
+    output = next((tmp_path / "outputs").iterdir())
+    assert "17" in report.read_text(encoding="utf-8")
+    assert not (output / "report.md").exists()
+    assert (output / "review.md").is_file() and len(calls) == 1
+
+
 @pytest.mark.parametrize("flag", ["--output", "--report", "--log-dir"])
 def test_output_dir_rejects_advanced_path_mix_before_credentials(tmp_path, monkeypatch, capsys, flag):
     args, registry, calls = setup_cli(tmp_path)

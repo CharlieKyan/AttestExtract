@@ -66,6 +66,9 @@ class _Node(ContractModel):
     format_failures: int = Field(default=0, ge=0, le=2)
     format_retries_reserved: int = Field(default=0, ge=0, le=1)
     format_feedback: list[_FormatFeedback] = Field(default_factory=list, max_length=5)
+    table_retry_pending: bool = False
+    table_retries_reserved: int = Field(default=0, ge=0, le=1)
+    table_original_hash: str | None = None
 
 
 class _State(ContractModel):
@@ -152,13 +155,17 @@ class ExecutionSession:
                  fingerprint: str, *, trace: RunTrace | None = None,
                  resume_from: str | Path | None = None, format_retries: int = 0,
                  output_protocol: OutputProtocol = "flat-v1", structure=None,
-                 transport_settings: dict[str, Any] | None = None, legacy_compatibility=None) -> None:
+                 transport_settings: dict[str, Any] | None = None, legacy_compatibility=None,
+                 table_migration=None) -> None:
         from . import __version__
         if resume_from is not None and trace is not None and trace.directory is not None:
             check_resume_paths(resume_from, [trace.directory])
         self.text, self.options, self.trace = text, options, trace
         self.structure = structure
         self._legacy_compatibility = legacy_compatibility
+        self._table_migration = table_migration
+        self.retry_tables = False
+        self.table_originals: dict[str, BackendResponse] = {}
         self.chunks = {chunk.chunk_id: chunk for chunk in chunks}
         self.cached: dict[str, BackendResponse] = {}
         self.reused = 0
@@ -186,6 +193,8 @@ class ExecutionSession:
         if trace is not None and trace.directory is not None:
             for chunk_id, response in self.cached.items():
                 self._write_cache(chunk_id, response)
+            for chunk_id, response in self.table_originals.items():
+                trace.write_json(f"execution/table-original/{chunk_id}.json", response.model_dump(mode="json"))
         self.save()
 
     def _load(self, resume_from: str | Path) -> None:
@@ -200,6 +209,10 @@ class ExecutionSession:
                 if self._legacy_compatibility is None:
                     raise ConfigurationError("This v2 checkpoint cannot be verified for migration. Only supported dev19 built-in backend runs can migrate; start a new run.")
                 self._legacy_compatibility.migrate_identity(state, path, self.state)
+            table_migrated = False
+            if state.fingerprint != self.state.fingerprint and self._table_migration is not None:
+                self._table_migration.migrate_identity(state, path, self.state)
+                table_migrated = True
             if (state.fingerprint != self.state.fingerprint or state.roots != self.state.roots
                     or state.output_protocol != self.state.output_protocol
                     or state.engine_revision != self.state.engine_revision):
@@ -243,6 +256,11 @@ class ExecutionSession:
                     self.cached[key] = response
                 elif node.cache_hash is not None:
                     raise ValueError("unexpected cache")
+                if node.table_original_hash is not None:
+                    from .table_retry import read_original
+                    self.table_originals[key] = read_original(path.parent, key, node)
+                elif node.table_retry_pending or node.table_retries_reserved:
+                    raise ValueError("missing original table response")
             if visited != set(state.nodes) or sum(n.calls for n in state.nodes.values()) != state.calls_used:
                 raise ValueError("call ledger")
             if state.calls_used > state.max_model_calls or any(v < 0 for v in state.usage.values()):
@@ -251,6 +269,8 @@ class ExecutionSession:
                 raise ValueError("response ledger")
             if legacy:
                 self._legacy_compatibility.validate_requests(state, path, self.chunks)
+            if table_migrated:
+                self._table_migration.validate_requests(state, path, self.chunks)
         except ConfigurationError:
             raise
         except (OSError, ValueError, TypeError, KeyError, ValidationError, RecursionError):
@@ -292,7 +312,13 @@ class ExecutionSession:
                 "policy_changes": self.state.policy_changes,
                 "transport_settings": self.state.transport_settings,
                 "transport_changes": self.state.transport_changes,
-                "migrations": self.state.migrations}
+                "migrations": self.state.migrations,
+                "table_retry_chunks": [key for key in self.leaves() if self.state.nodes[key].table_retry_pending],
+                "table_retries_reserved": sum(node.table_retries_reserved for node in leaves)}
+
+    def table_retry_allowed(self, chunk_id: str) -> bool:
+        node = self.state.nodes[chunk_id]
+        return self.retry_tables and node.table_retry_pending and node.table_retries_reserved == 0
 
     def save(self) -> None:
         if self.trace is not None and self.trace.directory is not None:
@@ -326,6 +352,9 @@ class ExecutionSession:
         self.save()
 
     def reserve(self, chunk_id: str, *, format_attempt: int = 1) -> None:
+        node = self.state.nodes[chunk_id]
+        if node.table_retry_pending and (not self.retry_tables or node.table_retries_reserved):
+            raise ConfigurationError("Table retry requires explicit authorization and unused allowance.")
         if format_attempt == 2:
             self.format_attempt(chunk_id)
         if self.state.calls_used >= self.state.max_model_calls:
@@ -333,8 +362,10 @@ class ExecutionSession:
             raise BackendError("Model-call budget exhausted. Completed chunks are retained; resume with a larger explicit total --max-model-calls budget.",
                                attempts=0, code="call_budget_exhausted")
         self.state.calls_used += 1
-        node = self.state.nodes[chunk_id]
         node.calls += 1
+        if node.table_retry_pending:
+            node.table_retry_pending = False
+            node.table_retries_reserved = 1
         if format_attempt == 2:
             node.format_retries_reserved += 1
         node.status = "in_flight"
@@ -398,7 +429,7 @@ def prepare_execution(text: str, task: TaskSpec, backend: Any, generation: Gener
                       source_name: str | None = None, backend_identity: str | None = None,
                       trace: RunTrace | None = None, resume_from: str | Path | None = None,
                       context: ContextOptions | None = None, structure=None,
-                      table_mode: str = "text") -> ExecutionSession:
+                      table_mode: str = "text", retry_tables: bool = False) -> ExecutionSession:
     from .document_routing import ROUTING_REVISION, routing_structure
     routed = routing_structure(text, table_mode, structure)
     if routed is not None:
@@ -434,6 +465,21 @@ def prepare_execution(text: str, task: TaskSpec, backend: Any, generation: Gener
     if builtin and resume_from is not None and routed is None:
         from .execution_migration import Dev19Migration
         legacy_compatibility = Dev19Migration(backend, task, generation, identity)
-    return ExecutionSession(text, chunks, options, digest(identity), trace=trace, resume_from=resume_from,
+    table_migration = None
+    if retry_tables:
+        from .table_retry import Dev30TableMigration, validate_retry_options
+        validate_retry_options(backend, options, resume_from, table_mode)
+        if type(backend) is _CompatibleBackend and routed is not None:
+            table_migration = Dev30TableMigration(backend, task, generation, identity, text, structure)
+    session = ExecutionSession(text, chunks, options, digest(identity), trace=trace, resume_from=resume_from,
                             format_retries=format_retries, output_protocol=output_protocol, structure=structure,
-                            transport_settings=transport, legacy_compatibility=legacy_compatibility)
+                            transport_settings=transport, legacy_compatibility=legacy_compatibility,
+                            table_migration=table_migration)
+    if not retry_tables and any(node.table_retry_pending for node in session.state.nodes.values()):
+        # A preview is a saved plan, not authorization to generate. Reject before
+        # the processing loop can mark a still-unreserved retry as failed.
+        raise ConfigurationError("This checkpoint contains planned table retries; use retry_tables=True or --retry-tables with an explicit cumulative budget to execute them.")
+    if retry_tables:
+        from .table_retry import select_table_retries
+        select_table_retries(session)
+    return session

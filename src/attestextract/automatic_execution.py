@@ -35,6 +35,9 @@ class AutomaticState(_State):
 
 def validate_automatic_state(state: AutomaticState, cached: dict | None = None) -> None:
     """Cross-check the ledger independently of aggregate counters and caches."""
+    if any(node.table_retry_pending or node.table_retries_reserved or node.table_original_hash is not None
+           for node in state.nodes.values()):
+        raise ValueError("Automatic checkpoints do not support fixed-backend table retry reservations")
     plan = state.route_plan
     if not isinstance(plan.get("routes"), list) or not plan["routes"]:
         raise ValueError("missing automatic routes")
@@ -336,7 +339,9 @@ def prepare_automatic_execution(text: str, task: TaskSpec, backend: Any, generat
                                 table_rows_per_chunk: int = 12, format_retries: int = 0,
                                 source_name: str | None = None, backend_identity: str | None = None,
                                 trace=None, resume_from=None, context: ContextOptions | None = None,
-                                structure=None, table_mode: str = "text") -> AutomaticExecutionSession:
+                                structure=None, table_mode: str = "text", retry_tables: bool = False) -> AutomaticExecutionSession:
+    if retry_tables:
+        raise ConfigurationError("Targeted table retry currently supports fixed backend checkpoints only; automatic multi-route checkpoints cannot be migrated or retried this way.")
     from .document_routing import ROUTING_REVISION, routing_structure
     routed = routing_structure(text, table_mode, structure)
     if routed is not None:

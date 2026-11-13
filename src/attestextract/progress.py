@@ -115,11 +115,11 @@ class ConsoleProgress:
             self._write(f"{prefix} format regeneration requested; one additional reserved call")
         elif stage == "execution" and kind in {"finished", "stopped"}:
             self._waiting_since = None
-            self._write(f"Chunk summary: {event['completed_chunks']}/{event['leaf_chunks']} completed; "
+            self._write(f"Chunk summary: {event['completed_chunks']}/{event['leaf_chunks']} responses processed; "
                         f"{event['first_pass_chunks']} first call; {event['format_recovered_chunks']} format recovered; "
                         f"{event['split_chunks']} subdivided; {event['reused_chunks']} reused; "
                         f"{event['failed_chunks']} failed; {event['pending_chunks']} pending; "
-                        f"calls {event['calls_reserved']}/{event['max_model_calls']}")
+                        f"calls {event['calls_reserved']}/{event['max_model_calls']}; processing does not imply every record passed")
         elif stage == "execution" and kind == "split":
             self._waiting_since = None
             # A saved truncated parent can split on resume before a request
@@ -168,6 +168,15 @@ class ConsoleProgress:
         elif stage == "chunk" and kind == "completed":
             self._write(f"{prefix} checked: {event['candidate_count']} candidates; "
                         f"{event['review_count']} review items; {event.get('info_count', 0)} info items")
+        elif stage == "table" and kind == "completed":
+            self._write(f"{prefix} table checked: {event['candidate_count']} retained; "
+                        f"{event.get('rejected_count', 0)} quarantined; status {event['status']}")
+        elif stage == "complete" and kind in {"partial_format_error", "format_error"}:
+            self._waiting_since = None
+            self._write(f"Partial result: {event.get('prose_candidates', 0)} prose candidates retained; "
+                        f"{event.get('table_candidates', 0)} table records retained; "
+                        f"{event.get('quarantined_records', 0)} table records quarantined. "
+                        "Inspect the report and table_results.rejections; ordinary resume reuses these responses.")
         elif stage == "complete" and kind == "succeeded":
             run = event.get("run", {})
             elapsed = run.get("elapsed_seconds", 0)

@@ -150,7 +150,11 @@ class RunTrace:
             status=status, finished_at=_now(),
             package_version=result_payload.get("package_version"), run=result_payload.get("run"),
         )
-        self.event("complete", status, run=result_payload.get("run", {}))
+        tables = result_payload.get("table_results", [])
+        self.event("complete", status, run=result_payload.get("run", {}),
+                   prose_candidates=len(result_payload.get("candidates", [])),
+                   table_candidates=sum(len(table.get("candidates", [])) for table in tables),
+                   quarantined_records=sum(len(table.get("rejections", [])) for table in tables))
         self.write_json("manifest.json", self._manifest)
 
     def checked(self, plan: dict[str, Any]) -> None:

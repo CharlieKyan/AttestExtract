@@ -9,6 +9,7 @@ from .diagnostics import RunTrace
 from .errors import ConfigurationError
 from .models import ExtractionResult
 from .reporting import render_markdown_report
+from .expert_review import save_expert_review
 
 
 def prepare_run_directory(directory: str | Path, *, resume_from: str | Path | None = None) -> Path:
@@ -37,4 +38,5 @@ def save_run_result(result: ExtractionResult, directory: Path, trace: RunTrace) 
         stream.write(serialized)
     with (directory / "report.md").open("x", encoding="utf-8", newline="") as stream:
         stream.write(report)
+    save_expert_review(result, directory, secrets=trace._secrets)
     trace.finish(payload)

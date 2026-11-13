@@ -498,7 +498,7 @@ def _responses_for_chunks(task: TaskSpec, chunks: list[DocumentChunk], backend: 
             yield chunk, checked[key], [session.cached[key]]
             continue
         try:
-            if key in table_inputs and session.state.nodes[key].calls:
+            if key in table_inputs and session.state.nodes[key].calls and not session.table_retry_allowed(key):
                 raise InvalidResponseError("This table already has a failed or interrupted reservation. Inspect its saved response; resume will not resend it.",
                                            attempts=0, code="table_call_already_reserved")
             # A saved truncation has already spent its call. Resume the split,
@@ -648,6 +648,7 @@ def extract(
     backend_identity: str | None = None,
     context: ContextOptions | None = None,
     table_mode: str = "auto",
+    retry_tables: bool = False,
 ) -> ExtractionResult:
     """Extract candidates. Matching evidence does not establish factual validity.
 
@@ -693,6 +694,10 @@ def extract(
                             field_list=field_list, examples=examples)
         if table_mode not in {"auto", "text"}:
             raise ConfigurationError("table_mode must be auto or text.")
+        if type(retry_tables) is not bool:
+            raise ConfigurationError("retry_tables must be a boolean.")
+        if retry_tables and (resume_from is None or table_mode != "auto"):
+            raise ConfigurationError("retry_tables requires resume_from and automatic table routing.")
         if any(type(value) is not int or value < 1 for value in (max_chunk_chars, table_rows_per_chunk)):
             raise ConfigurationError("Chunk character and table-row limits must be positive integers.")
         if context is not None and not isinstance(context, ContextOptions):
@@ -742,7 +747,7 @@ def extract(
             max_chunk_chars=max_chunk_chars, table_rows_per_chunk=table_rows_per_chunk,
             trace=trace, format_retries=format_retries, generation=options,
             execution=execution, resume_from=resume_from, backend_identity=backend_identity, context=context,
-            table_mode=table_mode,
+            table_mode=table_mode, retry_tables=retry_tables,
         )
         if directory is not None:
             from .run_output import save_run_result
@@ -783,6 +788,7 @@ def _extract(
     backend_identity: str | None = None,
     context: ContextOptions | None = None,
     table_mode: str = "auto",
+    retry_tables: bool = False,
 ) -> ExtractionResult:
     started = time.perf_counter()
     output_protocol = output_protocol_for_backend(backend)
@@ -839,7 +845,7 @@ def _extract(
                                     table_rows_per_chunk=table_rows_per_chunk, format_retries=format_retries,
                                     source_name=source_name, backend_identity=backend_identity, trace=trace,
                                     resume_from=resume_from, context=context, structure=chunk_structure,
-                                    table_mode=table_mode)
+                                    table_mode=table_mode, retry_tables=retry_tables)
         chunks = [session.chunks[key] for key in session.state.roots]
     else:
         chunks = chunk_document(text, max_chars=max_chunk_chars, table_rows_per_chunk=table_rows_per_chunk,

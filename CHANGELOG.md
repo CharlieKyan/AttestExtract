@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.0.dev31
+
+- Align the table request schema with the local conditional `relation` requirement and include an isolated synthetic format example; never fill missing relationships or replace source references automatically.
+- Distinguish processed chunks from accepted-format records in terminal output, with retained prose/table and quarantined record totals.
+- Add explicit, budgeted `retry_tables` / `--retry-tables` recovery for supported fixed-backend checkpoints, preserving prior reservations and limiting each failed table to one additional generation across the recovery chain. Automatic multi-route checkpoints are not eligible for this opt-in operation.
+- Save `review.json` and `review.md` with managed runs and provide offline `export-review` for existing results. Group simple observations only by exact object and condition text, preserve multiple values and source identifiers, and show quarantined records separately. Review rows are not merged entities or accepted database records.
+
 ## 0.1.0.dev30
 
 - Add `output_dir` to Python and `--output-dir` to CLI: one new or empty run directory saves results, review report, diagnostics and checkpoints without overwriting history.

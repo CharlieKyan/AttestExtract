@@ -10,7 +10,7 @@ from .models import ContextOptions, DocumentChunk, SourceSpan
 from .structure import build_structure, validate_structure
 
 
-ROUTING_REVISION = "dev29-table-a-2"
+ROUTING_REVISION = "dev31-table-a-3"
 
 
 def is_table_chunk(chunk: DocumentChunk) -> bool:

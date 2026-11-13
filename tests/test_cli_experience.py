@@ -232,12 +232,12 @@ def test_terminal_coordinates_point_to_original_fenced_response(tmp_path, monkey
 
 def test_report_write_failure_does_not_claim_result_was_never_written(tmp_path, monkeypatch, capsys):
     intercept(monkeypatch, lambda _: response())
-    original = Path.write_bytes
-    def write(path, content):
-        if path.name == "report.md":
+    original = Path.open
+    def write(path, mode="r", *args, **kwargs):
+        if path.name == "report.md" and any(flag in mode for flag in "wax"):
             raise OSError("Synthetic report write failure")
-        return original(path, content)
-    monkeypatch.setattr(Path, "write_bytes", write)
+        return original(path, mode, *args, **kwargs)
+    monkeypatch.setattr(Path, "open", write)
     assert cli.main(arguments(tmp_path)) == 1
     run = next((tmp_path / "outputs").iterdir())
     assert (run / "result.json").is_file()

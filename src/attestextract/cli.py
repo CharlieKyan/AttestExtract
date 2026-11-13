@@ -23,7 +23,7 @@ from .diagnostics import RunTrace, redact_text
 from .envconfig import load_env_file
 from .errors import AttestExtractError, ConfigurationError
 from .execution import check_resume_paths, digest, prepare_execution
-from .models import ContextOptions, ExecutionOptions, TaskSpec
+from .models import ContextOptions, ExecutionOptions, ExtractionResult, TaskSpec
 from .documents import Document
 from .structure import build_structure
 from .contextual_chunking import coverage_report
@@ -57,6 +57,10 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=__version__)
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("models", help="List built-in model selectors without network access or credentials")
+
+    review = commands.add_parser("export-review", help="Export compact expert review rows from an existing result; no model calls")
+    review.add_argument("--input", type=Path, required=True, help="Saved result.json or its run directory")
+    review.add_argument("--output-dir", type=Path, help="New empty directory outside the original run; default: a new sibling")
 
     prepare = commands.add_parser("prepare-decisions", help="Prepare offline decision materials from a successful checkpointed run")
     prepare.add_argument("--run", type=Path, required=True, help="Successful run directory or its diagnostics directory")
@@ -128,7 +132,35 @@ def _parser() -> argparse.ArgumentParser:
     live.add_argument("--max-model-calls", type=int, help="Total generation-call budget including retries and prior resumed calls (default: 3 x initial planned chunks)")
     live.add_argument("--max-split-depth", type=int, default=3, help="Maximum truncation subdivision depth (default: 3; 0 disables subdivision)")
     live.add_argument("--resume", type=Path, help="Previous run directory, diagnostics directory or execution/checkpoint.json; saves a new run")
+    live.add_argument("--retry-tables", action="store_true", help="With --resume, explicitly retry quarantined table responses once within the cumulative budget; never retry unknown outcomes")
     return parser
+
+
+def _export_review(args: argparse.Namespace) -> int:
+    from .expert_review import save_expert_review
+
+    source = args.input.resolve()
+    if source.is_dir():
+        source = source / "result.json"
+    try:
+        payload = json.loads(source.read_bytes().decode("utf-8-sig"),
+                             object_pairs_hook=_unique_object, parse_constant=_reject_constant)
+        result = ExtractionResult.model_validate(payload)
+        if result.run.routes:
+            from .automatic_provenance import validate_automatic_provenance
+            validate_automatic_provenance(result)
+    except (OSError, ValueError, TypeError):
+        raise ConfigurationError("Could not read a supported, valid extraction result; no review was exported.") from None
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + uuid4().hex[:8]
+    target = (args.output_dir or source.parent.with_name(source.parent.name + "-review-" + stamp)).resolve()
+    if target.is_relative_to(source.parent) or source.parent.is_relative_to(target):
+        raise ConfigurationError("Review output must be outside the original run; choose a new sibling directory.")
+    directory = prepare_run_directory(target)
+    save_expert_review(result, directory, source_result=str(source))
+    print(f"Wrote {directory / 'review.json'}")
+    print(f"Wrote {directory / 'review.md'}")
+    print("Offline display only; observations were not merged, corrected or accepted.")
+    return 0
 
 
 def _demo(example: str) -> dict:
@@ -213,6 +245,10 @@ def _resume_command(args: argparse.Namespace, checkpoint: Path) -> str:
     for name, value in vars(args).items():
         if name in omitted or value is None:
             continue
+        if isinstance(value, bool):
+            if value:
+                command.append("--" + name.replace("_", "-"))
+            continue
         if isinstance(value, Path):
             value = value.resolve()
         command.extend(["--" + name.replace("_", "-"), str(value)])
@@ -289,6 +325,8 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
     trace = None
     progress = None
     try:
+        if args.command == "export-review":
+            return _export_review(args)
         if args.command in {"prepare-decisions", "check-decisions"}:
             return _offline_decisions(args)
         if args.command == "models":
@@ -482,7 +520,8 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
             session = prepare(text, task, backend, config.generation, execution,
                                         max_chars=args.max_chunk_chars, format_retries=config.format_retries,
                                         source_name=args.input.name, backend_identity=backend_identity,
-                                        resume_from=args.resume, context=context, structure=structure, table_mode=args.tables)
+                                        resume_from=args.resume, context=context, structure=structure, table_mode=args.tables,
+                                        retry_tables=args.retry_tables)
             from .pipeline import _validate_cached_responses
             from .document_routing import table_input_for_chunk
             table_inputs = {key: value for key, chunk in session.chunks.items()
@@ -523,10 +562,12 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
         result = extract(document, task, backend=backend, source_name=args.input.name, trace=trace,
                          format_retries=config.format_retries, generation=config.generation,
                          execution=execution, resume_from=args.resume, backend_identity=backend_identity,
-                         max_chunk_chars=args.max_chunk_chars, context=context, table_mode=args.tables)
+                         max_chunk_chars=args.max_chunk_chars, context=context, table_mode=args.tables,
+                         retry_tables=args.retry_tables)
         payload = result.model_dump(mode="json")
-        if args.output_dir is not None:
-            save_run_result(result, args.output_dir.resolve(), trace)
+        if (default_directory is not None
+                and args.report.resolve() == (default_directory / "report.md").resolve()):
+            save_run_result(result, default_directory.resolve(), trace)
             if args.progress != "quiet":
                 print(f"Wrote {args.output}", file=sys.stderr)
                 print(f"Wrote {args.report}", file=sys.stderr)
@@ -539,6 +580,9 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
                 args.report.write_bytes(report.encode("utf-8"))
                 if args.progress != "quiet":
                     print(f"Wrote {args.report}", file=sys.stderr)
+            if default_directory is not None:
+                from .expert_review import save_expert_review
+                save_expert_review(result, default_directory.resolve(), secrets=trace._secrets)
             if trace is not None:
                 trace.finish(payload)
         if trace is not None:

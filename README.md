@@ -1,5 +1,12 @@
 # AttestExtract
 
+Dev31 aligns the table prompt/schema with the local binding validator, adds explicit
+one-shot retries of quarantined tables with a cumulative budget, and saves
+`review.json` / `review.md` beside managed results. Review rows group identical
+object/condition/scope labels for display; they are not merged or accepted facts.
+Existing results can be exported offline with `attestextract export-review`.
+See [review and targeted recovery](docs/EXPERT_REVIEW.md).
+
 Dev30 adds `output_dir` to Python and `--output-dir` to CLI. A single new or empty run directory holds the result, report, diagnostics and recovery checkpoint. Ordinary Python model selection now uses the same managed execution defaults as CLI; in-memory calls remain available. Install the package in your terminal, then import it from your own project.
 
 Dev29 accepts a task description, a complete field-name/definition mapping and
@@ -53,7 +60,7 @@ identities. See [D4 evidence and context](docs/D4_EVIDENCE.md) and the
 
 Schema-driven extraction from text and tables, with source-linked evidence and pluggable decision backends.
 
-**Early prototype · `0.1.0.dev30` · Python 3.11+**
+**Early prototype · `0.1.0.dev31` · Python 3.11+**
 
 dev18 adds offline `prepare-decisions` / `check-decisions`: validated successful-run materials cover every candidate and empty chunk; simulated suggestions are checked and recorded without applying them. Equal values with uncertain identity, conditions or evidence now produce insufficient-context associations. That release used flat-v1 / result schema 0.3; dev19 uses schema 0.4. No Jev inference or extra model calls are introduced. See [offline decision materials](docs/DECISION_MATERIALS.md).
 

@@ -22,6 +22,9 @@ from .prompting import SIMPLE_OBSERVATION_INSTRUCTIONS
 from .structure import build_structure, validate_structure
 
 
+TABLE_REQUEST_REVISION = "dev31-table-a-3"
+
+
 class Selection(ContractModel):
     ref: str = Field(min_length=1)
     quote: str = Field(min_length=1)
@@ -51,6 +54,28 @@ class TableRecord(ContractModel):
 
 class DirectOutput(ContractModel):
     records: list[TableRecord]
+
+
+def build_route_schema() -> dict:
+    """Describe the same conditional relation requirement as the local reader.
+
+    The model validator alone is not included in Pydantic's JSON Schema. Keep
+    legacy empty bindings readable, while requiring a non-null relation when
+    there is a value or any source selection.
+    """
+    schema = DirectOutput.model_json_schema()
+    binding = schema["$defs"]["Binding"]
+    relation = binding["properties"]["relation"]
+    relation.pop("default", None)
+    relation["description"] = (
+        "Required and non-null whenever value is non-null or sources is nonempty. "
+        "Only value=null with sources=[] permits a null or omitted relation."
+    )
+    binding["anyOf"] = [
+        {"required": ["relation"], "properties": {"relation": {"type": "string"}}},
+        {"properties": {"value": {"type": "null"}, "sources": {"enum": [[]]}}},
+    ]
+    return schema
 
 
 def build_table_input(source: str, *, table_id: str | None = None,
@@ -109,15 +134,67 @@ Output ONLY JSON matching the provided schema. A source relationship is a propos
 """
 
 
+_FORMAT_INSTRUCTIONS = """The separate format_example is SYNTHETIC FORMAT GUIDANCE ONLY.
+Its source, object, value, record type and references do not belong to the actual table.
+Never copy those facts or references into your answer. Use only task.record_types and
+the actual table.entries. Do not output the format_example wrapper.
+For each populated binding, explicitly include relation alongside value and sources.
+For an unreported field prefer {"value":null,"sources":[],"relation":null}.
+Check every proposed relation against the cited cells: a repeated object label in a
+different table section is not interchangeable with the label next to this value.
+Do not change source references or invent relationships merely to satisfy the format.
+"""
+
+
+def _format_example() -> dict:
+    """A self-contained illustration, never added to the actual source index."""
+    entity = {"ref": "example-r1-c0", "quote": "EXAMPLE_OBJECT"}
+    value = {"ref": "example-r1-c1", "quote": "123"}
+    unit = {"ref": "example-r0-c1", "quote": "kPa"}
+    return {
+        "purpose": "synthetic format only; not actual table evidence",
+        "source_entries": [
+            {"ref": entity["ref"], "row": 1, "column": 0, "quote": entity["quote"]},
+            {"ref": value["ref"], "row": 1, "column": 1, "quote": value["quote"]},
+            {"ref": unit["ref"], "row": 0, "column": 1, "quote": "Pressure/kPa"},
+        ],
+        "response": {"records": [{
+            "record_id": "example-record", "record_type": "example_measurement",
+            "fields": {
+                "entity": {"value": entity["quote"], "sources": [entity], "relation": "row"},
+                "value": {"value": value["quote"], "sources": [value], "relation": "anchor"},
+                "unit": {"value": unit["quote"], "sources": [unit], "relation": "column"},
+                "conditions": {"value": None, "sources": [], "relation": None},
+            },
+            "anchors": [value], "scope": "individual", "scope_sources": [],
+        }]},
+    }
+
+
 def build_route_request(stage: str, task: dict, table_input: dict, *,
                         chunk_id: str = "table") -> ExtractionRequest:
     if stage != "A":
         raise ValueError("Only table route A is supported")
+    return _build_table_request(task, table_input, chunk_id=chunk_id, legacy=False)
+
+
+def _build_legacy_route_request(task: dict, table_input: dict, *,
+                                chunk_id: str = "table") -> ExtractionRequest:
+    """Reconstruct dev30 requests for strict resume verification, not new calls."""
+    return _build_table_request(task, table_input, chunk_id=chunk_id, legacy=True)
+
+
+def _build_table_request(task: dict, table_input: dict, *, chunk_id: str,
+                         legacy: bool) -> ExtractionRequest:
     spec = TaskSpec.model_validate(task)
-    schema = DirectOutput.model_json_schema()
+    schema = DirectOutput.model_json_schema() if legacy else build_route_schema()
     payload = {"task": {name: value for name, value in task.items() if name != "input_materials"},
                "table": table_input, "schema": schema}
     instructions = _COMMON
+    if not legacy:
+        instructions += _FORMAT_INSTRUCTIONS
+        payload["table_request_revision"] = TABLE_REQUEST_REVISION
+        payload["format_example"] = _format_example()
     if spec.input_materials is not None:
         instructions += SIMPLE_OBSERVATION_INSTRUCTIONS
         if spec.input_materials.examples:

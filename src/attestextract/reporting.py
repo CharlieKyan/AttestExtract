@@ -12,6 +12,7 @@ import string
 from .diagnostics import redact_text
 from .models import EvidenceRef, ExtractionResult
 from .evidence import is_missing
+from .expert_review import render_review_index
 
 
 def _cell(value: str, secrets: Iterable[str]) -> str:
@@ -95,6 +96,7 @@ def render_markdown_report(result: ExtractionResult, *, secrets: Iterable[str] =
                   f"隔离记录：{sum(len(t.rejections) for t in result.table_results)}；格式状态：{cell(result.format_status)}", "",
                   "正文候选与表格记录分别保存。表格交付格式 table-route-v3；字段、引文和顺序原样交付，不经过正文去重。", ""]
     if result.task.input_materials is not None:
+        lines += [render_review_index(result, secrets=secrets)]
         observations = [(item.record_type, item.fields.get("value").value if "value" in item.fields else None)
                         for item in result.candidates]
         observations.extend((item.get("record_type"), item.get("fields", {}).get("value", {}).get("value"))

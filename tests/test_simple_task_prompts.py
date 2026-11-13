@@ -10,7 +10,9 @@ from attestextract import extract
 from attestextract.backends import ReplayBackend
 from attestextract.models import DocumentChunk, SourceSpan, TaskSpec
 from attestextract.prompting import build_messages, build_output_schema
-from attestextract.table_routes import build_route_request, build_table_input, evaluate_route
+from attestextract.table_routes import (
+    _build_legacy_route_request, build_route_request, build_table_input, evaluate_route,
+)
 from attestextract.task_input import resolve_task
 
 
@@ -55,7 +57,9 @@ def test_legacy_prompt_bytes_match_dev28(protocol, expected):
 
 
 def test_legacy_table_prompt_bytes_match_dev28():
-    request = build_route_request("A", LEGACY_TASK, {"marker": "actual table"})
+    # Retained only for strict migration checks; new requests use the revised
+    # relation contract and format guidance, with their own compatibility ID.
+    request = _build_legacy_route_request(LEGACY_TASK, {"marker": "actual table"})
     assert message_digest(request.messages) == "7555f57749f8e86e37d104c150a05815cc4b7bc21dff6059c6b37ec3715a3354"
 
 
