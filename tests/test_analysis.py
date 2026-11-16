@@ -1,4 +1,4 @@
-"""Document identity is proposed separately; values and budgets remain intact."""
+"""Frozen v0.1 analysis behavior remains available for legacy checkpoints."""
 
 from copy import deepcopy
 import json
@@ -6,7 +6,7 @@ import json
 import pytest
 
 from attestextract import RunTrace, extract
-from attestextract.analysis import build_analysis
+from attestextract.analysis import _build_legacy_analysis as build_analysis
 from attestextract.backends import ReplayBackend
 from attestextract.errors import BackendError, ConfigurationError
 from attestextract.execution import digest
@@ -97,6 +97,21 @@ def test_unknown_is_valid_and_original_blockers_remain():
     assert all(item["subject_id"] is None and item["binding_status"] == "unknown" for item in package["observations"])
     assert package["observations"][0]["blockers"][0]["code"] == "missing_required_field"
     assert len(package["review"]) == 2
+
+
+def test_public_dispatch_preserves_saved_v01_contract(tmp_path):
+    from attestextract.analysis import build_analysis as public_analysis
+
+    original = extraction()
+    analyse(original, max_calls=1, trace=RunTrace(tmp_path / "old"))
+    backend = Backend()
+    resumed = public_analysis(SOURCE, original, table_subject="reactor occurrence", backend=backend,
+        backend_identity="synthetic-analysis-v1", generation=GenerationOptions(max_output_tokens=2048),
+        max_calls=2, resume_from=tmp_path / "old/analysis/checkpoint.json",
+        trace=RunTrace(tmp_path / "new"))
+    assert resumed["analysis_version"] == "0.1" and resumed["status"] == "complete"
+    assert len(backend.requests) == 1
+    assert backend.requests[0].chunk_id == "analysis-binding-0001"
 
 
 @pytest.mark.parametrize("fault", ["unknown", "missing", "duplicate", "changed_value", "bad_quote"])

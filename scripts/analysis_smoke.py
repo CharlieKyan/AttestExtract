@@ -7,8 +7,10 @@ imports repository tests or inserts the checkout into Python's import path.
 from __future__ import annotations
 
 import argparse
+from contextlib import redirect_stdout
 import csv
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -18,8 +20,9 @@ from unittest.mock import patch
 import httpx
 
 import attestextract
-from attestextract import ExecutionOptions, GenerationOptions, extract
+from attestextract import ExecutionOptions, GenerationOptions, cli, extract
 from attestextract.backends import OpenAICompatibleBackend
+from attestextract.registry import BackendRegistry
 
 
 EAST = "East site contains reactor R."
@@ -30,7 +33,9 @@ CLAIMS = (
     ("East reactor R has yield 22% at 30 C.", "R", "22", "30 C"),
     ("Sample S1 has yield 12% at 20 C.", "S1", "12", "20 C"),
 )
-SOURCE = "\n\n".join([EAST, CLAIMS[0][0], CLAIMS[1][0], WEST, SAMPLE, CLAIMS[2][0]])
+SOURCE = "\n\n".join([EAST, *(claim[0] for claim in CLAIMS),
+    *[f"Background note {number}: storage maintenance is unrelated to the reported measurements." for number in range(6)],
+    WEST, SAMPLE])
 TASK = {"prompt_description": "Extract each directly reported yield, preserving its owner and temperature.",
         "field_list": {"yield": "Reported yield of each object", "mass": "Reported mass, if present"}}
 
@@ -66,34 +71,59 @@ class Service:
                 records.append({"record_type": "yield", "values": values,
                                 "quotes": {name: quote for name in values}})
             response = {"records": records}
-        elif "objects" not in payload:
-            self.calls.append("discovery")
-            assert payload["document"] == SOURCE
-            response = {"objects": [
-                {"object_id": "east", "name": "R", "kind": "instance", "scope": "East",
-                 "is_table_subject": True, "mentions": [{"quote": EAST}]},
-                {"object_id": "west", "name": "R", "kind": "instance", "scope": "West",
-                 "is_table_subject": True, "mentions": [{"quote": WEST}]},
-                {"object_id": "sample", "name": "S1", "kind": "sample", "scope": "West sample",
-                 "is_table_subject": False, "mentions": [{"quote": SAMPLE}]},
-            ], "relations": [{"source_id": "sample", "target_id": "west", "predicate": "sample_of",
-                               "evidence": [{"quote": SAMPLE}]}]}
         else:
-            self.calls.append("binding")
-            assert payload["document"] == SOURCE
-            objects = {item["scope"]: item["object_id"] for item in payload["objects"]}
-            bindings = []
-            for item in payload["observations"]:
-                sample = item["entity"] == "S1"
-                claim = next(quote for quote, _, value, _ in CLAIMS if value == item["value"])
-                bindings.append({"observation_id": item["observation_id"],
-                                 "subject_id": objects["West sample" if sample else "East"],
-                                 "status": "supported", "evidence": [{"quote": claim}, {"quote": SAMPLE if sample else EAST}],
-                                 "reason": "Keep direct owner; separate identity and measurement paragraphs supplied."})
-            response = {"bindings": bindings}
+            assert "document" not in payload
+            assert SOURCE not in body["messages"][-1]["content"]
+            history = payload["lookup_history"]
+            response = {"action": "decide", "question": "Does the sample belong to the West reactor occurrence?",
+                        "query": None, "search_offset": 0, "passage_ids": [], "neighbors": 0,
+                        "objects": [], "relations": [], "bindings": []}
+            if not history:
+                self.calls.append("search")
+                response.update(action="search", query="reactor R")
+            elif history[-1]["action"] == "search":
+                self.calls.append("read")
+                response.update(action="read", passage_ids=list(dict.fromkeys(
+                    match["passage_id"] for match in history[-1]["result"]["matches"]
+                    if any(quote in match["text"] for quote in (EAST, WEST, SAMPLE)))))
+            else:
+                self.calls.append("decide")
+                response.update(self.decision(payload))
         return httpx.Response(200, json={"id": "synthetic-response", "model": "synthetic-analysis",
             "choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": json.dumps(response)}}],
             "usage": {"prompt_tokens": 20, "completion_tokens": 10, "total_tokens": 30}})
+
+    @staticmethod
+    def decision(payload):
+        passages = list(payload["initial_context"]["passages"])
+        for frame in payload["lookup_history"]:
+            passages.extend(frame["result"].get("matches", []))
+            passages.extend(frame["result"].get("passages", []))
+
+        def cite(quote):
+            found = next(part for part in passages if quote in part["text"])
+            return {"passage_id": found["passage_id"], "quote": quote, "occurrence": None}
+
+        objects = [
+                {"object_id": "east", "name": "R", "kind": "instance", "scope": "East",
+                 "is_table_subject": True, "mentions": [cite(EAST)]},
+                {"object_id": "west", "name": "R", "kind": "instance", "scope": "West",
+                 "is_table_subject": True, "mentions": [cite(WEST)]},
+                {"object_id": "sample", "name": "S1", "kind": "sample", "scope": "West sample",
+                 "is_table_subject": False, "mentions": [cite(SAMPLE)]},
+        ]
+        bindings = []
+        for item in payload["observations"]:
+            sample = item["entity"] == "S1"
+            claim = next(quote for quote, _, value, _ in CLAIMS if value == item["value"])
+            bindings.append({"observation_id": item["observation_id"],
+                "subject_id": "sample" if sample else "east", "status": "supported",
+                "evidence": [cite(claim), cite(SAMPLE if sample else EAST)],
+                "reason": "Keep direct owner; separate identity and measurement paragraphs supplied.",
+                "target_match": "supported", "property_name": "yield", "statistic": None})
+        return {"objects": objects, "bindings": bindings,
+                "relations": [{"source_id": "sample", "target_id": "west", "predicate": "sample_of",
+                               "evidence": [cite(SAMPLE)]}]}
 
 
 def run(root, service, *, resume=None):
@@ -104,7 +134,7 @@ def run(root, service, *, resume=None):
                    generation=GenerationOptions(max_output_tokens=2048),
                    execution=ExecutionOptions(adaptive_chunking=False, max_model_calls=20),
                    max_chunk_chars=110, table_subject="one reactor occurrence in its original site",
-                   max_analysis_calls=2, resume_from=resume)
+                   max_analysis_calls=3, resume_from=resume)
 
 
 def accept(root):
@@ -113,7 +143,7 @@ def accept(root):
     result = run(first, service)
     assert result.run.chunk_count > 1, "Acceptance must exercise multiple source chunks"
     assert len(result.candidates) == 3 and result.analysis["status"] == "complete"
-    assert service.calls.count("discovery") == service.calls.count("binding") == 1
+    assert [call for call in service.calls if call != "extraction"] == ["search", "read", "decide"]
     assert "analysis" not in read(first / "result.json")
     analysis = read(first / "analysis/analysis.json")
     assert analysis["semantic_status"] == "model_proposed"
@@ -140,19 +170,66 @@ def accept(root):
     assert replay.analysis["status"] == "complete" and replay_service.calls == []
     assert replay.analysis["objects"] == analysis["objects"]
     assert replay.analysis["observations"] == analysis["observations"]
-    assert replay.analysis["budget"]["reserved"] == 2
+    assert replay.analysis["budget"]["reserved"] == 3
     assert hashes(first) == old
     return {"extraction_chunks": result.run.chunk_count, "synthetic_http_calls": len(service.calls),
-            "analysis_calls": 2, "resume_new_calls": 0, "observations": 3, "table_objects": 2,
+            "analysis_calls": 3, "resume_new_calls": 0, "observations": 3, "table_objects": 2,
             "same_names_distinct_ids": True, "sample_not_promoted": True,
             "multiple_conditions_preserved": True, "sqlite_references_valid": True,
             "historical_artifacts_unchanged": True}
+
+
+def accept_cli(root):
+    inputs = root / "cli-inputs"
+    inputs.mkdir()
+    source, task, config = inputs / "source.md", inputs / "task.json", inputs / "models.toml"
+    source.write_bytes(SOURCE.encode("utf-8"))
+    task.write_text(json.dumps(TASK), encoding="utf-8")
+    config.write_text('[profiles.synthetic]\nbase_url = "https://synthetic.invalid/v1"\n'
+                      'model = "synthetic-analysis"\nstructured_output = "json_schema"\n'
+                      'max_attempts = 1\nformat_retries = 0\n'
+                      '[profiles.synthetic.generation]\nmax_output_tokens = 2048\n', encoding="utf-8")
+    service = Service()
+    registry = BackendRegistry()
+
+    def factory(*, config, api_key, trace):
+        return OpenAICompatibleBackend(config.base_url, config.model, api_key=api_key, trace=trace,
+            structured_output=config.structured_output, max_attempts=config.max_attempts,
+            transport=httpx.MockTransport(service.handle))
+
+    registry.register("openai-compatible", factory)
+    arguments = ["extract", "--input", str(source), "--task", str(task),
+                 "--config", str(config), "--profile", "synthetic", "--progress", "quiet",
+                 "--chunking", "fixed", "--max-chunk-chars", "110", "--max-model-calls", "20",
+                 "--table-subject", "one reactor occurrence in its original site", "--max-analysis-calls", "3",
+                 "--analysis-max-steps", "4", "--analysis-input-budget", "48000"]
+    captured = io.StringIO()
+    with redirect_stdout(captured):
+        assert cli.main([*arguments, "--output-dir", str(root / "cli-check"), "--check"], registry=registry) == 0
+        assert service.calls == []
+        assert cli.main([*arguments, "--output-dir", str(root / "cli")], registry=registry) == 0
+    before = len(service.calls)
+    analysis = read(root / "cli/analysis/analysis.json")
+    assert analysis["status"] == "complete" and len(analysis["observations"]) == 3
+    assert [call for call in service.calls if call != "extraction"] == ["search", "read", "decide"]
+    old = hashes(root / "cli")
+    service.forbidden = True
+    with redirect_stdout(captured):
+        assert cli.main([*arguments, "--output-dir", str(root / "cli-replay"),
+                         "--resume", str(root / "cli")], registry=registry) == 0
+    assert len(service.calls) == before and hashes(root / "cli") == old
+    (root / "cli-terminal.txt").write_text(captured.getvalue(), encoding="utf-8")
+    return {"cli_check_new_calls": 0, "cli_synthetic_http_calls": before,
+            "cli_analysis_calls": 3, "cli_resume_new_calls": 0, "cli_exit_status": 0}
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
     root = parser.parse_args().output.resolve()
+    module_path = Path(attestextract.__file__).resolve()
+    assert any(part in {"site-packages", "dist-packages"} for part in module_path.parts), \
+        "Run this acceptance with a normally installed wheel, not an editable/source checkout"
     root.mkdir(parents=True, exist_ok=False)
     network_attempts = []
 
@@ -164,9 +241,10 @@ def main():
             patch("socket.socket.connect_ex", blocked), patch("socket.create_connection", blocked), \
             patch("socket.getaddrinfo", blocked):
         details = accept(root)
+        details.update(accept_cli(root))
     assert not network_attempts
     summary = {"passed": True, "package_version": attestextract.__version__,
-               "module_path": str(Path(attestextract.__file__).resolve()),
+               "module_path": str(module_path), "installed_package_verified": True,
                "network_attempts": 0, "real_model_calls": 0, **details,
                "notice": "Synthetic offline acceptance; not provider or scientific-quality validation."}
     (root / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

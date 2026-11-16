@@ -33,6 +33,11 @@ class Backend:
 @pytest.mark.parametrize("kwargs", [
     {"table_subject": " "}, {"table_subject": "specimens", "max_analysis_calls": 0},
     {"table_subject": "specimens", "max_analysis_calls": True},
+    {"table_subject": "specimens", "analysis_max_steps": 0},
+    {"table_subject": "specimens", "analysis_max_steps": 13},
+    {"table_subject": "specimens", "analysis_max_steps": True},
+    {"table_subject": "specimens", "analysis_input_budget": 11999},
+    {"table_subject": "specimens", "analysis_input_budget": 256001},
     {"analysis_resume_from": "missing.json"},
 ])
 def test_invalid_analysis_options_fail_before_any_generation(kwargs):
@@ -42,11 +47,15 @@ def test_invalid_analysis_options_fail_before_any_generation(kwargs):
     assert backend.calls == []
 
 
-def test_oversized_document_never_silently_truncates_or_calls():
-    backend = Backend()
-    with pytest.raises(ConfigurationError, match="60,000"):
-        extract("x" * 60001, TASK, backend=backend, table_subject="specimens")
-    assert backend.calls == []
+def test_long_document_passes_analysis_precheck_without_truncation():
+    from attestextract.pipeline import validate_analysis_request
+    from attestextract.task_input import resolve_task
+
+    # New policy bounds each request rather than refusing the whole source.
+    source = "Original source paragraph.\n\n" * 3000
+    assert len(source) > 60000
+    validate_analysis_request(source, resolve_task(TASK), "specimens", 4,
+                              max_steps=3, input_budget=24000)
 
 
 def test_hidden_http_retry_rejected_before_extraction():
@@ -64,10 +73,13 @@ def test_analysis_opt_in_is_not_serialized_into_legacy_result(tmp_path, monkeypa
         assert text == TEXT and result.candidates[0].fields["value"].value == "17"
         assert kwargs["table_subject"] == "specimens"
         assert kwargs["max_calls"] == 3
+        assert kwargs["max_steps"] == 3
+        assert kwargs["input_budget"] == 24000
         return {"analysis_version": "0.1", "status": "complete"}
 
     monkeypatch.setattr(analysis, "build_analysis", proposed)
-    result = extract(TEXT, TASK, backend=Backend(), backend_identity="synthetic-v1", table_subject="specimens", max_analysis_calls=3)
+    result = extract(TEXT, TASK, backend=Backend(), backend_identity="synthetic-v1", table_subject="specimens",
+                     max_analysis_calls=3, analysis_max_steps=3, analysis_input_budget=24000)
     assert result.analysis["status"] == "complete"
     assert "analysis" not in result.model_dump(mode="json")
     assert result.candidates[0].fields["value"].value == "17"
@@ -106,11 +118,15 @@ def test_cli_check_shows_additional_budget_without_network(tmp_path, monkeypatch
     assert cli.main(["extract", "--input", str(source), "--task", str(task),
         "--base-url", "https://synthetic.invalid/v1", "--model", "synthetic-model",
         "--structured-output", "json_object", "--output-dir", str(tmp_path / "check"),
-        "--table-subject", "specimens", "--max-analysis-calls", "3", "--check"]) == 0
+        "--table-subject", "specimens", "--max-analysis-calls", "3",
+        "--analysis-max-steps", "3", "--analysis-input-budget", "24000", "--check"]) == 0
     plan = json.loads(capsys.readouterr().out)
     assert plan["network_calls"] == 0
     assert plan["analysis"]["max_analysis_calls"] == 3
     assert plan["analysis"]["combined_generation_limit"] > 3
+    assert plan["analysis"]["max_steps_per_job"] == 3
+    assert plan["analysis"]["request_utf8_byte_limit"] == 24000
+    assert "source_character_limit" not in plan["analysis"]
 
 
 def test_cli_check_rejects_retries_from_profile_before_network(tmp_path, monkeypatch, capsys):
@@ -125,3 +141,44 @@ def test_cli_check_rejects_retries_from_profile_before_network(tmp_path, monkeyp
         "--config", str(config), "--profile", "test", "--table-subject", "specimens",
         "--output-dir", str(tmp_path / "check"), "--check"]) == 1
     assert "max_attempts=1" in capsys.readouterr().err
+
+
+def test_cli_long_source_check_is_offline_and_retains_source_size(tmp_path, monkeypatch, capsys):
+    import httpx
+
+    monkeypatch.setattr(httpx.Client, "send", lambda *a, **k: pytest.fail("offline check attempted HTTP"))
+    monkeypatch.setenv("ATTESTEXTRACT_API_KEY", "synthetic-check-key")
+    text = (TEXT + "\n\n") * 3000
+    source, task = tmp_path / "long.txt", tmp_path / "task.json"
+    source.write_text(text, encoding="utf-8", newline="")
+    task.write_text(json.dumps(TASK), encoding="utf-8")
+    assert cli.main(["extract", "--input", str(source), "--task", str(task),
+        "--base-url", "https://synthetic.invalid/v1", "--model", "synthetic-model",
+        "--structured-output", "json_object", "--output-dir", str(tmp_path / "check"),
+        "--table-subject", "specimens", "--check"]) == 0
+    plan = json.loads(capsys.readouterr().out)
+    assert plan["network_calls"] == 0
+    assert plan["character_count"] == len(text) > 60000
+    assert plan["analysis"]["request_utf8_byte_limit"] == 48000
+
+
+def test_verification_console_distinguishes_model_steps_and_local_tools():
+    import io
+    from attestextract.progress import ConsoleProgress
+
+    stream = io.StringIO()
+    console = ConsoleProgress(stream=stream)
+    console({"stage": "analysis", "event": "started", "limit": 8, "max_steps": 4})
+    console({"stage": "analysis", "event": "call_reserved", "job_id": "verify-1", "used": 1, "limit": 8, "step": 1})
+    console({"stage": "analysis", "event": "tool", "job_id": "verify-1", "operation": "search", "count": 2,
+             "query": "private source query"})
+    assert console._waiting_since is None
+    console({"stage": "analysis", "event": "step_limit", "job_id": "verify-1"})
+    console({"stage": "analysis", "event": "reused", "job_id": "verify-2", "status": "failed"})
+    console.close()
+    output = stream.getvalue()
+    assert "step 1" in output and "local search; 2 source passages" in output
+    assert "no generation for the local tool" in output and "unresolved observations retained" in output
+    assert "private source query" not in output
+    assert "preserved failed state; no request resent" in output
+    assert "reused validated response" not in output

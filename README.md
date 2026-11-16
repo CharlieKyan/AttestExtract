@@ -1,11 +1,17 @@
 # AttestExtract
 
-Dev34 adds opt-in document-level object and attribution analysis: describe a row
-with `table_subject` / `--table-subject`, then obtain object-linked JSON, CSV and
-SQLite tables. The additional model calls have their own visible budget and
-checkpoint. Same-name objects, child measurements and different conditions remain
-distinct; unknown bindings and source warnings remain visible. Outputs are model
-proposals, not expert-approved data. See [analysis tables](docs/analysis-tables.md).
+Dev35 replaces whole-document analysis for new runs with a bounded verification
+loop. With `table_subject` / `--table-subject`, the model can search the local
+source, read selected passages, and decide object ownership and target-field
+meaning. Existing `flat-v1` extraction stays unchanged; its candidates provide
+unverified hints, not a new joint object-extraction protocol. New analysis has no
+60,000-character source cap: each framework request instead has a configurable
+UTF-8 byte ceiling, which is not a token limit or a provider-window guarantee.
+Every model step consumes the separate analysis budget; local search/read does
+not generate text. Original values, failed responses and uncertain attribution
+remain traceable. Target-field mismatches are kept outside the target wide table.
+Outputs are model proposals, not expert-approved data. Historical analysis
+checkpoints keep their original contract. See [analysis tables](docs/analysis-tables.md).
 
 Dev33 subdivides known table length truncations into bounded row/cell windows,
 preserving full table context, original cell references and spent calls. Verified
@@ -443,7 +449,7 @@ If no explicit review is supplied, candidates become `unreviewed`, or `needs_rev
 - Each candidate retains field values, quoted evidence, a stable ID, chunk IDs, and structural/evidence checks. Conditions remain ordinary schema fields. Half-open `start`/`end` offsets count Unicode characters in the decoded input string, not UTF-8 bytes or UTF-16 code units: `text[start:end] == quote` for uniquely matched evidence.
 - Evidence is searched within the passages actually supplied to the model. Exact matches retain the original quote contract; conservative normalized matches separately retain source text and always require review. Missing, absent, or ambiguous quotes require review; ambiguous matches have no guessed `start`/`end`. Optional null/blank/omitted fields produce one `info` item rather than two review failures. Task-declared critical conditions remain blocking. Only identical candidates grounded at the same source locations are deduplicated. Equal values from different locations or conditions remain separate.
 - New result JSON uses `schema_version: "0.4"`, with `package_version`, `task`, `source`, `candidates`, `review`, `links`, and `run`. The reader still accepts `0.1`, `0.2` and `0.3`; older readers need upgrading for `0.4`. Review items have `severity: "review" | "info"`. Candidate `field_status` distinguishes reported, not reported by the model, task-declared not applicable, and required missing. Configured `measurements` keep shared context and exact token spans; their `semantic_status` remains `not_verified`. New identity rules for optional missing values and measurement metadata can change candidate IDs; do not reuse earlier review decisions without checking provenance. Run information includes backend, `live`/`replay` mode, model, counts, attempts, usage if reported, and elapsed time. A successful empty extraction has no candidates; failures raise exceptions instead.
-- A matched quote proves that text occurs at a location. It **does not prove that the extracted value is supported or factually correct**. This version has no semantic support verification, factual adjudication, entity resolution, full PDF parsing, or complete replacement for the original CCUS workflow's Stage2.5/Stage3.
+- A matched quote proves that text occurs at a location. It **does not prove that the extracted value is supported or factually correct**. Ordinary extraction alone does not verify semantic ownership or resolve object identity. The optional analysis stage proposes those judgments with source evidence; it does not provide expert acceptance, guaranteed factual adjudication, full PDF parsing, or a complete replacement for the original CCUS workflow's Stage2.5/Stage3.
 
 `ExtractionBackend` defines the generation boundary. `ReplayBackend` is available for explicit offline replay and tests. `DecisionBackend`, `DecisionTask`, and `DecisionResult` reserve a separate decision boundary: `validate_decision` allows selecting only a supplied candidate, rejecting, or requesting review. Decisions cannot invent a replacement candidate. The extraction pipeline does not yet call a decision backend.
 

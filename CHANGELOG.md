@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.0.dev35
+
+- Replace default whole-document discovery with bounded source-only search/read/decide verification of existing extraction candidates. Models describe missing evidence and choose lookups; original values remain immutable. New runs accept sources beyond 60,000 characters and cap each serialized analysis request instead of repeatedly sending the whole document.
+- Record every generation reservation and local lookup, validate all completed cache steps before recovery, and never automatically resend failed or uncertain requests. New analysis/checkpoint version 0.2 preserves the old 0.1 recovery contract. Step and input limits are frozen; the cumulative call budget can be explicitly increased.
+- Allow composed object display labels while requiring exact quotations from passages actually shown to the model. Reuse exactly identical object declarations without merging merely similar names. Retain target-field mismatch/unknown observations separately from the target table, with original values and blockers.
+- Add matching Python/CLI limits, local lookup progress, long-source and recovery regressions, and installed-wheel Python/CLI acceptance with synthetic HTTP. No real model calls, initial extraction-protocol redesign, semantic-search completeness claim or expert/Jev acceptance is included.
+
 ## 0.1.0.dev34
 
 - Add opt-in document-level identity and observation binding with `table_subject` in Python and `--table-subject` in CLI. Original values, units, conditions, extraction protocols and checkpoints are retained. The additional model stage has a separate explicit cumulative budget and checkpoint; unknown outcomes are never resent automatically.

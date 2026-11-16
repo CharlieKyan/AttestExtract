@@ -176,3 +176,50 @@ def test_unlocated_evidence_and_zero_false_values_are_retained(tmp_path):
     assert [item["value"] for item in json.loads(row["porosity"])] == [0, False]
     with sqlite3.connect(tmp_path / "analysis.sqlite") as db:
         assert db.execute("SELECT start,end FROM evidence").fetchone() == (None, None)
+
+
+def test_verification_target_mismatch_is_retained_but_not_projected(tmp_path):
+    analysis = sample()
+    analysis["analysis_version"] = "0.2"
+    for item in analysis["observations"]:
+        item.update(target_match="supported", property_name="Reported porosity", statistic=None)
+    analysis["observations"][0].update(target_match="unsupported", property_name="Pore volume fraction",
+                                      statistic="range", reason="The task excludes this measurement kind.")
+    analysis["observations"][1]["target_match"] = "unknown"
+    before = deepcopy(analysis)
+    save_analysis(analysis, tmp_path)
+    view = json.loads((tmp_path / "objects.json").read_text(encoding="utf-8"))
+    assert view["objects"][0]["fields"]["porosity"] == []
+    assert [row["observation_id"] for row in view["unmatched_observations"]] == ["o1", "o2"]
+    assert [row["observation_id"] for row in view["related_observations"]] == ["o3"]
+    assert [row["observation_id"] for row in view["unbound_observations"]] == ["o4"]
+    assert len(read_csv(tmp_path / "observations.csv")) == 4
+    assert len(read_csv(tmp_path / "unmatched_observations.csv")) == 2
+    assert json.loads(read_csv(tmp_path / "object_table.csv")[0]["porosity"]) == []
+    assert "尚不能填入目标字段" in (tmp_path / "analysis.md").read_text(encoding="utf-8")
+    with sqlite3.connect(tmp_path / "analysis.sqlite") as db:
+        assert db.execute("SELECT target_match,property_name,statistic FROM observations WHERE observation_id='o1'").fetchone() == (
+            "unsupported", "Pore volume fraction", "range")
+        assert db.execute("SELECT count(*) FROM observations").fetchone() == (4,)
+    assert analysis == before
+
+
+def test_verification_missing_target_assessment_cannot_enter_wide_table(tmp_path):
+    analysis = sample()
+    analysis["analysis_version"] = "0.2"
+    save_analysis(analysis, tmp_path)
+    assert all(json.loads(row["porosity"]) == [] for row in read_csv(tmp_path / "object_table.csv"))
+    assert len(read_csv(tmp_path / "unmatched_observations.csv")) == 3
+
+
+def test_verification_job_stop_reason_is_visible(tmp_path):
+    analysis = sample()
+    analysis.update(analysis_version="0.2", status="partial", jobs=[{
+        "job_id": "verify-0001", "status": "partial", "attempts": 4,
+        "error_code": "step_limit", "reason": "Step limit reached; ownership remains unknown."}, {
+        "job_id": "verify-0002", "status": "failed", "attempts": 1,
+        "error_code": "invalid_analysis_response", "steps": [{"error": "Citation outside viewed passages."}]}])
+    save_analysis(analysis, tmp_path)
+    markdown = (tmp_path / "analysis.md").read_text(encoding="utf-8")
+    assert "Step limit reached" in markdown and "verify\\-0001" in markdown
+    assert "Citation outside viewed passages" in markdown

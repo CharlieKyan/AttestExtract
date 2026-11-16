@@ -15,12 +15,13 @@ _NOTICE = "模型提出的对象与归属，待人工复核；原机器检查问
 _FILES = (
     "analysis.json", "analysis.sqlite", "analysis.md", "objects.json", "object_table.csv",
     "objects.csv", "observations.csv", "relations.csv", "evidence.csv",
-    "related_observations.csv", "unbound_observations.csv",
+    "related_observations.csv", "unbound_observations.csv", "unmatched_observations.csv",
 )
 _OBSERVATION_COLUMNS = (
     "observation_id", "candidate_id", "source_record", "record_type", "source_kind",
     "entity", "value", "unit", "conditions", "subject_id", "binding_status", "reason",
     "blockers", "evidence_ids", "binding_evidence_ids", "semantic_status",
+    "target_match", "property_name", "statistic",
 )
 
 
@@ -50,7 +51,7 @@ def _refs(row: dict, field: str, known: dict) -> list[str]:
 
 
 def _validate(data: dict) -> None:
-    if (not isinstance(data, dict) or data.get("analysis_version") != "0.1"
+    if (not isinstance(data, dict) or data.get("analysis_version") not in {"0.1", "0.2"}
             or data.get("semantic_status") != "model_proposed"
             or data.get("status") not in {"complete", "partial", "failed", "pending"}):
         raise ValueError("Unsupported analysis snapshot or verification status.")
@@ -87,6 +88,13 @@ def _validate(data: dict) -> None:
             raise ValueError("Observation binding status must agree with its subject reference.")
         if not isinstance(item.get("record_type"), str) or item["record_type"] not in fields:
             raise ValueError("Observation targets must be declared by the analysis task.")
+        if data["analysis_version"] == "0.2":
+            target_match = item.get("target_match", "unknown")
+            if not isinstance(target_match, str) or target_match not in {"supported", "unsupported", "unknown"}:
+                raise ValueError("Observation target matching must be supported, unsupported or unknown.")
+            for field in ("property_name", "statistic"):
+                if item.get(field) is not None and not isinstance(item[field], str):
+                    raise ValueError("Analysis property and statistic labels must be strings or null.")
         if (not isinstance(item.get("source_record"), str) or not item["source_record"].startswith("/")
                 or not isinstance(item.get("blockers"), list)):
             raise ValueError("Observations require original result pointers and explicit blockers.")
@@ -111,10 +119,13 @@ def _object_view(data: dict) -> dict:
         row = {**item, "fields": {field: [] for field in data["task"]["fields"]}}
         by_id[item["object_id"]] = row
         (rows if item["is_table_subject"] else related).append(row)
-    unbound, related_observations = [], []
+    unbound, related_observations, unmatched = [], [], []
     for item in data["observations"]:
         if not _direct(item):
             unbound.append(item)
+            continue
+        if data["analysis_version"] == "0.2" and item.get("target_match") != "supported":
+            unmatched.append(item)
             continue
         subject = by_id[item["subject_id"]]
         subject["fields"][item["record_type"]].append(item)
@@ -122,7 +133,8 @@ def _object_view(data: dict) -> dict:
             related_observations.append(item)
     return {"verification": _NOTICE, "semantic_status": "model_proposed",
             "table_subject": data.get("table_subject"), "objects": rows, "related_objects": related,
-            "related_observations": related_observations, "unbound_observations": unbound}
+            "related_observations": related_observations, "unbound_observations": unbound,
+            "unmatched_observations": unmatched}
 
 
 def _csv_value(value: object) -> str:
@@ -156,7 +168,8 @@ def _database(path: Path, data: dict) -> None:
                 source_record TEXT NOT NULL, record_type TEXT NOT NULL, source_kind TEXT, entity_json TEXT,
                 value_json TEXT NOT NULL, unit_json TEXT NOT NULL, conditions_json TEXT NOT NULL,
                 subject_id TEXT REFERENCES objects(object_id), binding_status TEXT NOT NULL,
-                reason TEXT, blockers_json TEXT NOT NULL, semantic_status TEXT NOT NULL);
+                reason TEXT, blockers_json TEXT NOT NULL, semantic_status TEXT NOT NULL,
+                target_match TEXT, property_name TEXT, statistic TEXT);
             CREATE TABLE relations (relation_id TEXT PRIMARY KEY, source_id TEXT NOT NULL REFERENCES objects(object_id),
                 target_id TEXT NOT NULL REFERENCES objects(object_id), predicate TEXT NOT NULL, semantic_status TEXT NOT NULL);
             CREATE TABLE object_evidence (object_id TEXT REFERENCES objects(object_id),
@@ -176,11 +189,12 @@ def _database(path: Path, data: dict) -> None:
                  int(item["is_table_subject"]), item["semantic_status"]) for item in data["objects"]])
             connection.executemany("INSERT INTO evidence VALUES (?, ?, ?, ?)", [
                 (item["evidence_id"], item["quote"], item.get("start"), item.get("end")) for item in data["evidence"]])
-            connection.executemany("INSERT INTO observations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [
+            connection.executemany("INSERT INTO observations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [
                 (item["observation_id"], item.get("candidate_id"), item["source_record"], item["record_type"],
                  item.get("source_kind"), _json(item.get("entity")), _json(item.get("value")),
                  _json(item.get("unit")), _json(item.get("conditions")), item.get("subject_id"),
-                 item["binding_status"], item.get("reason"), _json(item["blockers"]), item["semantic_status"])
+                 item["binding_status"], item.get("reason"), _json(item["blockers"]), item["semantic_status"],
+                 item.get("target_match"), item.get("property_name"), item.get("statistic"))
                 for item in data["observations"]])
             connection.executemany("INSERT INTO relations VALUES (?, ?, ?, ?, ?)", [
                 (item["relation_id"], item["source_id"], item["target_id"], item["predicate"], item["semantic_status"])
@@ -212,6 +226,12 @@ def _markdown(data: dict, view: dict) -> str:
                              if isinstance(blocker, dict) else str(blocker) for blocker in item["blockers"])
         if not _direct(item):
             problems = "归属未确定：" + str(item.get("reason") or item["binding_status"]) + ("；" + problems if problems else "")
+        if data["analysis_version"] == "0.2":
+            target = item.get("target_match", "unknown")
+            matching = {"supported": "模型认为符合目标字段", "unsupported": "不符合目标字段", "unknown": "目标字段匹配未确定"}[target]
+            labels = "; ".join(f"{label}：{item[key]}" for key, label in
+                               (("property_name", "识别属性"), ("statistic", "统计口径")) if item.get(key))
+            problems = "；".join(value for value in (matching, labels, problems) if value)
         values = (item["record_type"], item.get("value"), item.get("unit"), item.get("conditions"),
                   item.get("entity"), " / ".join(quotes) or "缺少可定位证据",
                   problems or "程序未报告阻断；仍待人工复核", item["observation_id"] + " → " + item["source_record"])
@@ -223,6 +243,8 @@ def _markdown(data: dict, view: dict) -> str:
     lines = ["# 对象与观测分析", "", _NOTICE, "", "运行状态：" + status + " / " + show(data["status"]),
              "目标表主体：" + show(data.get("table_subject")),
              "同名对象按不同ID展示。下面仅展示直接绑定的观测；不沿关系传播数值。", ""]
+    if data["analysis_version"] == "0.2":
+        lines += ["目标表仅纳入模型判断归属有支持且字段匹配有支持的观测；仍不是专家确认。其他观测单独保留。", ""]
     for title, collection in (("目标对象", view["objects"]), ("相关对象（不作为目标表行）", view["related_objects"])):
         lines += ["## " + title, ""]
         for row in collection:
@@ -237,6 +259,11 @@ def _markdown(data: dict, view: dict) -> str:
     lines.extend(observation(item) for item in view["unbound_observations"])
     if not view["unbound_observations"]:
         lines += ["", "无。"]
+    if data["analysis_version"] == "0.2":
+        lines += ["", "## 已有归属但尚不能填入目标字段的观测", "", *header]
+        lines.extend(observation(item) for item in view["unmatched_observations"])
+        if not view["unmatched_observations"]:
+            lines += ["", "无。"]
     lines += ["", "## 对象关系（模型建议）", "", "| 起点ID | 关系 | 终点ID | 原文依据 |",
               "| --- | --- | --- | --- |"]
     for item in data["relations"]:
@@ -246,6 +273,14 @@ def _markdown(data: dict, view: dict) -> str:
     lines += ["", "## 其他待核对材料", "", "原格式隔离记录：" + str(len(data.get("quarantined", []))),
               "完整隔离声明、任务记录及复核项保存在 analysis.json；隔离声明不会填入目标表。",
               "SQLite / JSON 保留原值和引用；CSV 对可能执行公式的文本添加前导单引号，仅改变展示。", ""]
+    if data["analysis_version"] == "0.2":
+        lines += ["## 有限查证任务", "", "| 任务 | 状态 | 模型调用 | 停止原因 |", "| --- | --- | --- | --- |"]
+        for job in data.get("jobs", []):
+            failed_step = next((step for step in reversed(job.get("steps", [])) if step.get("error")), {})
+            values = (job.get("job_id"), job.get("status"), job.get("attempts", 0),
+                      job.get("error") or job.get("reason") or failed_step.get("error") or job.get("error_code"))
+            lines.append("| " + " | ".join(show(value) for value in values) + " |")
+        lines += ["", "search/read 是对本篇原文的有限查找；未找到不代表全文不存在。详细请求与查找记录保存在 diagnostics/analysis。", ""]
     return "\n".join(lines)
 
 
@@ -270,7 +305,8 @@ def save_analysis(analysis: dict, directory: Path, secrets=()) -> None:
                                           "mention_evidence_ids", "semantic_status"), data["objects"])
     for filename, rows in (("observations.csv", data["observations"]),
                            ("related_observations.csv", view["related_observations"]),
-                           ("unbound_observations.csv", view["unbound_observations"])):
+                           ("unbound_observations.csv", view["unbound_observations"]),
+                           ("unmatched_observations.csv", view["unmatched_observations"])):
         _write_csv(directory / filename, _OBSERVATION_COLUMNS, rows)
     _write_csv(directory / "relations.csv", ("relation_id", "source_id", "target_id", "predicate",
                                             "evidence_ids", "semantic_status"), data["relations"])

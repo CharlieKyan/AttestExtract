@@ -58,11 +58,24 @@ class ConsoleProgress:
         if stage == "analysis":
             if kind == "started":
                 self._write(f"Document analysis: separate generation budget {event.get('limit', '?')}; model proposals, no expert acceptance")
+                if event.get("max_steps") is not None:
+                    self._write(f"Verification: at most {event['max_steps']} model steps per job; local source search/read as needed")
             elif kind == "call_reserved":
                 self._waiting_since = time.monotonic()
-                self._write(f"Analysis {event.get('job_id', '?')}: calls {event.get('used', '?')}/{event.get('limit', '?')}")
+                step = f"; step {event['step']}" if event.get("step") is not None else ""
+                self._write(f"Analysis {event.get('job_id', '?')}: calls {event.get('used', '?')}/{event.get('limit', '?')}{step}")
             elif kind == "reused":
-                self._write(f"Analysis {event.get('job_id', '?')}: reused validated response")
+                if event.get("status") in {"failed", "limited"}:
+                    self._write(f"Analysis {event.get('job_id', '?')}: preserved {event['status']} state; no request resent")
+                else:
+                    self._write(f"Analysis {event.get('job_id', '?')}: reused validated response")
+            elif kind == "tool":
+                self._waiting_since = None
+                self._write(f"Analysis {event.get('job_id', '?')}: local {event.get('operation', '?')}; "
+                            f"{event.get('count', '?')} source passages; no generation for the local tool")
+            elif kind in {"step_limit", "context_limit", "budget_exhausted"}:
+                self._waiting_since = None
+                self._write(f"Analysis {event.get('job_id', '?')}: {kind}; unresolved observations retained")
             elif kind in {"completed", "failed"}:
                 self._waiting_since = None
                 self._write(f"Analysis {event.get('job_id', '?')}: {kind}; calls {event.get('used', '?')}/{event.get('limit', '?')}")

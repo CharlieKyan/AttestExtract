@@ -1,0 +1,273 @@
+"""Independent source/identity contracts for the model-guided verification loop."""
+
+from copy import deepcopy
+import hashlib
+import json
+
+import pytest
+
+from attestextract.verification_protocol import Step, apply_decision, parse_step
+
+
+TEXT = ("East reactor R contains sample A. Sample A has a mass of 17 g.\n\n"
+        "West reactor R contains sample B. Sample B has a mass of 29 g.")
+
+
+class Index:
+    def __init__(self, text=TEXT):
+        self.passages = {}
+        start = 0
+        for number, part in enumerate(text.split("\n\n"), 1):
+            key = f"p{number}"
+            self.passages[key] = {"passage_id": key, "start": start,
+                                  "end": start + len(part), "text": part}
+            start += len(part) + 2
+
+    def get(self, key):
+        if key not in self.passages:
+            raise ValueError("Unknown passage")
+        return self.passages[key]
+
+
+def quote(text="East reactor R contains sample A.", passage="p1", occurrence=None):
+    return {"passage_id": passage, "quote": text, "occurrence": occurrence}
+
+
+def decision():
+    return {
+        "action": "decide", "question": "Which specimen owns the reported mass?",
+        "query": None, "search_offset": 0, "passage_ids": [], "neighbors": 0,
+        "objects": [{"object_id": "sample-a", "name": "Sample A in East reactor R",
+                     "kind": "sample", "scope": "East reactor R", "is_table_subject": True,
+                     "mentions": [quote()]}],
+        "relations": [],
+        "bindings": [{"observation_id": "obs1", "subject_id": "sample-a", "status": "supported",
+                      "evidence": [quote("Sample A has a mass of 17 g.")],
+                      "reason": "The source identifies sample A as the measured specimen.",
+                      "target_match": "supported", "property_name": "mass", "statistic": None}],
+    }
+
+
+def inputs(text=TEXT):
+    index = Index(text)
+    return {"source_text": text, "source_hash": hashlib.sha256(text.encode()).hexdigest(),
+            "batch": [{"observation_id": "obs1", "value": "17", "unit": "g",
+                       "conditions": None, "blockers": [{"code": "original_warning"}]}],
+            "objects": [], "relations": [], "entries": {},
+            "visible_passages": list(index.passages.values()), "source_index": index}
+
+
+def test_composed_display_label_has_exact_source_mentions_and_immutable_observation():
+    state = inputs()
+    before = deepcopy({k: v for k, v in state.items() if k != "source_index"})
+    objects, relations, updates, evidence = apply_decision(parse_step(json.dumps(decision())), **state)
+    assert objects[0]["name"] not in TEXT
+    assert objects[0]["name"] == "Sample A in East reactor R"
+    assert updates["obs1"]["subject_id"] == objects[0]["object_id"]
+    assert updates["obs1"]["blockers"] == [{"code": "original_warning"}]
+    assert updates["obs1"]["target_match"] == "supported"
+    assert all(TEXT[e["start"]:e["end"]] == e["quote"] for e in evidence.values())
+    assert not relations
+    assert {k: v for k, v in state.items() if k != "source_index"} == before
+    assert "value" not in updates["obs1"] and "unit" not in updates["obs1"]
+
+
+@pytest.mark.parametrize("mutation", ["hallucinated", "unseen", "foreign_passage", "duplicate_quote"])
+def test_evidence_requires_actual_seen_source(mutation):
+    payload, state = decision(), inputs()
+    if mutation == "hallucinated":
+        payload["objects"][0]["mentions"] = [quote("Not reported in the document.")]
+    elif mutation == "unseen":
+        state["visible_passages"] = [state["source_index"].get("p2")]
+    elif mutation == "foreign_passage":
+        payload["objects"][0]["mentions"][0]["passage_id"] = "p900"
+    else:
+        state = inputs("A has mass 1 g. A has mass 1 g.")
+        payload["objects"][0]["mentions"] = [quote("A has mass 1 g.")]
+    with pytest.raises(ValueError):
+        apply_decision(Step.model_validate(payload), **state)
+
+
+def test_repeated_quote_occurrence_is_relative_to_the_indexed_passage():
+    payload = decision()
+    text = "A has mass 1 g. A has mass 1 g."
+    payload["objects"][0]["mentions"] = [quote("A has mass 1 g.", occurrence=1)]
+    payload["bindings"][0]["evidence"] = [quote("A has mass 1 g.", occurrence=1)]
+    _, _, _, evidence = apply_decision(Step.model_validate(payload), **inputs(text))
+    assert len(evidence) == 1
+    assert next(iter(evidence.values()))["start"] == text.rindex("A has mass 1 g.")
+
+
+def test_fragments_cannot_be_joined_to_invent_a_seen_quote():
+    state = inputs()
+    passage = state["source_index"].get("p1")
+    middle = 12
+    state["visible_passages"] = [
+        {**passage, "end": middle, "text": TEXT[:middle]},
+        {**passage, "start": middle, "text": TEXT[middle:passage["end"]]},
+    ]
+    with pytest.raises(ValueError, match="supplied"):
+        apply_decision(Step.model_validate(decision()), **state)
+
+
+def test_invalid_visible_source_ranges_are_rejected():
+    state = inputs()
+    state["visible_passages"][0] = {**state["visible_passages"][0], "text": "Changed source"}
+    with pytest.raises(ValueError, match="Visible passage"):
+        apply_decision(Step.model_validate(decision()), **state)
+
+
+@pytest.mark.parametrize("mutation", ["missing", "duplicate", "foreign", "raw_value", "undeclared_subject", "unknown_with_subject"])
+def test_invalid_binding_contract_never_applies(mutation):
+    payload, state = decision(), inputs()
+    if mutation == "missing":
+        payload["bindings"] = []
+    elif mutation == "duplicate":
+        payload["bindings"] *= 2
+    elif mutation == "foreign":
+        payload["bindings"][0]["observation_id"] = "obs900"
+    elif mutation == "raw_value":
+        payload["bindings"][0]["value"] = "999"
+    elif mutation == "undeclared_subject":
+        payload["bindings"][0]["subject_id"] = "invented"
+    else:
+        payload["bindings"][0]["status"] = "unknown"
+    with pytest.raises(ValueError):
+        apply_decision(Step.model_validate(payload), **state)
+    assert state["objects"] == [] and state["entries"] == {} and state["relations"] == []
+    assert state["batch"][0]["value"] == "17"
+
+
+@pytest.mark.parametrize("match", ["unsupported", "unknown"])
+def test_target_mismatch_keeps_original_fact_and_adds_blocker(match):
+    payload, state = decision(), inputs()
+    payload["bindings"][0].update(target_match=match, property_name="reported total mass")
+    _, _, updates, _ = apply_decision(Step.model_validate(payload), **state)
+    update = updates["obs1"]
+    assert update["binding_status"] == "supported" and update["subject_id"]
+    assert [x["code"] for x in update["blockers"]] == ["original_warning", "target_field_" + match]
+    assert state["batch"][0]["blockers"] == [{"code": "original_warning"}]
+
+
+def test_unknown_attribution_can_finish_without_fabricated_objects():
+    payload = decision()
+    payload["objects"] = []
+    payload["bindings"][0].update(subject_id=None, status="unknown", evidence=[],
+                                 reason="The checked passages do not determine the owner.")
+    objects, _, updates, _ = apply_decision(Step.model_validate(payload), **inputs())
+    assert objects == []
+    assert updates["obs1"]["subject_id"] is None
+    assert updates["obs1"]["binding_status"] == "unknown"
+
+
+def test_existing_stable_object_can_be_referenced_but_not_replaced():
+    state = inputs()
+    objects, relations, _, evidence = apply_decision(Step.model_validate(decision()), **state)
+    state.update(objects=objects, relations=relations, entries=evidence)
+    payload = decision()
+    payload["objects"] = []
+    payload["bindings"][0]["subject_id"] = objects[0]["object_id"]
+    assert apply_decision(Step.model_validate(payload), **state)[2]["obs1"]["subject_id"] == objects[0]["object_id"]
+    payload["objects"] = decision()["objects"]
+    payload["objects"][0]["object_id"] = objects[0]["object_id"]
+    with pytest.raises(ValueError, match="replace"):
+        apply_decision(Step.model_validate(payload), **state)
+
+
+def test_exact_object_redeclaration_reuses_identity_without_name_based_merging():
+    state = inputs()
+    objects, relations, _, entries = apply_decision(Step.model_validate(decision()), **state)
+    state.update(objects=objects, relations=relations, entries=entries)
+    payload = decision()
+    payload["objects"][0]["object_id"] = "another-local-id"
+    payload["bindings"][0]["subject_id"] = "another-local-id"
+    repeated, _, updates, _ = apply_decision(Step.model_validate(payload), **state)
+    assert repeated == objects
+    assert updates["obs1"]["subject_id"] == objects[0]["object_id"]
+    payload["objects"][0]["is_table_subject"] = False
+    with pytest.raises(ValueError, match="disagrees"):
+        apply_decision(Step.model_validate(payload), **state)
+    payload["objects"][0]["is_table_subject"] = True
+    payload["objects"][0]["scope"] = "Another experimental run"
+    distinct, _, updates, _ = apply_decision(Step.model_validate(payload), **state)
+    assert len(distinct) == 2 and distinct[1]["name"] == distinct[0]["name"]
+    assert updates["obs1"]["subject_id"] != objects[0]["object_id"]
+
+
+@pytest.mark.parametrize("duplicate", ["local", "stable"])
+def test_duplicate_object_identifiers_rejected(duplicate):
+    payload = decision()
+    other = deepcopy(payload["objects"][0])
+    if duplicate == "stable":
+        other["object_id"] = "second-local-name"
+    payload["objects"].append(other)
+    with pytest.raises(ValueError):
+        apply_decision(Step.model_validate(payload), **inputs())
+
+
+def test_relations_need_known_distinct_endpoints_and_cannot_repeat():
+    payload = decision()
+    relation = {"source_id": "sample-a", "target_id": "missing", "predicate": "sample_of", "evidence": [quote()]}
+    payload["relations"] = [relation]
+    with pytest.raises(ValueError, match="undeclared"):
+        apply_decision(Step.model_validate(payload), **inputs())
+    relation["target_id"] = "sample-a"
+    with pytest.raises(ValueError, match="distinct"):
+        apply_decision(Step.model_validate(payload), **inputs())
+    parent = deepcopy(payload["objects"][0])
+    parent.update(object_id="reactor", name="East reactor R", kind="instance", is_table_subject=False)
+    payload["objects"].append(parent)
+    relation["target_id"] = "reactor"
+    objects, relations, _, _ = apply_decision(Step.model_validate(payload), **inputs())
+    assert relations[0]["source_id"] == objects[0]["object_id"]
+    assert relations[0]["target_id"] == objects[1]["object_id"]
+    payload["relations"].append(deepcopy(relation))
+    with pytest.raises(ValueError, match="repeated"):
+        apply_decision(Step.model_validate(payload), **inputs())
+
+
+def test_identical_relation_can_be_redeclared_across_decisions():
+    state, payload = inputs(), decision()
+    parent = deepcopy(payload["objects"][0])
+    parent.update(object_id="reactor", name="East reactor R", kind="instance", is_table_subject=False)
+    payload["objects"].append(parent)
+    payload["relations"] = [{"source_id": "sample-a", "target_id": "reactor", "predicate": "sample_of", "evidence": [quote()]}]
+    objects, relations, _, entries = apply_decision(Step.model_validate(payload), **state)
+    state.update(objects=objects, relations=relations, entries=entries)
+    repeated_objects, repeated_relations, _, _ = apply_decision(Step.model_validate(payload), **state)
+    assert repeated_objects == objects and repeated_relations == relations
+
+
+@pytest.mark.parametrize("action", ["search", "read"])
+def test_tool_step_cannot_modify_semantic_registry(action):
+    payload = decision()
+    payload.update(action=action, query="sample" if action == "search" else None,
+                   passage_ids=["p1"] if action == "read" else [])
+    with pytest.raises(ValueError, match="cannot submit"):
+        parse_step(json.dumps(payload))
+
+
+@pytest.mark.parametrize("payload", [
+    {"action": "search", "question": "Which sample?", "query": " "},
+    {"action": "search", "question": "Which sample?", "query": "sample", "passage_ids": ["p1"]},
+    {"action": "read", "question": "Which sample?", "passage_ids": []},
+    {"action": "read", "question": "Which sample?", "passage_ids": ["p1", "p1"]},
+    {"action": "read", "question": "Which sample?", "passage_ids": ["p1"], "query": "sample"},
+    {"action": "decide", "question": "Which sample?", "query": "sample"},
+])
+def test_actions_have_unambiguous_arguments(payload):
+    with pytest.raises(ValueError):
+        parse_step(json.dumps(payload))
+
+
+def test_free_form_question_and_query_do_not_require_a_predefined_gap_category():
+    step = parse_step(json.dumps({"action": "search", "question": "Does the specimen identifier refer to a rerun?",
+                                 "query": "rerun", "search_offset": 6}))
+    assert step.question == "Does the specimen identifier refer to a rerun?"
+    assert step.search_offset == 6
+    assert step.objects == []
+
+
+def test_duplicate_json_keys_are_not_silently_selected():
+    with pytest.raises(ValueError):
+        parse_step('{"action":"read","action":"decide","question":"why"}')

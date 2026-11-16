@@ -47,6 +47,27 @@ def run(text, directory, **kwargs):
                    output_dir=directory, progress="quiet", **kwargs)
 
 
+def read_initial_passage(payload):
+    return {"action": "read", "question": "Check the complete source passage before assigning the owner.",
+            "query": None, "search_offset": 0,
+            "passage_ids": [payload["initial_context"]["passages"][0]["passage_id"]],
+            "neighbors": 0, "objects": [], "relations": [], "bindings": []}
+
+
+def quoted(payload, quote):
+    passages = list(payload["initial_context"]["passages"])
+    for frame in payload["lookup_history"]:
+        passages.extend(frame["result"].get("passages", []))
+    passage = next(item for item in passages if quote in item["text"])
+    return {"passage_id": passage["passage_id"], "quote": quote, "occurrence": None}
+
+
+def decide(objects, bindings):
+    return {"action": "decide", "question": "The source supports the direct owners.",
+            "query": None, "search_offset": 0, "passage_ids": [], "neighbors": 0,
+            "objects": objects, "relations": [], "bindings": bindings}
+
+
 def test_public_automatic_model_analysis_uses_successful_compatible_route_and_ledger(monkeypatch, tmp_path):
     text = "Sample A has mass 3 g."
 
@@ -59,13 +80,15 @@ def test_public_automatic_model_analysis_uses_successful_compatible_route_and_le
             return envelope({"records": [{"record_type": "mass", "values": {
                 "entity": "A", "value": "3", "unit": "g", "conditions": None},
                 "quotes": {"entity": text, "value": text, "unit": text, "conditions": ""}}]})
-        if "objects" not in payload:
-            return envelope({"objects": [{"object_id": "sample", "name": "A", "kind": "sample",
-                "scope": "this experiment", "is_table_subject": True, "mentions": [{"quote": text}]}],
-                "relations": []})
-        return envelope({"bindings": [{"observation_id": payload["observations"][0]["observation_id"],
-            "subject_id": payload["objects"][0]["object_id"], "status": "supported",
-            "evidence": [{"quote": text}], "reason": "Directly stated sample owner."}]})
+        if not payload["lookup_history"]:
+            return envelope(read_initial_passage(payload))
+        return envelope(decide(
+            [{"object_id": "sample", "name": "A", "kind": "sample", "scope": "this experiment",
+              "is_table_subject": True, "mentions": [quoted(payload, text)]}],
+            [{"observation_id": payload["observations"][0]["observation_id"],
+              "subject_id": "sample", "status": "supported", "evidence": [quoted(payload, text)],
+              "reason": "Directly stated sample owner.", "target_match": "supported",
+              "property_name": "mass", "statistic": None}]))
 
     sent = install_http(monkeypatch, tmp_path, respond)
     output = tmp_path / "run"
@@ -76,10 +99,13 @@ def test_public_automatic_model_analysis_uses_successful_compatible_route_and_le
     assert result.run.routes[route_id]["config"]["structured_output"] == "json_object"
     assert [body["response_format"]["type"] for body in sent] == ["json_schema", "json_object", "json_object", "json_object"]
     assert result.analysis["status"] == "complete"
-    assert {job["route_id"] for job in result.analysis["jobs"]} == {route_id}
-    assert all(job["status"] == "completed" and job["attempts"] == job["http_attempts"] == 1
+    steps = [step for job in result.analysis["jobs"] for step in job["steps"]]
+    assert {step["route_id"] for step in steps} == {route_id}
+    assert all(job["status"] == "completed" and job["attempts"] == len(job["steps"])
                for job in result.analysis["jobs"])
-    assert all(job["reported_model"] == "reported-synthetic-revision" for job in result.analysis["jobs"])
+    assert [step["action"] for step in steps] == ["read", "decide"]
+    assert all(step["status"] == "completed" and step["http_attempts"] == 1 for step in steps)
+    assert all(step["reported_model"] == "reported-synthetic-revision" for step in steps)
     assert result.analysis["budget"]["reserved"] == result.analysis["budget"]["extraction_reserved"] == 2
     assert result.analysis["budget"]["total_reserved"] == 4
     observation = result.analysis["observations"][0]
@@ -123,16 +149,17 @@ def test_table_window_candidates_keep_pointer_local_ids_and_blockers_after_suppo
                         "conditions": {"value": None, "sources": []},
                     }})
             return envelope({"records": records})
-        if "objects" not in payload:
-            return envelope({"objects": [
-                {"object_id": name, "name": name, "kind": "sample", "scope": "row " + name,
-                 "is_table_subject": True, "mentions": [{"quote": "<td>" + name + "</td>"}]}
-                for name in ("A", "B")], "relations": []})
-        objects = {item["name"]: item["object_id"] for item in payload["objects"]}
-        return envelope({"bindings": [{"observation_id": item["observation_id"],
-            "subject_id": objects[item["entity"]], "status": "supported", "evidence": [{"quote": TABLE}],
-            "reason": "Row identifies the sample; unit still needs independent correction."}
-            for item in payload["observations"]]})
+        if not payload["lookup_history"]:
+            return envelope(read_initial_passage(payload))
+        objects = [{"object_id": name, "name": name, "kind": "sample", "scope": "row " + name,
+                    "is_table_subject": True, "mentions": [quoted(payload, "<td>" + name + "</td>")]}
+                   for name in ("A", "B")]
+        bindings = [{"observation_id": item["observation_id"], "subject_id": item["entity"],
+                     "status": "supported", "evidence": [quoted(payload, TABLE)],
+                     "reason": "Row identifies the sample; unit still needs independent correction.",
+                     "target_match": "supported", "property_name": "mass", "statistic": None}
+                    for item in payload["observations"]]
+        return envelope(decide(objects, bindings))
 
     sent = install_http(monkeypatch, tmp_path, respond)
     result = run(TABLE, tmp_path / "table", execution=ExecutionOptions(adaptive_chunking=False, max_model_calls=3))
@@ -153,6 +180,6 @@ def test_table_window_candidates_keep_pointer_local_ids_and_blockers_after_suppo
         assert item["source_evidence"] and item["evidence_ids"] and item["binding_evidence_ids"]
         assert item["semantic_status"] == "model_proposed"
     assert len(result.analysis["review"]) == 2
-    assert {job["route_id"] for job in result.analysis["jobs"]} == {"primary-01"}
+    assert {step["route_id"] for job in result.analysis["jobs"] for step in job["steps"]} == {"primary-01"}
     assert result.analysis["budget"]["extraction_reserved"] == 3
     assert result.analysis["budget"]["total_reserved"] == 5

@@ -1,8 +1,7 @@
-"""Bounded document-level semantic proposals, separate from extraction facts.
+"""Analysis entry, shared evidence handling and frozen legacy v0.1 recovery.
 
-The resolver sees the entire source (at most 60,000 Unicode characters). It
-proposes objects/relations, then bindings for every retained observation. No
-original observation value is generated or changed by this stage.
+New runs use verification.py's bounded source lookup. Old checkpoints retain
+their original whole-document contract; no observation value is rewritten.
 """
 
 from __future__ import annotations
@@ -65,16 +64,20 @@ class _Bindings(ContractModel):
     bindings: list[_Binding]
 
 
-def validate_analysis_options(text, task, table_subject, max_calls) -> None:
+def validate_analysis_options(text, task, table_subject, max_calls, *, max_steps=4, input_budget=48000) -> None:
     """Validate the opt-in analysis entry before any generation is attempted."""
-    if not isinstance(text, str) or not text.strip() or len(text) > MAX_CHARACTERS:
-        raise ConfigurationError("Document analysis requires nonempty text of at most 60,000 Unicode characters; source text is never silently shortened.")
+    if not isinstance(text, str) or not text.strip():
+        raise ConfigurationError("Document analysis requires nonempty original source text.")
     if getattr(task, "input_materials", None) is None:
         raise ConfigurationError("Document analysis currently requires a simple task with prompt_description and field_list.")
     if not isinstance(table_subject, str) or not table_subject.strip() or len(table_subject) > 1000:
         raise ConfigurationError("table_subject must be a nonempty description of the table's subject, up to 1,000 characters.")
     if type(max_calls) is not int or not 1 <= max_calls <= 1000:
         raise ConfigurationError("max_analysis_calls must be an integer from 1 to 1,000.")
+    if type(max_steps) is not int or not 1 <= max_steps <= 12:
+        raise ConfigurationError("analysis_max_steps must be an integer from 1 to 12.")
+    if type(input_budget) is not int or not 12000 <= input_budget <= 256000:
+        raise ConfigurationError("analysis_input_budget must be an integer from 12,000 to 256,000 serialized UTF-8 bytes.")
 
 
 def _backend_route(backend, result, backend_identity):
@@ -327,7 +330,7 @@ def _load_checkpoint(path, fingerprint, jobs, max_calls):
         raise ConfigurationError("Analysis checkpoint or cache is damaged or incompatible; no new analysis request was sent.") from None
 
 
-def build_analysis(text, result, *, table_subject, backend, generation=None, trace=None,
+def _build_legacy_analysis(text, result, *, table_subject, backend, generation=None, trace=None,
                    max_calls=12, resume_from=None, backend_identity=None, check_only=False,
                    extraction_reserved=None) -> dict:
     """Return semantic proposals and separate tables; never mutate extraction.
@@ -338,6 +341,8 @@ def build_analysis(text, result, *, table_subject, backend, generation=None, tra
     before networking. The analysis budget is separate from extraction's budget.
     """
     validate_analysis_options(text, result.task, table_subject, max_calls)
+    if len(text) > MAX_CHARACTERS:
+        raise ConfigurationError("Legacy document analysis accepts at most 60,000 Unicode characters.")
     if extraction_reserved is not None and (type(extraction_reserved) is not int or extraction_reserved < 0):
         raise ConfigurationError("extraction_reserved must be a nonnegative integer from the verified extraction ledger.")
     if hashlib.sha256(text.encode("utf-8")).hexdigest() != result.source.sha256:
@@ -495,3 +500,25 @@ def build_analysis(text, result, *, table_subject, backend, generation=None, tra
         trace.write_json("analysis/result.json", package)
     event("finished", status=status, extraction_requests=extraction_reserved, total_reserved=total_reserved)
     return package
+
+
+def build_analysis(text, result, *, table_subject, backend, generation=None, trace=None,
+                   max_calls=12, resume_from=None, backend_identity=None, check_only=False,
+                   extraction_reserved=None, max_steps=4, input_budget=48000):
+    """New runs use bounded lookup; existing v0.1 checkpoints keep their contract."""
+    options = dict(table_subject=table_subject, backend=backend, generation=generation,
+                   trace=trace, max_calls=max_calls, resume_from=resume_from,
+                   backend_identity=backend_identity, check_only=check_only,
+                   extraction_reserved=extraction_reserved)
+    if resume_from is not None:
+        try:
+            payload = load_json(_checkpoint_path(resume_from).read_text(encoding="utf-8"))
+            legacy = payload["state"]["version"] == "0.1"
+        except (KeyError, TypeError, ValueError, OSError):
+            raise ConfigurationError("Analysis checkpoint is damaged; no model request was sent.") from None
+        if legacy:
+            if max_steps != 4 or input_budget != 48000:
+                raise ConfigurationError("Legacy analysis recovery cannot change to the bounded lookup policy.")
+            return _build_legacy_analysis(text, result, **options)
+    from .verification import build_verification
+    return build_verification(text, result, max_steps=max_steps, input_budget=input_budget, **options)

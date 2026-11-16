@@ -1,9 +1,19 @@
-# Object-linked research tables
+# Object-linked research tables and bounded verification
 
-Ordinary extraction returns evidence-linked candidates. Adding a `table_subject`
-starts an **additional model stage** that proposes document objects, their
-relationships, and the direct subject of each retained observation. The same
-provider configuration is used; no second account is required.
+Ordinary extraction returns evidence-linked candidates. Adding `table_subject`
+starts an **additional model stage** that checks object identity, direct
+observation ownership and agreement with the requested field definition. The
+same successful extraction route is used; no second account is required.
+
+New dev35 runs use a source-only `search` / `read` / `decide` loop. The existing
+`flat-v1` extraction protocol is unchanged. Its candidate names, values and
+quotations supply hints; this release does not yet make the first extraction
+response jointly declare objects and observation references. Mixed `entity`
+strings are unverified hints, not an authoritative object inventory.
+
+## Python and CLI
+
+This synthetic example makes real model calls when run with valid credentials:
 
 ```python
 from attestextract import extract
@@ -16,98 +26,195 @@ result = extract(
     table_subject="Individual specimens, distinguished by batch and experiment",
     output_dir="output/new-run",
     max_analysis_calls=12,
+    analysis_max_steps=4,
+    analysis_input_budget=48000,
 )
 print(result.analysis["status"])
-if result.analysis["status"] != "complete":
-    raise RuntimeError("Extraction saved, but document analysis did not complete; inspect its checkpoint.")
+print(result.analysis["budget"])
 ```
 
-Use an environment variable for credentials, or pass the existing explicit
-`env_file`, `base_url`, `api_key_env` or `api_key` options. They retain their
-existing meaning. With a simple task JSON, CLI uses the same pipeline:
+Use environment credentials, or existing explicit `env_file`, `base_url`,
+`api_key_env` or `api_key` options. Never put a key in the task file. The analysis
+options shown above are defaults; users can omit them. The table subject says
+what a target-table row represents, not which object every measurement must
+belong to. A sample measurement stays attached to the sample when supported,
+even if the sample's relationship to a larger object is known.
+
+For the equivalent CLI example, save the same sentence in `input/paper.md` and
+this simple task in `task.json`:
+
+```json
+{
+  "prompt_description": "Extract reported specimen properties without inferring missing values.",
+  "field_list": {
+    "mass": "Reported mass",
+    "length": "Reported length"
+  }
+}
+```
 
 ```powershell
-python -m attestextract extract --input input/paper.md --task task.json --model-id deepseek:deepseek-flash --table-subject "Individual specimens, distinguished by batch and experiment" --output-dir output/new-run
+python -m attestextract extract `
+  --input input/paper.md --task task.json `
+  --model-id deepseek:deepseek-flash `
+  --table-subject "Individual specimens, distinguished by batch and experiment" `
+  --max-analysis-calls 12 --analysis-max-steps 4 --analysis-input-budget 48000 `
+  --output-dir output/new-run
 ```
 
-Add `--check` for local validation and the two budget limits, with no network use.
-The table subject describes what a row represents. It is not a list of names or
-a rule that forces every observation onto that row type. A measurement of a
-component stays attached to that component, even when a relationship to a larger
-object is known.
+Add `--check` for offline configuration, extraction planning and analysis-policy
+checks. It does not send network or model requests. Actual verification jobs
+depend on the extracted observations; `--check` cannot predict semantic answers
+or exact calls for a new run.
+
+## What the loop does
+
+1. Keep the full original source locally and index passages with Unicode offsets.
+2. Group existing observations into bounded jobs. Give the model nearby original
+   passages, candidate hints and a bounded set of already proposed objects.
+3. Let the model either submit a decision or explain its unresolved question and
+   request a search/read operation. The unresolved question is free text, not a
+   domain-specific enumeration.
+4. Execute the lookup locally and return original source spans. Each next model
+   response spends another analysis-call reservation.
+5. Save supported or unknown attribution and target-field matching. Values,
+   units and original conditions are not rewritten.
+
+`search` performs case-insensitive literal phrase matching in this document,
+with paginated results. It does not search the web or arbitrary files. The model
+can try alternate phrases; this is not embedding-based semantic retrieval and
+does not guarantee finding every alias, implicit relationship or paraphrase.
+`read` loads selected passage IDs and optional neighbors. The source index,
+shown passages, lookup actions and model responses are saved for inspection.
+
+There is no 60,000-character source cap for new analysis runs. The request
+builder selects bounded context rather than repeatedly sending the entire
+source and object graph. Batches may be divided when required content does not
+fit. Optional context omitted for the budget is identified, not represented as
+having been read. A task or single observation too large for the configured
+request budget remains unresolved with an explicit context-limit reason.
+
+## Evidence and interpretation
+
+An object `name` is a display label and may combine source-supported identity
+and scope. It need not occur as one literal phrase. Supporting mentions and
+decision quotations must be continuous exact source text in passages actually
+shown to the model. Distinct passages cannot be concatenated into a fabricated
+quotation. Repeated quotations require the correct occurrence within the named
+passage; positions are computed and checked by the program.
+
+The model may reuse supplied object IDs or propose source-supported missing
+objects. Identical names alone do not establish identity; different sites,
+experiments, samples and model scenarios must remain distinguishable. A measured
+property is not its owner. Relationships never automatically propagate a
+member's value to its parent or the parent's value to every member.
+
+`binding_status` records direct ownership. Separately, `target_match` is
+`supported`, `unsupported` or `unknown` relative to the task's field definition.
+For example, a total mass measurement does not automatically satisfy a requested
+dry-mass field. `property_name` and `statistic` preserve the model's interpretation
+alongside the immutable original values. All judgments remain `model_proposed`;
+an exact quotation proves location, not the correctness of semantic reasoning.
+Original mechanical blockers and quarantined records remain available.
 
 ## Outputs
 
 `result.json` and its extraction schema remain unchanged. Python exposes the
-additional, separately versioned product in `result.analysis`. Managed run
-directories also contain:
+additional product as `result.analysis`. New analysis products and checkpoints
+use version `0.2`; older `0.1` analysis products remain readable/exportable.
+Managed run directories contain:
 
 | File under `analysis/` | Purpose |
 | --- | --- |
-| `analysis.md` | Status, objects, observations and unresolved items for review |
-| `objects.json` | Object-oriented records, retaining every direct observation |
-| `object_table.csv` | One row per proposed target object; multi-value cells are JSON arrays |
-| `objects.csv` | Object IDs, names, kinds and scopes |
-| `observations.csv` | One unchanged observation per row, subject ID and binding status |
-| `relations.csv` | Explicit proposed object relationships with evidence references |
-| `evidence.csv` | Exact source quotations and Unicode locations |
-| `analysis.sqlite` | Relational copies for SQL joins and filtering |
-| `analysis.json` | Complete versioned analysis product and call accounting |
+| `analysis.md` | Object groups, unknown/mismatched observations and job stop reasons |
+| `objects.json` | Target/related object views and separate unbound/unmatched observations |
+| `object_table.csv` | Proposed target-object rows; multi-value cells remain JSON arrays |
+| `objects.csv` | Object IDs, display names, kinds and scopes |
+| `observations.csv` | All unchanged observations, binding status and target-field matching |
+| `related_observations.csv` | Matching observations directly owned by non-target objects |
+| `unbound_observations.csv` | Observations without supported object ownership |
+| `unmatched_observations.csv` | Supported ownership but unsupported/unknown target-field matching |
+| `relations.csv` | Proposed object relationships and evidence references |
+| `evidence.csv` | Exact quotations and original Unicode locations |
+| `analysis.sqlite` | Relational copies of all observations for joins and filtering |
+| `analysis.json` | Complete analysis state, review items, policies and call accounting |
 
-Field columns in the wide view are distinct from metadata columns. CSV formula
-cells are escaped for spreadsheet safety; JSON and SQLite preserve literal
-values. No conversion of ranges to scalar values, unit harmonization, averaging
-or cross-document identity merge is performed. Use the observation table for
-conditions and repeated measurements. Numeric statistics require an explicit
-scientific normalization policy; a searchable table is not automatically a
-validated quantitative dataset.
+For version `0.2`, a target-field cell receives a record only when ownership and
+target matching are both model-supported. Existing extraction warnings still
+apply. Excluded observations remain in the complete observation table; they are
+not deleted or silently reassigned to a different field. Version `0.1` keeps its
+historical projection behavior because it did not have `target_match`.
 
-## Evidence and semantics
+Metadata columns cannot overwrite task field columns. CSV formula-like values
+receive presentation escaping; JSON and SQLite retain literal values. There is
+no unit harmonization, averaging, range-to-scalar conversion, cross-document
+identity merge, expert acceptance UI or Jev integration. A searchable table is
+not automatically a scientifically validated quantitative dataset.
 
-The discovery request reads the whole source. Binding requests receive the same
-source, object inventory and batches of up to 12 observations. This lets a distant
-definition or relationship support a binding without pretending the original
-chunk model saw it. Model quotations are located in the original text; program
-checks cannot establish scientific correctness. All semantic results remain
-`model_proposed`, with original mechanical warnings and source record pointers.
+## Budgets and failure
 
-Identical names alone never merge objects. Objects in different experiments,
-sites, samples or simulations must remain distinct when their scopes differ.
-Relationships do not imply that a value belongs to every ancestor. Multiple
-conditions and values remain separate; unknown bindings are retained rather than
-assigned to the most frequent or nearest name. Quarantined source declarations
-remain separate and are not promoted into normal observations.
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `max_analysis_calls` / `--max-analysis-calls` | 12 | Cumulative generation budget across all verification jobs, including prior calls on resume |
+| `analysis_max_steps` / `--analysis-max-steps` | 4 | Maximum model responses within each job, including search/read planning and final decisions |
+| `analysis_input_budget` / `--analysis-input-budget` | 48000 | Maximum serialized framework-request UTF-8 bytes |
 
-This is an initial bounded implementation: simple tasks only, at most 60,000
-source characters. Larger sources fail before extraction starts. There is no
-silent clipping, global retrieval completeness guarantee, iterative missing-fact
-extraction, human acceptance UI, or Jev integration in this release.
+The byte ceiling includes framework request instructions, data and schema. It is
+**not** a token count, an exact HTTP-body size, or a probe of the provider's
+context-window capacity. It does not guarantee that every service accepts the
+request. Steps may range from 1 to 12 and the byte ceiling from 12,000 to 256,000.
+The original extraction budget remains independent; the combined generation
+upper bound is extraction's limit plus analysis's limit.
 
-## Calls, failure and recovery
+Local lookup execution has no generation charge, but the model response asking
+for it does consume a reservation. Each analysis generation has one HTTP attempt
+and finite timeouts. The route is fixed; there is no hidden provider switch,
+format regeneration or automatic resend after an unknown outcome. Invalid or
+incomplete responses are retained and stop that invocation rather than being
+repaired into accepted decisions.
 
-Extraction retains its existing `max_model_calls` budget. Analysis has a separate
-cumulative `max_analysis_calls` budget (default 12), covering one discovery
-request and one per 12 retained observations. The combined upper bound is the sum
-of these two limits, not just the extraction budget. Each analysis generation has
-one HTTP attempt, a finite timeout and no format regeneration. Analysis freezes
-one selected route; it does not perform a hidden provider or protocol switch.
+`complete` means all planned jobs submitted valid decisions. A decision may
+explicitly report unknown ownership or field meaning, so complete does not mean
+all facts are correct or ready for quantitative analysis. Exhausted step/input
+limits or unfinished work at the call budget produce `partial`; a failed model
+request/response produces `failed`. CLI returns nonzero for incomplete analysis
+and preserves the successful extraction.
 
-Original extraction output is checkpointed before analysis starts. Analysis
-responses and reservations are stored under `diagnostics/analysis/`, including
-`checkpoint.json`. An interrupted or failed reserved job is never silently sent
-again. Completed responses can be validated and reused; pending work can continue
-within the cumulative budget. A damaged snapshot or changed source, task, table
-subject or model identity is rejected.
+## Recovery and historical runs
 
-Resume into a **new** output directory using the original extraction checkpoint:
+Extraction is saved before analysis starts. `diagnostics/analysis/` records
+`checkpoint.json`, the source index, per-step requests, original responses,
+validated caches and local tool results. Resume validates and replays completed
+steps offline before spending a new generation reservation. Damaged caches or
+changed source, task, model identity, table subject or lookup policy fail before
+new requests.
+
+Resume a **new-policy** run into a new output directory:
 
 ```powershell
-python -m attestextract extract --input input/paper.md --task task.json --model-id deepseek:deepseek-flash --table-subject "Individual specimens, distinguished by batch and experiment" --resume output/old-run/diagnostics/execution/checkpoint.json --output-dir output/resumed-run --max-analysis-calls 12
+python -m attestextract extract `
+  --input input/paper.md --task task.json `
+  --model-id deepseek:deepseek-flash `
+  --table-subject "Individual specimens, distinguished by batch and experiment" `
+  --resume output/new-run/diagnostics/execution/checkpoint.json `
+  --max-analysis-calls 20 --analysis-max-steps 4 --analysis-input-budget 48000 `
+  --output-dir output/resumed-run
 ```
 
-The adjacent analysis checkpoint is used automatically when present. An explicit
-`--analysis-resume` requires the matching `--resume`. Increasing an exhausted
-budget authorizes pending jobs only; it does not reissue failed or unknown jobs.
-CLI returns a nonzero status for incomplete analysis, while preserving extraction
-results. `complete` means the planned analysis jobs finished, not that every
-binding is known or an expert has accepted the data.
+The adjacent analysis checkpoint is detected automatically. An explicit
+`--analysis-resume` requires the matching `--resume`. Add `--check` to inspect
+compatibility offline first. Python uses the same original inputs and
+`resume_from="output/new-run/diagnostics/execution/checkpoint.json"`, optionally
+`analysis_resume_from`, with a new `output_dir` and unchanged
+`analysis_max_steps` / `analysis_input_budget`.
+
+Increasing an exhausted total analysis budget permits pending steps/jobs to
+continue; spent calls are not refunded. It does not resend failed/unknown steps
+or reopen jobs that reached their step/context limit. The step limit and input
+byte budget are bound into checkpoint identity and cannot be changed on resume.
+
+Historical version `0.1` checkpoints continue the legacy whole-document contract,
+including its 60,000-character restriction and existing failure behavior. They
+are not automatically migrated to the new loop; new lookup controls cannot
+retrofit an old failed discovery. Use a fresh run, without `--resume` from that
+old analysis, when evaluating the new policy. Historical files are not rewritten.

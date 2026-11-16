@@ -661,6 +661,8 @@ def extract(
     retry_tables: bool = False,
     table_subject: str | None = None,
     max_analysis_calls: int = 12,
+    analysis_max_steps: int = 4,
+    analysis_input_budget: int = 48000,
     analysis_resume_from: str | Path | None = None,
 ) -> ExtractionResult:
     """Extract candidates. Matching evidence does not establish factual validity.
@@ -696,10 +698,13 @@ def extract(
     ``table_subject`` enables an additional document-level model analysis that
     binds unchanged observations to source-supported objects. Describe what one
     table row represents. Its separate cumulative ``max_analysis_calls`` budget
-    includes discovery and binding calls; there are no hidden HTTP retries.
+    includes decisions and model-requested search/read steps; no hidden HTTP retries.
+    ``analysis_max_steps`` limits each verification job. ``analysis_input_budget``
+    bounds serialized model-request UTF-8 bytes, not tokens; source passages are
+    read on demand instead of repeatedly sending the whole document.
     ``result.analysis`` and saved analysis tables are model proposals, not expert
-    acceptance. This first version accepts simple tasks and at most 60,000 source
-    characters. Original extraction JSON and checkpoint formats are unchanged.
+    acceptance. Simple tasks are required. Original extraction JSON and checkpoint
+    formats are unchanged; historical analysis checkpoints keep their old policy.
     """
     if resume_from is not None and trace is not None and trace.directory is not None:
         check_resume_paths(resume_from, [trace.directory])
@@ -714,7 +719,8 @@ def extract(
         task = resolve_task(task, prompt_description=prompt_description,
                             field_list=field_list, examples=examples)
         if table_subject is not None:
-            validate_analysis_request(text, task, table_subject, max_analysis_calls)
+            validate_analysis_request(text, task, table_subject, max_analysis_calls,
+                                      max_steps=analysis_max_steps, input_budget=analysis_input_budget)
         elif analysis_resume_from is not None:
             raise ConfigurationError("analysis_resume_from requires table_subject.")
         if analysis_resume_from is not None and resume_from is None:
@@ -778,6 +784,7 @@ def extract(
                 backend=backend, generation=options, table_subject=table_subject,
                 max_calls=max_analysis_calls, resume_from=resume_from,
                 analysis_resume_from=analysis_resume_from, backend_identity=backend_identity,
+                max_steps=analysis_max_steps, input_budget=analysis_input_budget,
             )
         execution_summary = {}
         result = _extract(
@@ -805,6 +812,7 @@ def extract(
                 trace=trace, max_calls=max_analysis_calls, resume_from=prior_analysis,
                 backend_identity=backend_identity,
                 extraction_reserved=execution_summary.get("calls_reserved"),
+                max_steps=analysis_max_steps, input_budget=analysis_input_budget,
             )
         if directory is not None:
             from .run_output import save_run_result
@@ -830,15 +838,18 @@ def extract(
 
 
 def validate_analysis_request(text: str | Document, task: TaskSpec,
-                              table_subject: str, max_calls: int) -> None:
+                              table_subject: str, max_calls: int, *,
+                              max_steps: int = 4, input_budget: int = 48000) -> None:
     """Fail before extraction/network use for unsupported analysis inputs."""
     from .analysis import validate_analysis_options
-    validate_analysis_options(text.text if isinstance(text, Document) else text, task, table_subject, max_calls)
+    validate_analysis_options(text.text if isinstance(text, Document) else text, task, table_subject, max_calls,
+                              max_steps=max_steps, input_budget=input_budget)
 
 
 def check_analysis_resume(text, task, *, backend, generation, table_subject, max_calls,
                           resume_from=None, analysis_resume_from=None,
-                          backend_identity=None, extraction_reserved=None):
+                          backend_identity=None, extraction_reserved=None,
+                          max_steps=4, input_budget=48000):
     """Check the analysis cache alongside an already validated extraction resume."""
     from .analysis import build_analysis
     from .execution import _checkpoint_path
@@ -858,7 +869,8 @@ def check_analysis_resume(text, task, *, backend, generation, table_subject, max
     return build_analysis(text, saved, table_subject=table_subject, backend=backend,
                           generation=generation, max_calls=max_calls, resume_from=prior,
                           backend_identity=backend_identity, check_only=True,
-                          extraction_reserved=extraction_reserved)
+                          extraction_reserved=extraction_reserved,
+                          max_steps=max_steps, input_budget=input_budget)
 
 
 def _extract(

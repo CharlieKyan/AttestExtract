@@ -136,6 +136,10 @@ def _parser() -> argparse.ArgumentParser:
     live.add_argument("--table-subject", help="Enable extra document-level identity/binding analysis; describe what one output table row represents")
     live.add_argument("--max-analysis-calls", type=int, default=12,
                       help="Separate cumulative analysis generation budget (default: 12), in addition to extraction's --max-model-calls")
+    live.add_argument("--analysis-max-steps", type=int, default=4,
+                      help="Maximum model steps per verification job, including search/read decisions (default: 4)")
+    live.add_argument("--analysis-input-budget", type=int, default=48000,
+                      help="Maximum serialized analysis request UTF-8 bytes, not tokens (default: 48000); source is read on demand")
     live.add_argument("--analysis-resume", type=Path,
                       help="Prior analysis checkpoint; normally inferred from --resume; unknown requests are not resent")
     return parser
@@ -527,7 +531,8 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
         if args.check:
             if args.table_subject is not None:
                 from .pipeline import validate_analysis_request
-                validate_analysis_request(text, task, args.table_subject, args.max_analysis_calls)
+                validate_analysis_request(text, task, args.table_subject, args.max_analysis_calls,
+                    max_steps=args.analysis_max_steps, input_budget=args.analysis_input_budget)
                 routes = [route.backend for route in backend.routes.values()] if isinstance(backend, AutomaticBackend) else [backend]
                 if any(getattr(route, "max_attempts", 1) != 1 for route in routes):
                     raise ConfigurationError("Document analysis requires max_attempts=1, including configuration profiles.")
@@ -580,16 +585,18 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
             if args.table_subject is not None:
                 plan["analysis"] = {"enabled": True, "table_subject": args.table_subject,
                     "max_analysis_calls": args.max_analysis_calls,
-                    "request_plan": "one whole-document identity request, then one request per 12 retained observations",
+                    "request_plan": "bounded verification jobs over extracted observations; model may request local source search/read",
+                    "max_steps_per_job": args.analysis_max_steps,
+                    "request_utf8_byte_limit": args.analysis_input_budget,
                     "combined_generation_limit": session.state.max_model_calls + args.max_analysis_calls,
-                    "source_character_limit": 60000,
-                    "notice": "Additional model-proposed identity/binding analysis; no expert verification. Exact jobs depend on extracted observations."}
+                    "notice": "Additional model-proposed verification, not expert approval. Request bytes are not model tokens; exact jobs depend on observations. Historical checkpoints retain their saved policy."}
                 from .pipeline import check_analysis_resume
                 analysis_check = check_analysis_resume(
                     text, task, backend=backend, generation=config.generation,
                     table_subject=args.table_subject, max_calls=args.max_analysis_calls,
                     resume_from=args.resume, analysis_resume_from=args.analysis_resume,
                     backend_identity=backend_identity, extraction_reserved=session.state.calls_used,
+                    max_steps=args.analysis_max_steps, input_budget=args.analysis_input_budget,
                 )
                 if analysis_check is not None:
                     plan["analysis"]["resume"] = analysis_check
@@ -601,7 +608,8 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
                          execution=execution, resume_from=args.resume, backend_identity=backend_identity,
                          max_chunk_chars=args.max_chunk_chars, context=context, table_mode=args.tables,
                          retry_tables=args.retry_tables, table_subject=args.table_subject,
-                         max_analysis_calls=args.max_analysis_calls, analysis_resume_from=args.analysis_resume)
+                         max_analysis_calls=args.max_analysis_calls, analysis_resume_from=args.analysis_resume,
+                         analysis_max_steps=args.analysis_max_steps, analysis_input_budget=args.analysis_input_budget)
         payload = result.model_dump(mode="json")
         if (default_directory is not None
                 and args.report.resolve() == (default_directory / "report.md").resolve()):
