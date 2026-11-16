@@ -55,6 +55,22 @@ class ConsoleProgress:
     def _render(self, event: dict[str, Any]) -> None:
         stage, kind = event["stage"], event["event"]
         prefix = f"[{self.current}/{self.total}]"
+        if stage == "analysis":
+            if kind == "started":
+                self._write(f"Document analysis: separate generation budget {event.get('limit', '?')}; model proposals, no expert acceptance")
+            elif kind == "call_reserved":
+                self._waiting_since = time.monotonic()
+                self._write(f"Analysis {event.get('job_id', '?')}: calls {event.get('used', '?')}/{event.get('limit', '?')}")
+            elif kind == "reused":
+                self._write(f"Analysis {event.get('job_id', '?')}: reused validated response")
+            elif kind in {"completed", "failed"}:
+                self._waiting_since = None
+                self._write(f"Analysis {event.get('job_id', '?')}: {kind}; calls {event.get('used', '?')}/{event.get('limit', '?')}")
+            elif kind == "finished":
+                self._waiting_since = None
+                self._write(f"Document analysis: {event.get('status', '?')}; analysis calls {event.get('used', '?')}/{event.get('limit', '?')}; "
+                            f"combined extraction + analysis reservations {event.get('total_reserved')}; inspect analysis/analysis.md")
+            return
         if stage == "configuration" and kind == "completed":
             self._read_timeout = event.get("read_timeout")
             self._write(f"Model: {event.get('model', '?')} | output: {event.get('structured_output', '?')} | "
@@ -177,6 +193,9 @@ class ConsoleProgress:
                         f"{event.get('table_candidates', 0)} table records retained; "
                         f"{event.get('quarantined_records', 0)} table records quarantined. "
                         "Inspect the report and table_results.rejections; ordinary resume reuses these responses.")
+        elif stage == "complete" and kind == "analysis_incomplete":
+            self._waiting_since = None
+            self._write("Extraction saved; document analysis is incomplete. Inspect analysis/analysis.md and its checkpoint.")
         elif stage == "complete" and kind == "succeeded":
             run = event.get("run", {})
             elapsed = run.get("elapsed_seconds", 0)

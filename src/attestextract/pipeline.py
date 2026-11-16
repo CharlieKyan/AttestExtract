@@ -659,6 +659,9 @@ def extract(
     context: ContextOptions | None = None,
     table_mode: str = "auto",
     retry_tables: bool = False,
+    table_subject: str | None = None,
+    max_analysis_calls: int = 12,
+    analysis_resume_from: str | Path | None = None,
 ) -> ExtractionResult:
     """Extract candidates. Matching evidence does not establish factual validity.
 
@@ -689,6 +692,14 @@ def extract(
     Recognized tables use route A and are delivered in ``table_results`` without
     prose deduplication. ``table_mode="text"`` explicitly uses the older prose
     protocol for tables, including replay of old prose-protocol responses.
+
+    ``table_subject`` enables an additional document-level model analysis that
+    binds unchanged observations to source-supported objects. Describe what one
+    table row represents. Its separate cumulative ``max_analysis_calls`` budget
+    includes discovery and binding calls; there are no hidden HTTP retries.
+    ``result.analysis`` and saved analysis tables are model proposals, not expert
+    acceptance. This first version accepts simple tasks and at most 60,000 source
+    characters. Original extraction JSON and checkpoint formats are unchanged.
     """
     if resume_from is not None and trace is not None and trace.directory is not None:
         check_resume_paths(resume_from, [trace.directory])
@@ -702,6 +713,12 @@ def extract(
             raise ConfigurationError("progress must be normal, quiet or verbose.")
         task = resolve_task(task, prompt_description=prompt_description,
                             field_list=field_list, examples=examples)
+        if table_subject is not None:
+            validate_analysis_request(text, task, table_subject, max_analysis_calls)
+        elif analysis_resume_from is not None:
+            raise ConfigurationError("analysis_resume_from requires table_subject.")
+        if analysis_resume_from is not None and resume_from is None:
+            raise ConfigurationError("analysis_resume_from requires the matching extraction resume_from checkpoint.")
         if table_mode not in {"auto", "text"}:
             raise ConfigurationError("table_mode must be auto or text.")
         if type(retry_tables) is not bool:
@@ -752,19 +769,49 @@ def extract(
                 generation=options if generation is not None else None,
                 format_retries=format_retries, trace=trace, fallback=fallback,
             )
+        if table_subject is not None:
+            routes = [route.backend for route in backend.routes.values()] if isinstance(backend, AutomaticBackend) else [backend]
+            if any(getattr(route, "max_attempts", 1) != 1 for route in routes):
+                raise ConfigurationError("Document analysis requires max_attempts=1; each request has one budget reservation.")
+            check_analysis_resume(
+                text.text if isinstance(text, Document) else text, task,
+                backend=backend, generation=options, table_subject=table_subject,
+                max_calls=max_analysis_calls, resume_from=resume_from,
+                analysis_resume_from=analysis_resume_from, backend_identity=backend_identity,
+            )
+        execution_summary = {}
         result = _extract(
             text, task, backend=backend, source_name=source_name,
             max_chunk_chars=max_chunk_chars, table_rows_per_chunk=table_rows_per_chunk,
             trace=trace, format_retries=format_retries, generation=options,
             execution=execution, resume_from=resume_from, backend_identity=backend_identity, context=context,
-            table_mode=table_mode, retry_tables=retry_tables,
+            table_mode=table_mode, retry_tables=retry_tables, execution_summary=execution_summary,
         )
+        if table_subject is not None:
+            from .analysis import build_analysis
+
+            # Preserve successful extraction even if analysis is interrupted.
+            if trace is not None:
+                trace.write_json("extraction-result.json", result.model_dump(mode="json"))
+            prior_analysis = analysis_resume_from
+            if prior_analysis is None and resume_from is not None:
+                from .execution import _checkpoint_path
+                prior = _checkpoint_path(resume_from).parent.parent / "analysis/checkpoint.json"
+                if prior.is_file():
+                    prior_analysis = prior
+            result.analysis = build_analysis(
+                text.text if isinstance(text, Document) else text, result,
+                table_subject=table_subject, backend=backend, generation=options,
+                trace=trace, max_calls=max_analysis_calls, resume_from=prior_analysis,
+                backend_identity=backend_identity,
+                extraction_reserved=execution_summary.get("calls_reserved"),
+            )
         if directory is not None:
             from .run_output import save_run_result
 
             save_run_result(result, directory, trace)
         elif owns_trace:
-            trace.finish(result.model_dump(mode="json"))
+            trace.finish(result.model_dump(mode="json"), analysis=result.analysis)
         return result
     except (Exception, KeyboardInterrupt) as exc:
         if trace is not None:
@@ -780,6 +827,38 @@ def extract(
                     console._write(trace._mask_text(f"Resume checkpoint: {checkpoint}"))
                     console._write("To resume in Python, keep the same inputs and model, set resume_from to this "
                                    "checkpoint and output_dir to a new directory; additional model calls may occur.")
+
+
+def validate_analysis_request(text: str | Document, task: TaskSpec,
+                              table_subject: str, max_calls: int) -> None:
+    """Fail before extraction/network use for unsupported analysis inputs."""
+    from .analysis import validate_analysis_options
+    validate_analysis_options(text.text if isinstance(text, Document) else text, task, table_subject, max_calls)
+
+
+def check_analysis_resume(text, task, *, backend, generation, table_subject, max_calls,
+                          resume_from=None, analysis_resume_from=None,
+                          backend_identity=None, extraction_reserved=None):
+    """Check the analysis cache alongside an already validated extraction resume."""
+    from .analysis import build_analysis
+    from .execution import _checkpoint_path
+    if resume_from is None:
+        return None
+    root = _checkpoint_path(resume_from).parent.parent
+    prior = Path(analysis_resume_from) if analysis_resume_from is not None else root / "analysis/checkpoint.json"
+    if not prior.exists() and analysis_resume_from is None:
+        return None
+    try:
+        payload = _load_json((root / "extraction-result.json").read_text(encoding="utf-8"))
+        saved = ExtractionResult.model_validate(payload)
+    except (OSError, ValueError, TypeError):
+        raise ConfigurationError("Analysis resume needs the original extraction-result.json snapshot.") from None
+    if saved.task.model_dump(mode="json") != task.model_dump(mode="json"):
+        raise ConfigurationError("Analysis resume task differs from the extraction snapshot.")
+    return build_analysis(text, saved, table_subject=table_subject, backend=backend,
+                          generation=generation, max_calls=max_calls, resume_from=prior,
+                          backend_identity=backend_identity, check_only=True,
+                          extraction_reserved=extraction_reserved)
 
 
 def _extract(
@@ -799,6 +878,7 @@ def _extract(
     context: ContextOptions | None = None,
     table_mode: str = "auto",
     retry_tables: bool = False,
+    execution_summary: dict | None = None,
 ) -> ExtractionResult:
     started = time.perf_counter()
     output_protocol = output_protocol_for_backend(backend)
@@ -1070,6 +1150,8 @@ def _extract(
     table_errors = any(table.rejections for table in table_results)
     format_status = ("partial_format_error" if candidates or any(table.candidates for table in table_results)
                      else "format_error") if table_errors else "complete"
+    if execution_summary is not None:
+        execution_summary["calls_reserved"] = session.state.calls_used if session is not None else request_attempts
     return ExtractionResult(
         schema_version="0.6" if table_results else "0.5" if automatic else "0.4", task=spec,
         source=SourceInfo(name=source_name, sha256=source_hash, character_count=len(text), document_id=document.document_id),

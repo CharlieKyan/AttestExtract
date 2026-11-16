@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.0.dev34
+
+- Add opt-in document-level identity and observation binding with `table_subject` in Python and `--table-subject` in CLI. Original values, units, conditions, extraction protocols and checkpoints are retained. The additional model stage has a separate explicit cumulative budget and checkpoint; unknown outcomes are never resent automatically.
+- Export versioned object, observation, relationship and evidence tables as JSON, CSV and SQLite, plus an object-oriented wide view retaining multiple observations per cell. Equal names do not merge objects, and child observations never propagate to parents. Unbound observations and original review blockers remain visible.
+- Preserve incomplete analysis separately from successful extraction, distinguish model proposals from expert confirmation, and expose the additional stage during offline checks. Initial scope: simple tasks and documents of at most 60,000 characters; no domain-specific assignment rules or automatic unit conversion.
+
 ## 0.1.0.dev33
 
 - Subdivide known table length truncations by physical rows or cells, with disjoint observation ownership and unchanged full-table context. Retain raw failures and spent calls; enforce existing depth and cumulative call limits. Unknown transport outcomes remain stopped.

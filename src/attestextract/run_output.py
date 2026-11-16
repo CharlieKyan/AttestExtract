@@ -33,10 +33,19 @@ def save_run_result(result: ExtractionResult, directory: Path, trace: RunTrace) 
     payload = result.model_dump(mode="json")
     serialized = json.dumps(trace._mask(payload), ensure_ascii=False, indent=2, allow_nan=False) + "\n"
     report = render_markdown_report(result, secrets=trace._secrets)
+    if result.analysis is not None:
+        report = ("# Object-linked analysis\n\n"
+                  f"Analysis status: {result.analysis['status']}. "
+                  "See [analysis tables](analysis/analysis.md) and "
+                  "[SQLite database](analysis/analysis.sqlite). "
+                  "Model proposals require review; extraction values remain unchanged.\n\n" + report)
     # Exclusive files also protect against a user placing files here mid-run.
     with (directory / "result.json").open("x", encoding="utf-8", newline="") as stream:
         stream.write(serialized)
     with (directory / "report.md").open("x", encoding="utf-8", newline="") as stream:
         stream.write(report)
     save_expert_review(result, directory, secrets=trace._secrets)
-    trace.finish(payload)
+    if result.analysis is not None:
+        from .analysis_export import save_analysis
+        save_analysis(result.analysis, directory / "analysis", secrets=trace._secrets)
+    trace.finish(payload, analysis=result.analysis)

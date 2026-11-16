@@ -133,6 +133,11 @@ def _parser() -> argparse.ArgumentParser:
     live.add_argument("--max-split-depth", type=int, default=3, help="Maximum truncation subdivision depth (default: 3; 0 disables subdivision)")
     live.add_argument("--resume", type=Path, help="Previous run directory, diagnostics directory or execution/checkpoint.json; saves a new run")
     live.add_argument("--retry-tables", action="store_true", help="With --resume, explicitly retry quarantined table responses once within the cumulative budget; never retry unknown outcomes")
+    live.add_argument("--table-subject", help="Enable extra document-level identity/binding analysis; describe what one output table row represents")
+    live.add_argument("--max-analysis-calls", type=int, default=12,
+                      help="Separate cumulative analysis generation budget (default: 12), in addition to extraction's --max-model-calls")
+    live.add_argument("--analysis-resume", type=Path,
+                      help="Prior analysis checkpoint; normally inferred from --resume; unknown requests are not resent")
     return parser
 
 
@@ -371,6 +376,13 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
             else:
                 default_directory.mkdir(parents=True, exist_ok=False)
         _check_output_paths(args)
+        if args.analysis_resume is not None and (args.resume is None or args.table_subject is None):
+            raise ConfigurationError("--analysis-resume requires --resume and --table-subject.")
+        if args.table_subject is not None:
+            if (args.output.resolve().parent / "analysis").exists():
+                raise ConfigurationError("Analysis output directory already exists; choose a new --output-dir.")
+            if args.max_attempts not in (None, 1):
+                raise ConfigurationError("Document analysis requires --max-attempts 1.")
         if args.max_chunk_chars < 1:
             raise ConfigurationError("--max-chunk-chars must be positive.")
         if args.resume is not None and args.log_dir is None:
@@ -513,6 +525,12 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
                         read_timeout=config.read_timeout or config.timeout or 180,
                         tls_mode=config.tls_mode)
         if args.check:
+            if args.table_subject is not None:
+                from .pipeline import validate_analysis_request
+                validate_analysis_request(text, task, args.table_subject, args.max_analysis_calls)
+                routes = [route.backend for route in backend.routes.values()] if isinstance(backend, AutomaticBackend) else [backend]
+                if any(getattr(route, "max_attempts", 1) != 1 for route in routes):
+                    raise ConfigurationError("Document analysis requires max_attempts=1, including configuration profiles.")
             trace.event("configuration", "task_ready", **task_summary(task))
             prepare = prepare_execution
             if automatic:
@@ -559,6 +577,22 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
                     "output": str(args.output.resolve()), "report": str(args.report.resolve()) if args.report else None,
                     "diagnostics": str(trace.directory) if trace.directory else None,
                     "notice": "Local validation only; credentials, endpoint availability and model output are not verified."}
+            if args.table_subject is not None:
+                plan["analysis"] = {"enabled": True, "table_subject": args.table_subject,
+                    "max_analysis_calls": args.max_analysis_calls,
+                    "request_plan": "one whole-document identity request, then one request per 12 retained observations",
+                    "combined_generation_limit": session.state.max_model_calls + args.max_analysis_calls,
+                    "source_character_limit": 60000,
+                    "notice": "Additional model-proposed identity/binding analysis; no expert verification. Exact jobs depend on extracted observations."}
+                from .pipeline import check_analysis_resume
+                analysis_check = check_analysis_resume(
+                    text, task, backend=backend, generation=config.generation,
+                    table_subject=args.table_subject, max_calls=args.max_analysis_calls,
+                    resume_from=args.resume, analysis_resume_from=args.analysis_resume,
+                    backend_identity=backend_identity, extraction_reserved=session.state.calls_used,
+                )
+                if analysis_check is not None:
+                    plan["analysis"]["resume"] = analysis_check
             trace.checked(plan)
             print(json.dumps(plan, ensure_ascii=False, indent=2))
             return 0
@@ -566,7 +600,8 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
                          format_retries=config.format_retries, generation=config.generation,
                          execution=execution, resume_from=args.resume, backend_identity=backend_identity,
                          max_chunk_chars=args.max_chunk_chars, context=context, table_mode=args.tables,
-                         retry_tables=args.retry_tables)
+                         retry_tables=args.retry_tables, table_subject=args.table_subject,
+                         max_analysis_calls=args.max_analysis_calls, analysis_resume_from=args.analysis_resume)
         payload = result.model_dump(mode="json")
         if (default_directory is not None
                 and args.report.resolve() == (default_directory / "report.md").resolve()):
@@ -586,8 +621,11 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
             if default_directory is not None:
                 from .expert_review import save_expert_review
                 save_expert_review(result, default_directory.resolve(), secrets=trace._secrets)
+            if result.analysis is not None:
+                from .analysis_export import save_analysis
+                save_analysis(result.analysis, args.output.resolve().parent / "analysis", secrets=trace._secrets)
             if trace is not None:
-                trace.finish(payload)
+                trace.finish(payload, analysis=result.analysis)
         if trace is not None:
             if trace.directory is not None and args.progress != "quiet":
                 print(f"Run diagnostics: {trace.directory}", file=sys.stderr)
@@ -595,6 +633,9 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
         if result.format_status != "complete":
             print("attestextract: " + result.format_status + "; legal records saved; inspect table_results.rejections.", file=sys.stderr)
             return 2
+        if result.analysis is not None and result.analysis["status"] != "complete":
+            print("attestextract: extraction saved; analysis incomplete; inspect analysis/analysis.md and diagnostics/analysis/checkpoint.json.", file=sys.stderr)
+            return 130 if any(job.get("error_code") == "interrupted" for job in result.analysis.get("jobs", [])) else 2
         return 0
     except KeyboardInterrupt as exc:
         if trace is not None:

@@ -142,10 +142,16 @@ class RunTrace:
             )
             self._progress(f"[{stage}] {event}" + (f" {suffix}" if suffix else ""))
 
-    def finish(self, result_payload: dict[str, Any]) -> None:
+    def finish(self, result_payload: dict[str, Any], *, analysis: dict[str, Any] | None = None) -> None:
         self.write_json("result.json", result_payload)
         format_status = result_payload.get("format_status", "complete")
         status = format_status if format_status in {"partial_format_error", "format_error"} else "succeeded"
+        if analysis is not None:
+            self._manifest["analysis_status"] = analysis["status"]
+            self._manifest["analysis_semantic_status"] = "model_proposed"
+            self._manifest["analysis_budget"] = analysis.get("budget", {})
+            if analysis["status"] != "complete":
+                status = "analysis_incomplete"
         self._manifest.update(
             status=status, finished_at=_now(),
             package_version=result_payload.get("package_version"), run=result_payload.get("run"),

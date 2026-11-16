@@ -1,5 +1,12 @@
 # AttestExtract
 
+Dev34 adds opt-in document-level object and attribution analysis: describe a row
+with `table_subject` / `--table-subject`, then obtain object-linked JSON, CSV and
+SQLite tables. The additional model calls have their own visible budget and
+checkpoint. Same-name objects, child measurements and different conditions remain
+distinct; unknown bindings and source warnings remain visible. Outputs are model
+proposals, not expert-approved data. See [analysis tables](docs/analysis-tables.md).
+
 Dev33 subdivides known table length truncations into bounded row/cell windows,
 preserving full table context, original cell references and spent calls. Verified
 dev31/dev32 root checkpoints can reuse completed chunks; unknown transport outcomes

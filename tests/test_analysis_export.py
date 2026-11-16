@@ -1,0 +1,178 @@
+"""Exports are proposals with lossless observations, not inferred database facts."""
+
+from copy import deepcopy
+import csv
+import json
+import sqlite3
+
+import pytest
+
+from attestextract.analysis_export import save_analysis
+
+
+def sample():
+    def obj(key, name, kind="layer", target=True):
+        return {"object_id": key, "name": name, "kind": kind, "scope": key,
+                "is_table_subject": target, "mention_evidence_ids": ["e1"], "semantic_status": "model_proposed"}
+
+    def obs(key, subject, value, conditions=None, status="supported"):
+        return {"observation_id": key, "candidate_id": "candidate-" + key,
+                "source_record": "/candidates/" + key[1:], "record_type": "porosity", "source_kind": "prose",
+                "entity": "sample label", "value": value, "unit": "%", "conditions": conditions,
+                "subject_id": subject, "binding_status": status, "reason": "source relation",
+                "blockers": [], "evidence_ids": ["e1"], "binding_evidence_ids": ["e1"],
+                "semantic_status": "model_proposed"}
+
+    return {
+        "analysis_version": "0.1", "status": "complete", "semantic_status": "model_proposed",
+        "source": {"name": "synthetic.md", "sha256": "0" * 64, "document_id": "doc1"},
+        "task": {"name": "synthetic", "description": "Keep raw observations", "fields": {
+            "porosity": "Reported porosity", "permeability": "Reported permeability"}},
+        "table_subject": "layer", "objects": [obj("L1", "Same layer"), obj("L2", "Same layer"),
+                                                    obj("S1", "Core S1", "sample", False)],
+        "observations": [obs("o1", "L1", "10–20", "range"), obs("o2", "L1", "15", "mean"),
+                         obs("o3", "S1", "12", "sample measurement"), obs("o4", None, "9", status="unknown")],
+        "relations": [{"relation_id": "r1", "source_id": "S1", "target_id": "L2",
+                       "predicate": "sampled_from", "evidence_ids": ["e1"], "semantic_status": "model_proposed"}],
+        "evidence": [{"evidence_id": "e1", "quote": "Core S1 from the second layer has porosity 12%.",
+                      "start": 0, "end": 52}], "jobs": [], "review": [], "quarantined": [],
+        "budget": {"limit": 2, "reserved": 1, "extraction_reserved": 3, "total_reserved": 4},
+    }
+
+
+def read_csv(path):
+    with path.open(encoding="utf-8-sig", newline="") as stream:
+        return list(csv.DictReader(stream))
+
+
+def test_same_names_stay_distinct_multiple_conditions_remain_and_samples_never_inherit(tmp_path):
+    analysis = sample()
+    before = deepcopy(analysis)
+    save_analysis(analysis, tmp_path)
+    view = json.loads((tmp_path / "objects.json").read_text(encoding="utf-8"))
+    assert [obj["object_id"] for obj in view["objects"]] == ["L1", "L2"]
+    assert [obj["name"] for obj in view["objects"]] == ["Same layer", "Same layer"]
+    assert [item["value"] for item in view["objects"][0]["fields"]["porosity"]] == ["10–20", "15"]
+    assert view["objects"][1]["fields"]["porosity"] == []
+    assert [item["observation_id"] for item in view["related_observations"]] == ["o3"]
+    assert [item["observation_id"] for item in view["unbound_observations"]] == ["o4"]
+    assert len(read_csv(tmp_path / "observations.csv")) == 4
+    assert len(read_csv(tmp_path / "objects.csv")) == 3
+    wide = read_csv(tmp_path / "object_table.csv")
+    assert len(wide) == 2 and json.loads(wide[1]["porosity"]) == []
+    assert [item["conditions"] for item in json.loads(wide[0]["porosity"])] == ["range", "mean"]
+    assert json.loads(wide[0]["permeability"]) == []
+    assert analysis == before
+    assert json.loads((tmp_path / "analysis.json").read_text(encoding="utf-8")) == analysis
+
+
+def test_sqlite_joins_retain_original_pointer_raw_values_and_foreign_keys(tmp_path):
+    save_analysis(sample(), tmp_path)
+    with sqlite3.connect(tmp_path / "analysis.sqlite") as db:
+        row = db.execute("""SELECT o.name, v.value_json, v.source_record, e.quote
+            FROM observations v JOIN objects o ON o.object_id=v.subject_id
+            JOIN observation_evidence p ON p.observation_id=v.observation_id AND p.role='observation'
+            JOIN evidence e ON e.evidence_id=p.evidence_id WHERE v.observation_id='o3'""").fetchone()
+        assert row[:3] == ("Core S1", '"12"', "/candidates/3")
+        assert "12%" in row[3]
+        assert db.execute("SELECT count(*) FROM observations WHERE subject_id IS NULL").fetchone() == (1,)
+        assert db.execute("SELECT source_id,target_id FROM relations").fetchall() == [("S1", "L2")]
+        assert db.execute("PRAGMA foreign_key_check").fetchall() == []
+        db.execute("PRAGMA foreign_keys = ON")
+        with pytest.raises(sqlite3.IntegrityError):
+            db.execute("UPDATE observations SET subject_id='missing' WHERE observation_id='o1'")
+
+
+@pytest.mark.parametrize("dangerous", ["=1+1", "+SUM(1,2)", "-1+2", "@SUM(1)", " \t=HYPERLINK(1)"])
+def test_csv_formula_safety_does_not_modify_json_or_sqlite(tmp_path, dangerous):
+    analysis = sample()
+    analysis["objects"][0]["name"] = dangerous
+    analysis["observations"][0]["value"] = dangerous
+    save_analysis(analysis, tmp_path)
+    assert read_csv(tmp_path / "objects.csv")[0]["name"] == "'" + dangerous
+    assert read_csv(tmp_path / "observations.csv")[0]["value"] == "'" + dangerous
+    assert json.loads((tmp_path / "analysis.json").read_text(encoding="utf-8"))["objects"][0]["name"] == dangerous
+    with sqlite3.connect(tmp_path / "analysis.sqlite") as db:
+        assert json.loads(db.execute("SELECT value_json FROM observations WHERE observation_id='o1'").fetchone()[0]) == dangerous
+
+
+def test_blockers_unknowns_and_failed_state_are_visible_without_claiming_acceptance(tmp_path):
+    analysis = sample()
+    analysis["status"] = "failed"
+    analysis["observations"][0]["blockers"] = [{"code": "required_missing", "message": "unit not verified"}]
+    analysis["observations"][3]["reason"] = "ambiguous ownership"
+    analysis["quarantined"] = [{"raw": "invalid record"}]
+    save_analysis(analysis, tmp_path)
+    markdown = (tmp_path / "analysis.md").read_text(encoding="utf-8")
+    assert "失败 / failed" in markdown
+    assert "待人工复核" in markdown and "不是专家确认" in markdown
+    assert "unit not verified" in markdown and "ambiguous ownership" in markdown
+    assert "原格式隔离记录：1" in markdown
+    assert json.loads(read_csv(tmp_path / "observations.csv")[0]["blockers"])[0]["code"] == "required_missing"
+
+
+def test_redaction_in_every_artifact_and_no_caller_mutation(tmp_path):
+    analysis = sample()
+    secret = "private-token-for-synthetic-test"
+    analysis["source"]["name"] = secret
+    analysis["evidence"][0]["quote"] += secret
+    analysis["observations"][0]["reason"] = secret
+    save_analysis(analysis, tmp_path, secrets=[secret])
+    for path in tmp_path.iterdir():
+        assert secret.encode() not in path.read_bytes(), path.name
+    assert analysis["source"]["name"] == secret
+
+
+@pytest.mark.parametrize("damage", ["subject", "relation", "evidence", "duplicate", "accepted", "position", "target"])
+def test_invalid_snapshot_rejected_before_any_output(tmp_path, damage):
+    analysis = sample()
+    if damage == "subject":
+        analysis["observations"][0]["subject_id"] = "missing"
+    elif damage == "relation":
+        analysis["relations"][0]["target_id"] = "missing"
+    elif damage == "evidence":
+        analysis["observations"][0]["evidence_ids"] = ["missing"]
+    elif damage == "duplicate":
+        analysis["objects"].append(deepcopy(analysis["objects"][0]))
+    elif damage == "accepted":
+        analysis["observations"][0]["semantic_status"] = "accepted"
+    elif damage == "position":
+        analysis["evidence"][0]["start"] = -1
+    else:
+        analysis["observations"][0]["record_type"] = "undeclared"
+    target = tmp_path / "new-output"
+    with pytest.raises(ValueError):
+        save_analysis(analysis, target)
+    assert not target.exists()
+
+
+def test_existing_output_is_never_overwritten_or_partly_reexported(tmp_path):
+    (tmp_path / "observations.csv").write_text("original", encoding="utf-8")
+    with pytest.raises(FileExistsError):
+        save_analysis(sample(), tmp_path)
+    assert list(tmp_path.iterdir()) == [tmp_path / "observations.csv"]
+    assert (tmp_path / "observations.csv").read_text() == "original"
+
+
+def test_generic_target_name_cannot_overwrite_object_metadata(tmp_path):
+    analysis = sample()
+    analysis["task"]["fields"] = {"object_id": "Reported identifier", "name": "Reported name"}
+    for item in analysis["observations"]:
+        item["record_type"] = "name"
+    save_analysis(analysis, tmp_path)
+    rows = read_csv(tmp_path / "object_table.csv")
+    assert rows[0]["metadata.object_id"] == "L1" and rows[0]["metadata.name"] == "Same layer"
+    assert json.loads(rows[0]["object_id"]) == []
+    assert len(json.loads(rows[0]["name"])) == 2
+
+
+def test_unlocated_evidence_and_zero_false_values_are_retained(tmp_path):
+    analysis = sample()
+    analysis["evidence"][0].update(start=None, end=None)
+    analysis["observations"][0]["value"] = 0
+    analysis["observations"][1]["value"] = False
+    save_analysis(analysis, tmp_path)
+    row = read_csv(tmp_path / "object_table.csv")[0]
+    assert [item["value"] for item in json.loads(row["porosity"])] == [0, False]
+    with sqlite3.connect(tmp_path / "analysis.sqlite") as db:
+        assert db.execute("SELECT start,end FROM evidence").fetchone() == (None, None)
