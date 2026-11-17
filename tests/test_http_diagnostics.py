@@ -8,6 +8,7 @@ import httpx
 import pytest
 
 from attestextract import cli, extract
+from attestextract.automatic import ModelConnection
 from attestextract.backends import OpenAICompatibleBackend
 from attestextract.diagnostics import RunTrace
 from attestextract.errors import BackendError
@@ -102,6 +103,73 @@ def test_google_style_error_preserves_numeric_code_status_and_message(tmp_path):
     assert diagnostic["provider_error"] == {
         "code": 400, "status": "INVALID_ARGUMENT", "message": "Synthetic argument mismatch.",
     }
+
+
+@pytest.mark.parametrize("status", [400, 422])
+@pytest.mark.parametrize("message", [
+    "Prompt must contain the word 'json' in some form to use 'response_format' of type 'json_object'.",
+    '\"messages\" must contain the word \"JSON\" in some form, to use \"response_format\" of type \"json_object\".',
+])
+def test_json_prompt_requirement_has_specific_safe_hint_without_retry_or_fallback(tmp_path, status, message):
+    secret = 'synthetic-"json-credential\\part'
+    tail = (f" PRIVATE-PAPER-EXCERPT {secret} https://private.example/?key=private-query-secret "
+            "\x1b[31m\r\nBearer arbitrary-token")
+    exc, diagnostic, directory, requests = run_failure(
+        tmp_path, httpx.Response(status, json={"error": {
+            "code": "invalid_request_error", "message": message + tail,
+            "param": "response_format",
+        }}), api_key=secret, structured_output="json_object", max_attempts=3,
+    )
+    assert len(requests) == exc.attempts == 1
+    assert exc.code == "json_prompt_required" and exc.retryable is False
+    assert diagnostic["classification"] == "json_prompt_required"
+    assert diagnostic["compatibility_hint"] is None
+    assert diagnostic["provider_error"]["message"].startswith(message)
+    assert "explicit JSON output instruction" in str(exc)
+    assert exc.http_details in str(exc)
+    assert "may not support" not in str(exc) and "supplied schema" not in str(exc)
+    assert "PRIVATE-PAPER-EXCERPT" not in str(exc)
+    assert all(character.isprintable() for character in str(exc))
+    combined = artifact_text(directory) + str(exc)
+    for private in (secret, "private-query-secret", "arbitrary-token"):
+        assert private not in combined
+
+
+@pytest.mark.parametrize("message,mode,status,code", [
+    ("Prompt must contain the word 'json' in some form to use 'response_format' of type 'json_object'.",
+     "json_schema", 400, "invalid_request"),
+    ("Prompt must contain the word 'json' in some form to use 'response_format' of type 'json_object'.",
+     "json_object", 401, "authentication_error"),
+    ("json_object is not supported", "json_object", 400, "invalid_request"),
+    ("JSON prompt validation failed for response_format", "json_object", 400, "invalid_request"),
+    ("Prompt must not contain the word 'json' in some form to use 'response_format' of type 'json_object'.",
+     "json_object", 400, "invalid_request"),
+    ("Echoed source: Prompt must contain the word 'json' in some form to use 'response_format' of type 'json_object'.",
+     "json_object", 400, "invalid_request"),
+    ("Prompt must contain the word 'xml' in some form to use 'response_format' of type 'json_object'.",
+     "json_object", 400, "invalid_request"),
+    ("Prompt must contain the word 'json' in some form to use 'response_format' of type 'json_schema'.",
+     "json_object", 400, "invalid_request"),
+])
+def test_unrelated_errors_are_not_reclassified_as_json_prompt_requirement(tmp_path, message, mode, status, code):
+    exc, diagnostic, _, requests = run_failure(
+        tmp_path, httpx.Response(status, json={"error": {"message": message}}), structured_output=mode,
+    )
+    assert exc.code == code and len(requests) == 1
+    assert "classification" not in diagnostic
+    assert "explicit JSON output instruction" not in str(exc)
+
+
+def test_json_prompt_requirement_keeps_long_server_tail_out_of_exception(tmp_path):
+    message = ("Prompt must contain the word 'json' in some form to use 'response_format' of type 'json_object'. "
+               + "private-paper-word " * 1000)
+    exc, diagnostic, _, _ = run_failure(
+        tmp_path, httpx.Response(400, json={"error": {"message": message}}), structured_output="json_object",
+    )
+    assert exc.code == "json_prompt_required"
+    assert diagnostic["truncated"] is True
+    assert len(diagnostic["provider_error"]["message"]) <= 1001
+    assert len(str(exc)) < 500 and "private-paper-word" not in str(exc)
 
 
 @pytest.mark.parametrize("payload", [
@@ -355,3 +423,77 @@ def test_cli_error_links_to_http_diagnostics_without_echoing_provider_message(tm
     captured = capsys.readouterr()
     assert "PRIVATE-PROVIDER-EXPLANATION" not in captured.err
     assert "synthetic-cli-http-secret" not in captured.err + artifact_text(directory)
+
+
+def test_cli_json_prompt_error_explains_requirement_without_echoing_server_tail(tmp_path, monkeypatch, capsys):
+    source, task, directory = tmp_path / "source.txt", tmp_path / "task.json", tmp_path / "cli"
+    source.write_text("Synthetic source only.", encoding="utf-8")
+    task.write_text(json.dumps(TASK), encoding="utf-8")
+    monkeypatch.setenv("ATTESTEXTRACT_API_KEY", "synthetic-cli-json-secret")
+    calls = []
+
+    def endpoint(request):
+        calls.append(request)
+        return httpx.Response(400, json={"error": {"code": "invalid_request_error", "message":
+            "Prompt must contain the word 'json' in some form to use 'response_format' of type 'json_object'. "
+            "PRIVATE-PROVIDER-EXCERPT synthetic-cli-json-secret"}})
+
+    def backend(**kwargs):
+        return OpenAICompatibleBackend(**kwargs, transport=httpx.MockTransport(endpoint), sleep_fn=lambda _: None)
+
+    monkeypatch.setattr("attestextract.backends.OpenAICompatibleBackend", backend)
+    status = cli.main([
+        "extract", "--input", str(source), "--task", str(task),
+        "--base-url", "https://example.invalid/v1", "--model", "synthetic-model",
+        "--structured-output", "json_object", "--log-dir", str(directory),
+    ])
+    assert status == 1 and len(calls) == 1
+    error = read_json(directory / "error.json")
+    assert error["code"] == "json_prompt_required"
+    captured = capsys.readouterr()
+    terminal = captured.out + captured.err
+    assert "explicit JSON output instruction" in terminal
+    assert error["http_details"] in terminal
+    assert "PRIVATE-PROVIDER-EXCERPT" not in terminal
+    assert "synthetic-cli-json-secret" not in terminal + artifact_text(directory)
+
+
+@pytest.mark.parametrize("provider_code", ["invalid_request_error", "unsupported_value"])
+def test_public_automatic_prompt_rejection_keeps_mode_and_credentials(tmp_path, monkeypatch, provider_code):
+    monkeypatch.setenv("ATTESTEXTRACT_MODEL_CACHE_DIR", str(tmp_path / "model-cache"))
+    original_client = httpx.Client
+    calls = []
+
+    def endpoint(request):
+        if request.method == "GET":
+            assert "authorization" not in request.headers
+            return httpx.Response(401)
+        body = json.loads(request.content)
+        calls.append(body)
+        assert request.headers["authorization"] == "Bearer synthetic-primary-json-secret"
+        assert body["model"] == "unregistered-json-model"
+        if len(calls) == 1:
+            assert body["response_format"]["type"] == "json_schema"
+            return httpx.Response(400, json={"error": {"code": "unsupported_value", "param": "response_format",
+                                                       "message": "json_schema is not supported"}})
+        assert len(calls) == 2 and body["response_format"]["type"] == "json_object"
+        return httpx.Response(400, json={"error": {"code": provider_code, "param": "response_format",
+            "message": "Prompt must contain the word 'json' in some form to use 'response_format' of type 'json_object'. "
+                       "PRIVATE-SERVER-TAIL: json_object is not supported."}})
+
+    def client(*args, **kwargs):
+        kwargs["transport"] = httpx.MockTransport(endpoint)
+        return original_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "Client", client)
+    with pytest.raises(BackendError) as caught:
+        extract("Sample A has mass 3 g.",
+                {"prompt_description": "Extract sample mass.", "field_list": {"mass": "Sample mass and unit"}},
+                model="unregistered-json-model", base_url="https://primary.invalid/v1",
+                api_key="synthetic-primary-json-secret", output_dir=tmp_path / "run", progress="quiet",
+                fallback=ModelConnection(model="unused-backup", base_url="https://backup.invalid/v1",
+                                         api_key="synthetic-backup-json-secret"))
+    assert len(calls) == 2 and caught.value.code == "json_prompt_required"
+    assert "PRIVATE-SERVER-TAIL" not in str(caught.value)
+    state = read_json(tmp_path / "run/diagnostics/execution/checkpoint.json")["state"]
+    assert state["calls_used"] == 2

@@ -9,6 +9,10 @@ _BACKEND_HINTS = {
     "permission_denied": "Check whether this key has access to the selected model and region.",
     "not_found": "Check the model ID and API endpoint; the model or route was not found.",
     "invalid_request": "Check the model's supported parameters and output mode; no parameter fallback was attempted.",
+    "json_prompt_required": (
+        "JSON Object mode requires an explicit JSON output instruction in a system or user message. "
+        "Fix the request instruction before retrying; no output-mode fallback was attempted."
+    ),
 }
 
 

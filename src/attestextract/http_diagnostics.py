@@ -12,6 +12,27 @@ import httpx
 from .diagnostics import redact_text
 
 
+_JSON_PROMPT_REQUIREMENT = re.compile(
+    r"^[\"']?(?:prompt|messages)[\"']?\s+must\s+contain\s+the\s+word\s+"
+    r"[\"']?json[\"']?\s+in\s+some\s+form\s*,?\s+to\s+use\s+"
+    r"[\"']?response_format[\"']?\s+of\s+type\s+[\"']?json_object[\"']?(?:\.|$)",
+    re.IGNORECASE,
+)
+
+
+def is_json_prompt_requirement_error(diagnostic: dict[str, Any], structured_output: str) -> bool:
+    """Recognize a specific prompt precondition, not a refusal of JSON mode.
+
+    Only inspect the bounded, redacted scalar message. Require the service's
+    explicit leading statement; mentions in arbitrary excerpts or advice are
+    insufficient. The message itself must never be copied into a terminal hint.
+    """
+    if structured_output != "json_object" or diagnostic.get("status_code") not in (400, 422):
+        return False
+    message = diagnostic.get("provider_error", {}).get("message")
+    return isinstance(message, str) and _JSON_PROMPT_REQUIREMENT.match(message) is not None
+
+
 def describe_http_error(
     response: httpx.Response, *, chunk_id: str, attempt: int,
     secrets: Iterable[str] = (), compatibility_hint: str | None = None,

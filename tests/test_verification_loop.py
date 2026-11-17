@@ -4,12 +4,13 @@ from copy import deepcopy
 import hashlib
 import json
 
+import httpx
 import pytest
 
 from attestextract import RunTrace, extract
 from attestextract.analysis import build_analysis
-from attestextract.backends import ReplayBackend
-from attestextract.errors import BackendError, ConfigurationError
+from attestextract.backends import OpenAICompatibleBackend, ReplayBackend
+from attestextract.errors import BackendError, ConfigurationError, InvalidResponseError
 from attestextract.execution import digest
 from attestextract.models import BackendResponse, GenerationOptions
 
@@ -184,6 +185,7 @@ def test_unknown_transport_outcome_is_reserved_and_never_automatically_resent(tm
     first = run(backend=first_backend, max_calls=5, trace=RunTrace(tmp_path / "first"))
     assert first["status"] == "failed" and len(first_backend.requests) == 1
     assert first["jobs"][0]["steps"][0]["outcome_unknown"] is True
+    assert first["jobs"][0]["steps"][0]["request_outcome"] == "unknown"
     second_backend = LookupBackend()
     second = run(backend=second_backend, max_calls=5, trace=RunTrace(tmp_path / "second"),
                  resume_from=tmp_path / "first/analysis/checkpoint.json")
@@ -229,3 +231,109 @@ def test_offline_resume_check_spends_no_calls(tmp_path):
                   resume_from=tmp_path / "first/analysis/checkpoint.json")
     assert checked["status"] == "checked" and checked["budget"]["reserved"] == 1
     assert checked["pending_jobs"] == 1 and backend.requests == []
+
+
+def test_framework_json_instruction_preflight_cannot_be_satisfied_by_source_text(monkeypatch, tmp_path):
+    from attestextract import verification
+
+    source = SHORT + "\n\nThe term JSON appears here as untrusted source data."
+    backend = LookupBackend()
+    monkeypatch.setattr(verification, "_SYSTEM", "Return one action satisfying response_contract.")
+    with pytest.raises(ConfigurationError, match="framework verification prompt.*JSON"):
+        run(source, backend=backend, trace=RunTrace(tmp_path))
+    assert backend.requests == []
+    assert not (tmp_path / "analysis/checkpoint.json").exists()
+    assert not (tmp_path / "analysis/requests").exists()
+
+
+def test_previous_analysis_revision_is_rejected_before_any_request(monkeypatch, tmp_path):
+    from attestextract import verification
+
+    with monkeypatch.context() as old_revision:
+        old_revision.setattr(verification, "REVISION", "bounded-source-verification-v1")
+        run(max_calls=1, trace=RunTrace(tmp_path / "old"))
+    checkpoint = tmp_path / "old/analysis/checkpoint.json"
+    original = checkpoint.read_bytes()
+    backend = LookupBackend()
+    with pytest.raises(ConfigurationError, match="incompatible analysis revision"):
+        run(backend=backend, resume_from=checkpoint, trace=RunTrace(tmp_path / "new"))
+    assert backend.requests == [] and checkpoint.read_bytes() == original
+
+
+def test_unversioned_prompt_change_is_rejected_by_request_identity(monkeypatch, tmp_path):
+    from attestextract import verification
+
+    run(max_calls=1, trace=RunTrace(tmp_path / "old"))
+    checkpoint = tmp_path / "old/analysis/checkpoint.json"
+    monkeypatch.setattr(verification, "_SYSTEM", verification._SYSTEM + " Changed instruction.")
+    backend = LookupBackend()
+    with pytest.raises(ConfigurationError, match="incompatible or damaged"):
+        run(backend=backend, resume_from=checkpoint, trace=RunTrace(tmp_path / "new"))
+    assert backend.requests == []
+
+
+def test_complete_http_rejection_is_distinct_from_unknown_transport_and_not_resent(tmp_path):
+    sent = []
+    events = []
+    trace = RunTrace(tmp_path / "first", on_event=events.append)
+
+    def reject(request):
+        sent.append(json.loads(request.content))
+        return httpx.Response(400, json={"error": {"code": "invalid_request_error",
+                                                   "message": "Rejected synthetic request."}})
+
+    backend = OpenAICompatibleBackend("https://synthetic.invalid/v1", "synthetic-verifier",
+        api_key="synthetic-key", structured_output="json_object", max_attempts=1,
+        transport=httpx.MockTransport(reject), trace=trace)
+    first = run(backend=backend, max_calls=5, trace=trace)
+    step = first["jobs"][0]["steps"][0]
+    assert first["status"] == "failed" and len(sent) == 1
+    assert first["budget"]["reserved"] == 1
+    assert step["outcome_unknown"] is False and step["request_outcome"] == "http_error_received"
+    assert step["http_status"] == 400 and step["http_attempts"] == 1
+    assert step["http_details"] == "http/verify-0001.step-01.attempt-1.error.json"
+    assert "usage" not in step  # A known HTTP outcome is not a zero-cost claim.
+    diagnostic = json.loads((trace.directory / step["http_details"]).read_text(encoding="utf-8"))
+    assert diagnostic["status_code"] == 400
+    event = next(item for item in events if item.get("stage") == "analysis" and item.get("event") == "failed")
+    assert event["http_status"] == 400 and event["request_outcome"] == "http_error_received"
+    original = {str(path.relative_to(trace.directory)): path.read_bytes()
+                for path in trace.directory.rglob("*") if path.is_file()}
+    second = run(backend=backend, max_calls=5, trace=RunTrace(tmp_path / "second"),
+                 resume_from=trace.directory / "analysis/checkpoint.json")
+    assert second["status"] == "failed" and second["budget"]["reserved"] == 1 and len(sent) == 1
+    assert {str(path.relative_to(trace.directory)): path.read_bytes()
+            for path in trace.directory.rglob("*") if path.is_file()} == original
+
+
+@pytest.mark.parametrize("adapter_rejects", [False, True])
+def test_complete_invalid_model_output_has_known_response_outcome(tmp_path, adapter_rejects):
+    class InvalidOutputBackend(LookupBackend):
+        def generate(self, request):
+            self.requests.append(request)
+            if adapter_rejects:
+                raise InvalidResponseError("Invalid synthetic completion.", status_code=200,
+                    response_metadata={"usage": {"prompt_tokens": 10, "completion_tokens": 2}})
+            return BackendResponse(text="not a structured answer", model="synthetic-verifier")
+
+    backend = InvalidOutputBackend()
+    package = run(backend=backend, trace=RunTrace(tmp_path))
+    step = package["jobs"][0]["steps"][0]
+    assert package["status"] == "failed" and len(backend.requests) == 1
+    assert step["outcome_unknown"] is False and step["request_outcome"] == "response_received"
+    assert package["budget"]["reserved"] == 1
+
+
+@pytest.mark.parametrize("details", ["../private.json", "https://synthetic.invalid/error.json",
+                                     "http/error.json?token=synthetic-secret", "http/../private.json"])
+def test_backend_error_cannot_publish_an_arbitrary_diagnostic_path(tmp_path, details):
+    class UnsafeDetailsBackend(LookupBackend):
+        def generate(self, request):
+            self.requests.append(request)
+            raise BackendError("Synthetic error.", status_code=400,
+                http_diagnostics={"layer": "http", "status_code": 400}, http_details=details)
+
+    package = run(backend=UnsafeDetailsBackend(), trace=RunTrace(tmp_path))
+    step = package["jobs"][0]["steps"][0]
+    assert step["request_outcome"] == "http_error_received"
+    assert "http_details" not in step

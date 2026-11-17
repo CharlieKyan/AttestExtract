@@ -50,17 +50,27 @@ def hashes(root):
 
 
 class Service:
-    def __init__(self, *, forbidden=False):
+    def __init__(self, *, mode="json_schema", forbidden=False):
         self.calls = []
+        self.requests = []
+        self.mode = mode
         self.forbidden = forbidden
 
     def handle(self, request):
         if self.forbidden:
             raise AssertionError("A completed extraction/analysis resume must not send a request")
         assert request.url.host == "synthetic.invalid" and request.method == "POST"
+        assert request.headers["authorization"] == "Bearer synthetic-install-secret"
         body = json.loads(request.content)
+        self.requests.append(body)
+        assert body["response_format"]["type"] == self.mode
+        if self.mode == "json_object" and not any(
+            "json" in message["content"].casefold() for message in body["messages"]
+        ):
+            return httpx.Response(400, json={"error": {"type": "invalid_request_error",
+                "message": "Prompt must contain the word 'json' in some form to use "
+                           "'response_format' of type 'json_object'."}})
         payload = json.loads(body["messages"][-1]["content"])
-        assert body["response_format"]["type"] == "json_schema"
         if "source" in payload:
             self.calls.append("extraction")
             records = []
@@ -128,8 +138,9 @@ class Service:
 
 def run(root, service, *, resume=None):
     backend = OpenAICompatibleBackend("https://synthetic.invalid/v1", "synthetic-analysis",
+                                      api_key="synthetic-install-secret",
                                       transport=httpx.MockTransport(service.handle),
-                                      structured_output="json_schema", max_attempts=1)
+                                      structured_output=service.mode, max_attempts=1)
     return extract(SOURCE, TASK, backend=backend, output_dir=root, progress="quiet",
                    generation=GenerationOptions(max_output_tokens=2048),
                    execution=ExecutionOptions(adaptive_chunking=False, max_model_calls=20),
@@ -137,8 +148,8 @@ def run(root, service, *, resume=None):
                    max_analysis_calls=3, resume_from=resume)
 
 
-def accept(root):
-    service = Service()
+def accept(root, mode):
+    service = Service(mode=mode)
     first = root / "first"
     result = run(first, service)
     assert result.run.chunk_count > 1, "Acceptance must exercise multiple source chunks"
@@ -165,31 +176,41 @@ def accept(root):
         assert len(rows) == 1 and json.loads(rows[0][1]) == "12" and rows[0][2].startswith("/candidates/")
         assert db.execute("PRAGMA foreign_key_check").fetchall() == []
     old = hashes(first)
-    replay_service = Service(forbidden=True)
+    replay_service = Service(mode=mode, forbidden=True)
     replay = run(root / "replay", replay_service, resume=first)
     assert replay.analysis["status"] == "complete" and replay_service.calls == []
     assert replay.analysis["objects"] == analysis["objects"]
     assert replay.analysis["observations"] == analysis["observations"]
     assert replay.analysis["budget"]["reserved"] == 3
     assert hashes(first) == old
-    return {"extraction_chunks": result.run.chunk_count, "synthetic_http_calls": len(service.calls),
+    assert len(service.requests) == len(service.calls)
+    if mode == "json_object":
+        assert all("json" in body["messages"][0]["content"].casefold() for body in service.requests)
+    for artifact in first.rglob("*"):
+        if artifact.is_file():
+            assert b"synthetic-install-secret" not in artifact.read_bytes()
+    return {"structured_output": mode, "extraction_chunks": result.run.chunk_count,
+            "synthetic_http_calls": len(service.requests),
             "analysis_calls": 3, "resume_new_calls": 0, "observations": 3, "table_objects": 2,
+            "analysis_budget_limit": 3, "analysis_budget_reserved": analysis["budget"]["reserved"],
+            "json_object_prompt_gate": mode == "json_object", "credential_isolation": True,
             "same_names_distinct_ids": True, "sample_not_promoted": True,
             "multiple_conditions_preserved": True, "sqlite_references_valid": True,
             "historical_artifacts_unchanged": True}
 
 
-def accept_cli(root):
+def accept_cli(root, mode):
     inputs = root / "cli-inputs"
     inputs.mkdir()
     source, task, config = inputs / "source.md", inputs / "task.json", inputs / "models.toml"
     source.write_bytes(SOURCE.encode("utf-8"))
     task.write_text(json.dumps(TASK), encoding="utf-8")
     config.write_text('[profiles.synthetic]\nbase_url = "https://synthetic.invalid/v1"\n'
-                      'model = "synthetic-analysis"\nstructured_output = "json_schema"\n'
+                      f'model = "synthetic-analysis"\nstructured_output = "{mode}"\n'
+                      'api_key_env = "ATTESTEXTRACT_TEST_API_KEY"\n'
                       'max_attempts = 1\nformat_retries = 0\n'
                       '[profiles.synthetic.generation]\nmax_output_tokens = 2048\n', encoding="utf-8")
-    service = Service()
+    service = Service(mode=mode)
     registry = BackendRegistry()
 
     def factory(*, config, api_key, trace):
@@ -204,7 +225,9 @@ def accept_cli(root):
                  "--table-subject", "one reactor occurrence in its original site", "--max-analysis-calls", "3",
                  "--analysis-max-steps", "4", "--analysis-input-budget", "48000"]
     captured = io.StringIO()
-    with redirect_stdout(captured):
+    credentials = {"ATTESTEXTRACT_TEST_API_KEY": "synthetic-install-secret",
+                   "DEEPSEEK_API_KEY": "unselected-synthetic-account"}
+    with patch.dict(os.environ, credentials), redirect_stdout(captured):
         assert cli.main([*arguments, "--output-dir", str(root / "cli-check"), "--check"], registry=registry) == 0
         assert service.calls == []
         assert cli.main([*arguments, "--output-dir", str(root / "cli")], registry=registry) == 0
@@ -214,11 +237,18 @@ def accept_cli(root):
     assert [call for call in service.calls if call != "extraction"] == ["search", "read", "decide"]
     old = hashes(root / "cli")
     service.forbidden = True
-    with redirect_stdout(captured):
+    with patch.dict(os.environ, credentials), redirect_stdout(captured):
         assert cli.main([*arguments, "--output-dir", str(root / "cli-replay"),
                          "--resume", str(root / "cli")], registry=registry) == 0
     assert len(service.calls) == before and hashes(root / "cli") == old
+    assert len(service.requests) == before
+    if mode == "json_object":
+        assert all("json" in body["messages"][0]["content"].casefold() for body in service.requests)
     (root / "cli-terminal.txt").write_text(captured.getvalue(), encoding="utf-8")
+    for artifact in (root / "cli").rglob("*"):
+        if artifact.is_file():
+            assert b"synthetic-install-secret" not in artifact.read_bytes()
+            assert b"unselected-synthetic-account" not in artifact.read_bytes()
     return {"cli_check_new_calls": 0, "cli_synthetic_http_calls": before,
             "cli_analysis_calls": 3, "cli_resume_new_calls": 0, "cli_exit_status": 0}
 
@@ -240,12 +270,19 @@ def main():
     with patch.dict(os.environ, {}, clear=True), patch("socket.socket.connect", blocked), \
             patch("socket.socket.connect_ex", blocked), patch("socket.create_connection", blocked), \
             patch("socket.getaddrinfo", blocked):
-        details = accept(root)
-        details.update(accept_cli(root))
+        assert "json" not in SOURCE.casefold() and "json" not in json.dumps(TASK).casefold()
+        modes = {}
+        for mode in ("json_schema", "json_object"):
+            directory = root / mode
+            directory.mkdir()
+            modes[mode] = accept(directory, mode)
+            modes[mode].update(accept_cli(directory, mode))
     assert not network_attempts
     summary = {"passed": True, "package_version": attestextract.__version__,
                "module_path": str(module_path), "installed_package_verified": True,
-               "network_attempts": 0, "real_model_calls": 0, **details,
+               "network_attempts": 0, "real_model_calls": 0, "modes": modes,
+               "synthetic_http_calls": sum(item["synthetic_http_calls"] + item["cli_synthetic_http_calls"]
+                                           for item in modes.values()),
                "notice": "Synthetic offline acceptance; not provider or scientific-quality validation."}
     (root / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(summary, ensure_ascii=False))

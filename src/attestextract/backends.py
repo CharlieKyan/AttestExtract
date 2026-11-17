@@ -15,7 +15,7 @@ from .capabilities import check_structured_output
 from .connection_observation import ConnectionObservation
 from .errors import BackendError, ConfigurationError, InvalidResponseError
 from .diagnostics import RunTrace, redact_text
-from .http_diagnostics import describe_http_error
+from .http_diagnostics import describe_http_error, is_json_prompt_requirement_error
 from .models import BackendResponse, ExtractionRequest
 from .schema_diagnostics import assess_schema_compliance, schema_request_info
 from .transport import (bounded_timeout, connection_signature, safe_to_retry, timeout_phase,
@@ -361,6 +361,12 @@ class OpenAICompatibleBackend:
                         secrets=[self._api_key] if self._api_key else [],
                         compatibility_hint=compatibility_hint,
                     )
+                    error_code = _http_error_code(response.status_code)
+                    if is_json_prompt_requirement_error(diagnostic, self.structured_output):
+                        error_code = "json_prompt_required"
+                        compatibility_hint = None
+                        diagnostic["compatibility_hint"] = None
+                        diagnostic["classification"] = error_code
                     diagnostic["format_attempt"] = request.format_attempt
                     diagnostic["schema_request"] = schema_info
                     artifact = None
@@ -381,13 +387,18 @@ class OpenAICompatibleBackend:
                                               attempt=attempt, status_code=response.status_code)
                         self._pause(attempt)
                         continue
+                    message = (f"The model endpoint returned HTTP {response.status_code} "
+                               f"after {attempt} attempt(s).")
+                    if compatibility_hint:
+                        message += " " + compatibility_hint
+                    if error_code == "json_prompt_required" and artifact is not None:
+                        message += f" Diagnostic details: {artifact}."
                     raise BackendError(
-                        f"The model endpoint returned HTTP {response.status_code} "
-                        f"after {attempt} attempt(s)." + (" " + compatibility_hint if compatibility_hint else ""),
+                        message,
                         status_code=response.status_code,
                         attempts=attempt,
                         http_diagnostics=diagnostic, http_details=artifact,
-                        code=_http_error_code(response.status_code),
+                        code=error_code,
                         retryable=response.status_code in _RETRYABLE_STATUS_CODES,
                     )
                 if self._trace is not None:

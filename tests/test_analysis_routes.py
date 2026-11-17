@@ -3,6 +3,7 @@
 import json
 
 import httpx
+import pytest
 
 from attestextract import ExecutionOptions, extract
 
@@ -30,6 +31,12 @@ def install_http(monkeypatch, tmp_path, handler):
         body = json.loads(request.content)
         assert body["model"] == "unregistered-science-model"
         sent.append(body)
+        if body.get("response_format", {}).get("type") == "json_object" and not any(
+            "json" in message["content"].casefold() for message in body["messages"]
+        ):
+            return httpx.Response(400, json={"error": {"type": "invalid_request_error",
+                "message": "Prompt must contain the word 'json' in some form to use "
+                           "'response_format' of type 'json_object'."}})
         return handler(body, json.loads(body["messages"][-1]["content"]))
 
     def client(*args, **kwargs):
@@ -40,10 +47,10 @@ def install_http(monkeypatch, tmp_path, handler):
     return sent
 
 
-def run(text, directory, **kwargs):
+def run(text, directory, *, max_analysis_calls=2, **kwargs):
     return extract(text, TASK, base_url="https://unregistered-analysis.invalid/v1",
                    model="unregistered-science-model", api_key="synthetic-analysis-secret",
-                   table_subject="an individual sample", max_analysis_calls=2,
+                   table_subject="an individual sample", max_analysis_calls=max_analysis_calls,
                    output_dir=directory, progress="quiet", **kwargs)
 
 
@@ -68,8 +75,10 @@ def decide(objects, bindings):
             "objects": objects, "relations": [], "bindings": bindings}
 
 
-def test_public_automatic_model_analysis_uses_successful_compatible_route_and_ledger(monkeypatch, tmp_path):
+@pytest.mark.parametrize("direct_object", [False, True], ids=["schema-to-object", "direct-object"])
+def test_public_automatic_model_analysis_uses_successful_compatible_route_and_ledger(monkeypatch, tmp_path, direct_object):
     text = "Sample A has mass 3 g."
+    assert "json" not in text.casefold() and "json" not in json.dumps(TASK).casefold()
 
     def respond(body, payload):
         if body["response_format"]["type"] == "json_schema":
@@ -81,6 +90,10 @@ def test_public_automatic_model_analysis_uses_successful_compatible_route_and_le
                 "entity": "A", "value": "3", "unit": "g", "conditions": None},
                 "quotes": {"entity": text, "value": text, "unit": text, "conditions": ""}}]})
         if not payload["lookup_history"]:
+            return envelope({"action": "search", "question": "Find the original sample statement.",
+                             "query": "Sample A", "search_offset": 0, "passage_ids": [],
+                             "neighbors": 0, "objects": [], "relations": [], "bindings": []})
+        if payload["lookup_history"][-1]["action"] == "search":
             return envelope(read_initial_passage(payload))
         return envelope(decide(
             [{"object_id": "sample", "name": "A", "kind": "sample", "scope": "this experiment",
@@ -92,28 +105,65 @@ def test_public_automatic_model_analysis_uses_successful_compatible_route_and_le
 
     sent = install_http(monkeypatch, tmp_path, respond)
     output = tmp_path / "run"
-    result = run(text, output)
+    options = {"model_options": {"structured_output": "json_object"}} if direct_object else {}
+    result = run(text, output, max_analysis_calls=3, **options)
     assert result.schema_version == "0.5" and result.run.backend == "automatic"
-    assert [attempt.status for attempt in result.run.generation_attempts] == ["failed", "completed"]
+    extraction_attempts = 1 if direct_object else 2
+    assert [attempt.status for attempt in result.run.generation_attempts] == (
+        ["completed"] if direct_object else ["failed", "completed"])
     route_id = result.run.chunk_provenance["chunk-0001"].route_id
     assert result.run.routes[route_id]["config"]["structured_output"] == "json_object"
-    assert [body["response_format"]["type"] for body in sent] == ["json_schema", "json_object", "json_object", "json_object"]
+    assert [body["response_format"]["type"] for body in sent] == (
+        [] if direct_object else ["json_schema"]) + ["json_object"] * 4
     assert result.analysis["status"] == "complete"
     steps = [step for job in result.analysis["jobs"] for step in job["steps"]]
     assert {step["route_id"] for step in steps} == {route_id}
     assert all(job["status"] == "completed" and job["attempts"] == len(job["steps"])
                for job in result.analysis["jobs"])
-    assert [step["action"] for step in steps] == ["read", "decide"]
+    assert [step["action"] for step in steps] == ["search", "read", "decide"]
     assert all(step["status"] == "completed" and step["http_attempts"] == 1 for step in steps)
     assert all(step["reported_model"] == "reported-synthetic-revision" for step in steps)
-    assert result.analysis["budget"]["reserved"] == result.analysis["budget"]["extraction_reserved"] == 2
-    assert result.analysis["budget"]["total_reserved"] == 4
+    assert result.analysis["budget"]["reserved"] == 3
+    assert result.analysis["budget"]["extraction_reserved"] == extraction_attempts
+    assert result.analysis["budget"]["total_reserved"] == extraction_attempts + 3
     observation = result.analysis["observations"][0]
     assert observation["subject_id"] == result.analysis["objects"][0]["object_id"]
     assert observation["source_record"] == "/candidates/0" and observation["value"] == "3"
+    # Resuming the successful route must neither renegotiate nor generate again.
+    previous_calls = len(sent)
+    old_files = {str(path.relative_to(output)): path.read_bytes()
+                 for path in output.rglob("*") if path.is_file()}
+    resumed = run(text, tmp_path / "resumed", max_analysis_calls=3, resume_from=output, **options)
+    assert len(sent) == previous_calls and resumed.analysis["status"] == "complete"
+    assert resumed.analysis["budget"]["reserved"] == 3
+    assert resumed.analysis["observations"] == result.analysis["observations"]
+    assert old_files == {str(path.relative_to(output)): path.read_bytes()
+                         for path in output.rglob("*") if path.is_file()}
     for path in output.rglob("*"):
         if path.is_file():
             assert b"synthetic-analysis-secret" not in path.read_bytes()
+
+
+def test_prompt_requirement_rejection_does_not_downgrade_analysis_or_resend(monkeypatch, tmp_path):
+    text = "Sample A has mass 3 g."
+
+    def respond(body, payload):
+        if "source" in payload:
+            return envelope({"records": [{"record_type": "mass", "values": {
+                "entity": "A", "value": "3", "unit": "g", "conditions": None},
+                "quotes": {"entity": text, "value": text, "unit": text, "conditions": ""}}]})
+        # A service rejection must remain visible, even if our local prompt is valid.
+        return httpx.Response(400, json={"error": {"type": "invalid_request_error",
+            "message": "Prompt must contain the word 'json' in some form to use "
+                       "'response_format' of type 'json_object'."}})
+
+    sent = install_http(monkeypatch, tmp_path, respond)
+    result = run(text, tmp_path / "rejected", model_options={"structured_output": "json_object"})
+    assert len(sent) == 2 and all(body["response_format"]["type"] == "json_object" for body in sent)
+    assert len(result.candidates) == 1 and result.analysis["status"] == "failed"
+    assert result.analysis["budget"]["reserved"] == 1
+    assert result.analysis["budget"]["total_reserved"] == 2
+    assert result.analysis["jobs"][0]["steps"][0]["http_attempts"] == 1
 
 
 TABLE = ("<table><tr><td>A</td><td>11</td><td>g</td></tr>"

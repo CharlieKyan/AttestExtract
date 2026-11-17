@@ -158,7 +158,8 @@ def rejection_reason(exc: Exception, route: AutomaticRoute) -> str | None:
     if not isinstance(exc, BackendError):
         return None
     if exc.status_code in {401, 403} or exc.code in {
-        "timeout", "transport_error", "authentication_error", "permission_denied", "refusal", "truncated_response"
+        "timeout", "transport_error", "authentication_error", "permission_denied", "refusal", "truncated_response",
+        "json_prompt_required",
     }:
         return None
     if isinstance(exc, InvalidResponseError) and (

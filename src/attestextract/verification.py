@@ -9,6 +9,7 @@ from __future__ import annotations
 from copy import deepcopy
 import hashlib
 import json
+import re
 
 from .analysis import (_backend_route, _checkpoint_path, _input_observations,
                        _strict_schema, validate_analysis_options)
@@ -20,7 +21,7 @@ from .verification_protocol import Step, apply_decision, parse_step
 from .verification_sources import SourceIndex
 
 
-REVISION = "bounded-source-verification-v1"
+REVISION = "bounded-source-verification-v2"
 BATCH_SIZE = 6
 _SYSTEM = (
     "Verify scientific object identity, direct observation ownership and target-field meaning. "
@@ -28,7 +29,8 @@ _SYSTEM = (
     "Do not repeat whole-document extraction. Reuse supplied extraction candidates and known objects. "
     "Legacy entity strings are unverified hints: they may mix a subject with a measured property. "
     "Separate physical/conceptual subjects, measured properties, statistical populations and conditions. "
-    "Return exactly one action satisfying response_contract: search, read, or decide. "
+    "Return exactly one valid JSON object satisfying response_contract: search, read, or decide. "
+    "Output JSON only, without Markdown fences or commentary. "
     "Use question to describe the actual unresolved issue freely; no fixed domain taxonomy is required. "
     "search performs literal case-insensitive search ONLY in this source; query is a source phrase of at most 256 characters, "
     "not a natural-language question. Use search_offset to page results; try alternate terms when needed. "
@@ -69,6 +71,13 @@ def _initial(batch, index, entries):
 
 def _request(job, step_number, result, table_subject, batch, observations, objects,
              entries, index, history, generation, max_steps, input_budget):
+    # This is the framework's own output contract. A word in user-supplied
+    # source text must not accidentally satisfy a missing system instruction.
+    if "json" not in _SYSTEM.casefold():
+        raise ConfigurationError(
+            "The framework verification prompt must explicitly request JSON output; "
+            "no verification model request was sent."
+        )
     anchor = min((_position(item, entries) for item in batch), default=0)
     batch_ids = {item["observation_id"] for item in batch}
     hints = sorted((item for item in observations if item["observation_id"] not in batch_ids),
@@ -197,8 +206,16 @@ def _load(path, fingerprint, jobs, max_calls, max_steps):
     try:
         payload = load_json(path.read_text(encoding="utf-8"))
         state = payload["state"]
-        if payload["sha256"] != digest(state) or state["version"] != "0.2" or state["fingerprint"] != fingerprint:
-            raise ValueError("identity or checksum")
+        if payload["sha256"] != digest(state) or state["version"] != "0.2":
+            raise ValueError("version or checksum")
+        if state.get("revision") != REVISION:
+            raise ConfigurationError(
+                "Verification checkpoint uses an incompatible analysis revision. "
+                "Preserve the old run and reuse verified extraction in a new analysis branch; "
+                "no new model request was sent."
+            )
+        if state["fingerprint"] != fingerprint:
+            raise ValueError("identity")
         saved = state["jobs"]
         if len(saved) != len(jobs) or any(
             (old["job_id"], old["observation_ids"], old["kind"]) !=
@@ -397,7 +414,8 @@ def build_verification(text, result, *, table_subject, backend, generation=None,
                 response = chosen.generate(request)
                 step.update(model=response.model, reported_model=response.reported_model,
                     request_id=response.request_id, usage=response.usage, http_attempts=response.attempts,
-                    elapsed_seconds=response.elapsed_seconds, outcome_unknown=False)
+                    elapsed_seconds=response.elapsed_seconds, outcome_unknown=False,
+                    request_outcome="response_received")
                 if trace is not None:
                     trace.write_text(f"analysis/responses/{request.artifact_id}.txt", response.text)
                     trace.write_json(f"analysis/responses/{request.artifact_id}.meta.json", {
@@ -422,16 +440,32 @@ def build_verification(text, result, *, table_subject, backend, generation=None,
             except (BackendError, ValueError, KeyboardInterrupt) as exc:
                 code = "interrupted" if isinstance(exc, KeyboardInterrupt) else getattr(exc, "code", "invalid_analysis_response")
                 step.update(status="failed", error_code=code, outcome_unknown=response is None,
+                            request_outcome="unknown" if response is None else "response_received",
                             error=str(exc) if not isinstance(exc, KeyboardInterrupt) else "Interrupted; request will not be resent.")
                 if isinstance(exc, BackendError):
                     step["http_attempts"] = exc.attempts
+                    if exc.status_code is not None:
+                        step["http_status"] = exc.status_code
+                    details = exc.http_details
+                    if isinstance(details, str) and re.fullmatch(r"http/[A-Za-z0-9_.-]+\.json", details):
+                        step["http_details"] = details
+                    diagnostic = exc.http_diagnostics
+                    if (isinstance(diagnostic, dict) and diagnostic.get("layer") == "http"
+                            and exc.status_code is not None
+                            and diagnostic.get("status_code") == exc.status_code):
+                        # The adapter attaches these details only after receiving
+                        # the complete HTTP error body. Billing remains unknown.
+                        step.update(outcome_unknown=False, request_outcome="http_error_received")
                     metadata = getattr(exc, "response_metadata", None)
                     if metadata is not None:
-                        step.update(usage=metadata.get("usage", {}), outcome_unknown=False)
+                        step.update(usage=metadata.get("usage", {}), outcome_unknown=False,
+                                    request_outcome="response_received")
                 job.update(status="failed", error_code=code)
                 _mark(batch, "failed", "Verification failed; see the saved step response/error.")
                 save()
-                event("failed", job_id=job["job_id"], error_code=code)
+                event("failed", job_id=job["job_id"], error_code=code,
+                      http_status=step.get("http_status"), request_outcome=step["request_outcome"],
+                      http_details=step.get("http_details"))
                 stop = True
                 break
         if job["status"] == "active" and len(job["steps"]) == max_steps:

@@ -300,6 +300,13 @@ jobs:
                               "--output", str(analysis_output)], check=True, cwd=root, env=env)
               analysis = json.loads((analysis_output / "summary.json").read_text(encoding="utf-8"))
               assert analysis["passed"] and analysis["real_model_calls"] == analysis["network_attempts"] == 0
-              assert analysis["analysis_calls"] == 3 and analysis["resume_new_calls"] == 0
+              assert set(analysis["modes"]) == {"json_schema", "json_object"}
+              for mode, checks in analysis["modes"].items():
+                  assert checks["analysis_calls"] == checks["cli_analysis_calls"] == 3
+                  assert checks["resume_new_calls"] == checks["cli_resume_new_calls"] == 0
+                  assert checks["analysis_budget_reserved"] == checks["analysis_budget_limit"] == 3
+                  assert checks["cli_check_new_calls"] == checks["cli_exit_status"] == 0
+                  assert checks["credential_isolation"]
+              assert analysis["modes"]["json_object"]["json_object_prompt_gate"]
               assert analysis["package_version"] == expected_version
               assert Path(analysis["module_path"]).is_relative_to(environment)

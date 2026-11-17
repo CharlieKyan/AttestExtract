@@ -173,6 +173,21 @@ format regeneration or automatic resend after an unknown outcome. Invalid or
 incomplete responses are retained and stop that invocation rather than being
 repaired into accepted decisions.
 
+The framework explicitly requests one valid JSON object in its verification
+system message. This instruction is present before request hashing and byte
+accounting, and checked locally before reserving a generation. Users do not
+need to put technical JSON instructions into their task or source text. Output
+mode selection remains fixed during verification; a missing prompt prerequisite
+does not authorize a mode downgrade or a second request.
+
+An explicit JSON-prompt requirement from the service is reported as
+`json_prompt_required`, with a fixed safe explanation and the private diagnostic
+path. Arbitrary provider text is not echoed to the terminal because it may
+contain source content. A complete HTTP error is recorded as
+`request_outcome=http_error_received`; a transport failure with unknown delivery
+remains `unknown`. Neither releases a reservation, proves zero billing, or grants
+permission to resend.
+
 `complete` means all planned jobs submitted valid decisions. A decision may
 explicitly report unknown ownership or field meaning, so complete does not mean
 all facts are correct or ready for quantitative analysis. Exhausted step/input
@@ -218,3 +233,37 @@ including its 60,000-character restriction and existing failure behavior. They
 are not automatically migrated to the new loop; new lookup controls cannot
 retrofit an old failed discovery. Use a fresh run, without `--resume` from that
 old analysis, when evaluating the new policy. Historical files are not rewritten.
+
+Starting with dev36, bounded verification uses compatibility revision
+`bounded-source-verification-v2`. The corrected output instruction changes
+request identity. Dev35 revision-v1 analysis checkpoints therefore cannot be
+resumed under v2, even though both use analysis schema `0.2`. A mismatch is
+reported before any new model request; do not edit hashes or delete old analysis
+files to bypass this check. The extraction compatibility revision is unchanged.
+
+To reuse extraction while explicitly starting a new analysis branch, the
+existing public CLI can first restore extraction **without** `--table-subject`,
+then resume from that new extraction-only directory with a table subject. For
+example, assuming the original run has two completed extraction calls and one
+failed analysis call within an eight-call analysis budget:
+
+```powershell
+python -m attestextract extract `
+  --input input/paper.md --task task.json --model-id deepseek:deepseek-flash `
+  --resume output/old-run --max-model-calls 2 --output-dir output/extraction-reused
+if ($LASTEXITCODE -ne 0) { throw "Extraction replay failed; stop before analysis." }
+
+python -m attestextract extract `
+  --input input/paper.md --task task.json --model-id deepseek:deepseek-flash `
+  --resume output/extraction-reused --max-model-calls 2 `
+  --table-subject "Individual specimens, distinguished by batch and experiment" `
+  --max-analysis-calls 7 --output-dir output/analysis-restarted
+```
+
+The extraction cap prevents new extraction calls. The second command can make
+new analysis calls. The new branch does not automatically import the old
+analysis ledger: its limit of seven plus the one historical reservation respects
+the original total of eight. Preserve both runs when reporting cumulative usage.
+The same inputs, model and task must still pass ordinary recovery validation;
+there is no force-resume or restart-analysis bypass. Fresh runs need neither
+step. This is recovery across a prompt revision, not an ordinary user setup step.

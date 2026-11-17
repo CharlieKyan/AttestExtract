@@ -79,6 +79,17 @@ class ConsoleProgress:
             elif kind in {"completed", "failed"}:
                 self._waiting_since = None
                 self._write(f"Analysis {event.get('job_id', '?')}: {kind}; calls {event.get('used', '?')}/{event.get('limit', '?')}")
+                if kind == "failed":
+                    if event.get("error_code") == "json_prompt_required":
+                        self._write("Analysis request rejected: JSON Object mode requires an explicit JSON output instruction; "
+                                    "the framework request must be corrected. No automatic retry or mode downgrade.")
+                    elif event.get("request_outcome") == "http_error_received":
+                        self._write(f"Analysis received HTTP {event.get('http_status', '?')} error; "
+                                    "no usable completion and no automatic retry.")
+                    elif event.get("request_outcome") == "unknown":
+                        self._write("Analysis request outcome is unknown; no automatic retry.")
+                    if event.get("http_details"):
+                        self._write(f"Analysis HTTP details: diagnostics/{event['http_details']}")
             elif kind == "finished":
                 self._waiting_since = None
                 self._write(f"Document analysis: {event.get('status', '?')}; analysis calls {event.get('used', '?')}/{event.get('limit', '?')}; "

@@ -182,3 +182,21 @@ def test_verification_console_distinguishes_model_steps_and_local_tools():
     assert "private source query" not in output
     assert "preserved failed state; no request resent" in output
     assert "reused validated response" not in output
+
+
+def test_verification_console_explains_known_rejection_without_echoing_provider_text():
+    import io
+    from attestextract.progress import ConsoleProgress
+
+    stream = io.StringIO()
+    console = ConsoleProgress(stream=stream)
+    console({"stage": "analysis", "event": "failed", "job_id": "verify-1", "used": 1, "limit": 8,
+             "error_code": "json_prompt_required", "http_status": 400,
+             "request_outcome": "http_error_received", "http_details": "http/verify-1.error.json",
+             "error": "PRIVATE PROVIDER PAPER CONTENT"})
+    console.close()
+    output = stream.getvalue()
+    assert "explicit JSON output instruction" in output
+    assert "No automatic retry or mode downgrade" in output
+    assert "diagnostics/http/verify-1.error.json" in output
+    assert "PRIVATE PROVIDER" not in output and "outcome is unknown" not in output

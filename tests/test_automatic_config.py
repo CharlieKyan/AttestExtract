@@ -120,6 +120,21 @@ def test_unknown_errors_and_uncertain_outcomes_do_not_switch_even_with_backup(ex
     assert plan.next_route(plan.initial_route_id, exc, set()) is None
 
 
+def test_json_prompt_requirement_never_downgrades_or_switches_to_backup():
+    plan = build_automatic_backend(connection(), fallback=connection(model="backup"), environment={})
+    first = plan.initial_route_id
+    object_route = plan.next_route(first, error("response_format", "json_schema is not supported"), {first})
+    assert plan.routes[object_route].config.structured_output == "json_object"
+    exc = BackendError("A JSON instruction is required.", status_code=400, code="json_prompt_required",
+                       http_diagnostics={"provider_error": {
+                           "code": "unsupported_value", "param": "response_format",
+                           "message": ("Prompt must contain the word 'json' in some form to use 'response_format' "
+                                       "of type 'json_object'. Additional advice: json_object is not supported."),
+                       }, "truncated": False})
+    assert rejection_reason(exc, plan.routes[object_route]) is None
+    assert plan.next_route(object_route, exc, {first, object_route}) is None
+
+
 def test_token_parameter_mapping_keeps_the_limit_and_output_mode():
     plan = build_automatic_backend(connection(), environment={})
     first = plan.initial_route_id

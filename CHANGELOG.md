@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.0.dev36
+
+- Require an explicit single-JSON-object instruction in every bounded verification request before hashing, byte accounting or call reservation. This fixes JSON Object endpoints rejecting the first verification step; original extraction and output-mode selection are unchanged.
+- Distinguish a provider's explicit JSON-prompt requirement from unsupported output modes, without echoing arbitrary provider text. Record complete HTTP errors separately from unknown transport outcomes, retain diagnostic references and spent reservations, and never resend or downgrade implicitly.
+- Advance the verification compatibility revision to v2. Older bounded-analysis checkpoints are rejected before new generation; extraction caches remain reusable through the existing extraction-only recovery entry. Original archives and accounting are not rewritten.
+- Exercise strict JSON Object prerequisites through public Python/CLI, route selection and installed-wheel search/read/decide acceptance, alongside JSON Schema and recovery. Real-provider and scientific-quality acceptance remain separate.
+
 ## 0.1.0.dev35
 
 - Replace default whole-document discovery with bounded source-only search/read/decide verification of existing extraction candidates. Models describe missing evidence and choose lookups; original values remain immutable. New runs accept sources beyond 60,000 characters and cap each serialized analysis request instead of repeatedly sending the whole document.
