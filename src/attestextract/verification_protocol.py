@@ -55,7 +55,8 @@ class Evidence(ContractModel):
 
 
 class ProposedObject(ContractModel):
-    object_id: str = Field(min_length=1, max_length=100)
+    object_id: str = Field(min_length=1, max_length=100,
+        description="New local identifier, for example o1. Bindings may reference it in this same response; the framework creates the stable ID.")
     name: str = Field(min_length=1, max_length=500)
     kind: Literal["type", "instance", "sample", "group", "model", "other"]
     scope: str = Field(max_length=2000)
@@ -72,11 +73,12 @@ class ProposedRelation(ContractModel):
 
 class Binding(ContractModel):
     observation_id: str = Field(min_length=1, max_length=100)
-    subject_id: str | None
-    status: Literal["supported", "unknown"]
-    evidence: list[Evidence] = Field(max_length=12)
+    subject_id: str | None = Field(description="Direct owner: an existing object ID or an object_id declared in this response. Required and non-null for supported ownership; null for unknown ownership.")
+    status: Literal["supported", "unknown"] = Field(description="Ownership judgment only. supported requires a declared non-null subject_id and nonempty source evidence. unknown requires subject_id=null; it does not mean the observed value is absent.")
+    evidence: list[Evidence] = Field(max_length=12,
+        description="Exact source support for this ownership judgment. Must be nonempty when status=supported; unknown may retain available evidence.")
     reason: str = Field(min_length=1, max_length=4000)
-    target_match: Literal["supported", "unsupported", "unknown"]
+    target_match: Literal["supported", "unsupported", "unknown"] = Field(description="Independent judgment of whether the observation fits the requested field definition. May be supported even when ownership status is unknown.")
     property_name: str | None = Field(default=None, max_length=500)
     statistic: str | None = Field(default=None, max_length=500)
 
@@ -202,13 +204,38 @@ def _quoted_evidence(item: Evidence, source_text, source_index, visible, entries
     return key
 
 
-def apply_decision(step: Step, *, source_text, source_hash, batch, objects, relations,
-                   entries, visible_passages, source_index, reference_ids=(), evidence_contexts=None):
-    """Validate a whole decision before publishing any changes to caller state.
+def _check_visible_source(source_text, source_index, visible_passages):
+    """Corruption is global even when a rejected proposal never cites that range."""
+    for fragment in visible_passages:
+        try:
+            passage = source_index.get(fragment["passage_id"])
+            start, end = passage["start"], passage["end"]
+            left, right = fragment["start"], fragment["end"]
+            if (type(start) is not int or type(end) is not int
+                    or not 0 <= start < end <= len(source_text)
+                    or source_text[start:end] != passage["text"]):
+                raise _state_error("Indexed passage does not match the original source.")
+            if (type(left) is not int or type(right) is not int
+                    or not start <= left < right <= end
+                    or source_text[left:right] != fragment["text"]):
+                raise _state_error("Visible passage does not match its original indexed range.")
+        except (KeyError, TypeError, ValueError) as exc:
+            if isinstance(exc, VerificationValidationError):
+                raise
+            raise _state_error("Visible passage cannot be checked against the source index.") from None
 
-Return ``objects, relations, binding_updates, evidence_entries``. Original
-observations stay immutable; field-match reservations are additional blockers.
-"""
+
+def apply_decision(step: Step, *, source_text, source_hash, batch, objects, relations,
+                   entries, visible_passages, source_index, reference_ids=(), evidence_contexts=None,
+                   review_items=None):
+    """Assess a complete decision before publishing changes to caller state.
+
+    A supplied review_items list enables proposal isolation. Only explicit object
+    references propagate rejection; semantic dependence on an unreferenced relation
+    cannot be inferred by this validator. The default retains strict rejection.
+    Return objects, relations, binding_updates, evidence_entries. Raw observations
+    stay immutable. Even partial mode never commits through a global state/scope error.
+    """
     if step.action != "decide":
         raise _state_error("Only a decide step can apply semantic proposals.")
     expected = set(target_observation_ids(batch))
@@ -228,95 +255,170 @@ observations stay immutable; field-match reservations are additional blockers.
             unexpected_count=len(unexpected), reference_count=len(references), missing_ids=missing,
             duplicate_ids=duplicate, unexpected_ids=unexpected, reference_ids=references,
             foreign_ids=sorted(set(unexpected) - set(reference_ids)))
+    _check_visible_source(source_text, source_index, visible_passages)
     new_objects, new_relations, new_entries = deepcopy(objects), deepcopy(relations), deepcopy(entries)
     known = {item["object_id"] for item in objects}
     prior_objects = {item["object_id"]: item for item in objects}
     if len(known) != len(objects):
         raise _state_error("Existing object identifiers are not unique.")
-    local = {}
-    declared = set()
+    identifiers = [item.object_id for item in step.objects]
+    if any(not key.strip() for key in identifiers):
+        raise _reject("Object local identifiers must not be blank.")
+    if len(set(identifiers)) != len(identifiers) or set(identifiers) & known:
+        raise _reject("New objects cannot replace existing IDs or repeat a local ID.")
+    local, rejected_objects = {}, set()
+    declared, declared_relations = set(), set()
+    ambiguities, contexts, reviews = [], {}, []
+    partial = review_items is not None
 
-    ambiguities, contexts = [], {}
+    def problem(exc, issues, path):
+        if exc.details["category"] == "internal_state" or not partial:
+            raise exc
+        issues.append({**exc.details, "path": exc.details.get("path", path), "message": str(exc)})
 
-    def evidence(items, path):
-        return sorted({_quoted_evidence(item, source_text, source_index, visible_passages, new_entries,
-                                        path=f"{path}[{number}]", ambiguities=ambiguities, contexts=contexts)
-                       for number, item in enumerate(items)})
+    def evidence(items, path, issues):
+        # Stage evidence separately: a rejected proposal must not enlarge the
+        # accepted registry or its display contexts, even when some quotes pass.
+        candidate_entries = deepcopy(new_entries)
+        candidate_contexts, keys = {}, set()
+        for number, item in enumerate(items):
+            quote_path = f"{path}[{number}]"
+            before = len(ambiguities)
+            try:
+                key = _quoted_evidence(item, source_text, source_index, visible_passages, candidate_entries,
+                    path=quote_path, ambiguities=ambiguities, contexts=candidate_contexts)
+                if partial and len(ambiguities) > before:
+                    issues.append({"category": "model_response", "phase": "evidence", "code": "quote_ambiguous",
+                                   "message": "Evidence has multiple visible source positions.", **ambiguities[-1]})
+                else:
+                    keys.add(key)
+            except VerificationValidationError as exc:
+                problem(exc, issues, quote_path)
+        return sorted(keys), candidate_entries, candidate_contexts
+
+    def retain_evidence(staged):
+        new_entries.update(staged[1])
+        contexts.update(staged[2])
+
+    def review(kind, path, identifier, item, issues, dependencies=()):
+        value = {"proposal_type": kind, "path": path, "proposal_id": identifier,
+                 "observation_ids": [identifier] if kind == "binding" else [],
+                 "dependencies": list(dict.fromkeys(dependencies)), "code": issues[0]["code"],
+                 "issues": issues, "raw_proposal": item.model_dump(mode="json")}
+        reviews.append(value)
 
     for number, item in enumerate(step.objects):
+        path, issues = f"objects[{number}]", []
         if not item.name.strip() or not item.object_id.strip():
-            raise _reject("Object names and local identifiers must not be blank.")
-        if item.object_id in local or item.object_id in known:
-            raise _reject("New objects cannot replace existing IDs or repeat a local ID.")
-        mentions = evidence(item.mentions, f"objects[{number}].mentions")
+            problem(_reject("Object names and local identifiers must not be blank."), issues, path)
+        staged = evidence(item.mentions, path + ".mentions", issues)
+        if issues:
+            rejected_objects.add(item.object_id)
+            review("object", path, item.object_id, item, issues)
+            continue
+        mentions = staged[0]
         key = "object-" + digest({"source": source_hash, "name": item.name, "kind": item.kind,
                                   "scope": item.scope, "mentions": mentions})[:24]
-        if key in declared or key in local:
+        if key in declared or key in local or key in set(identifiers):
             raise _reject("Decision repeats the same object under multiple local IDs.")
         declared.add(key)
-        local[item.object_id] = key
         value = {"object_id": key, "name": item.name, "kind": item.kind,
                  "scope": item.scope, "is_table_subject": item.is_table_subject,
                  "mention_evidence_ids": mentions, "semantic_status": "model_proposed"}
-        if key in prior_objects:
-            # A bounded context may omit a previously registered object. Exact
-            # re-declaration is idempotent; matching names alone never merge.
-            if any(prior_objects[key].get(field) != expected for field, expected in value.items()):
-                raise _reject("Object re-declaration disagrees with the existing identity or table membership.")
+        if key in prior_objects and any(prior_objects[key].get(field) != expected for field, expected in value.items()):
+            problem(_reject("Object re-declaration disagrees with the existing identity or table membership."), issues, path)
+            rejected_objects.add(item.object_id)
+            review("object", path, item.object_id, item, issues)
             continue
-        known.add(key)
-        new_objects.append(value)
+        local[item.object_id] = key
+        if key not in prior_objects:
+            known.add(key)
+            new_objects.append(value)
+        retain_evidence(staged)
 
-    def endpoint(key):
+    def endpoint(key, issues, path, dependencies):
+        if key in rejected_objects:
+            dependencies.append(key)
+            problem(_reject("The referenced object proposal was not applied.", code="dependency_rejected",
+                            phase="object_reference", object_id=key), issues, path)
+            return None
         resolved = local.get(key, key)
         if resolved not in known:
-            raise _reject("A proposal references an undeclared object.")
+            problem(_reject("A proposal references an undeclared object.",
+                            code="invalid_object_reference" if partial else "invalid_decision",
+                            phase="object_reference", object_id=key), issues, path)
+            return None
         return resolved
 
     relation_keys = {item["relation_id"] for item in relations}
-    declared_relations = set()
     for number, item in enumerate(step.relations):
-        source, target = endpoint(item.source_id), endpoint(item.target_id)
-        if source == target:
-            raise _reject("A relation must connect distinct objects.")
+        path, issues, dependencies = f"relations[{number}]", [], []
+        source = endpoint(item.source_id, issues, path + ".source_id", dependencies)
+        target = endpoint(item.target_id, issues, path + ".target_id", dependencies)
+        if source is not None and source == target:
+            problem(_reject("A relation must connect distinct objects."), issues, path)
+        staged = evidence(item.evidence, path + ".evidence", issues)
+        if issues:
+            review("relation", path, path, item, issues, dependencies)
+            continue
         value = {"source_id": source, "target_id": target, "predicate": item.predicate,
-                 "evidence_ids": evidence(item.evidence, f"relations[{number}].evidence")}
+                 "evidence_ids": staged[0]}
         key = "relation-" + digest(value)[:24]
         if key in declared_relations:
-            raise _reject("A relation is repeated in the decision.")
-        declared_relations.add(key)
-        if key in relation_keys:
+            problem(_reject("A relation is repeated in the decision."), issues, path)
+            review("relation", path, path, item, issues)
             continue
-        relation_keys.add(key)
-        new_relations.append({"relation_id": key, **value, "semantic_status": "model_proposed"})
+        declared_relations.add(key)
+        if key not in relation_keys:
+            relation_keys.add(key)
+            new_relations.append({"relation_id": key, **value, "semantic_status": "model_proposed"})
+        retain_evidence(staged)
 
     by_id = {item["observation_id"]: item for item in batch}
     updates = {}
     for number, item in enumerate(step.bindings):
+        path, issues, dependencies = f"bindings[{number}]", [], []
         if not item.reason.strip():
-            raise _reject("A binding must explain its proposed attribution or uncertainty.", phase="binding")
+            problem(_reject("A binding must explain its proposed attribution or uncertainty.", phase="binding"), issues, path)
         if item.status == "unknown" and item.subject_id is not None:
-            raise _reject("Unknown attribution must keep subject_id null.", code="invalid_binding_status",
-                          phase="binding", observation_id=item.observation_id)
+            problem(_reject("Unknown attribution must keep subject_id null.", code="invalid_binding_status",
+                            phase="binding", observation_id=item.observation_id), issues, path)
         if item.status == "supported" and (item.subject_id is None or not item.evidence):
-            raise _reject("Supported attribution requires a declared subject and source evidence.",
-                          code="invalid_binding_status", phase="binding", observation_id=item.observation_id)
-        subject = None if item.subject_id is None else endpoint(item.subject_id)
+            problem(_reject("Supported attribution requires a declared subject and source evidence.",
+                            code="invalid_binding_status", phase="binding", observation_id=item.observation_id), issues, path)
+        subject = None if item.subject_id is None else endpoint(item.subject_id, issues, path + ".subject_id", dependencies)
+        staged = evidence(item.evidence, path + ".evidence", issues)
         blockers = deepcopy(by_id[item.observation_id].get("blockers", []))
+        if issues:
+            review("binding", path, item.observation_id, item, issues, dependencies)
+            blockers.append({"code": "proposal_rejected", "message": "This ownership proposal was not applied; inspect the original response and validation issues."})
+            updates[item.observation_id] = {
+                "subject_id": None, "binding_status": "review_required", "binding_evidence_ids": [],
+                "reason": "Framework validation rejected this proposal; this is not a model judgment of unknown ownership.",
+                "target_match": "unknown", "property_name": None, "statistic": None, "blockers": blockers}
+            continue
         if item.target_match != "supported":
             code = "target_field_" + item.target_match
             if not any(isinstance(old, dict) and old.get("code") == code for old in blockers):
                 blockers.append({"code": code, "message": "Model did not support mapping this observation to the requested field definition."})
         updates[item.observation_id] = {
             "subject_id": subject, "binding_status": item.status,
-            "binding_evidence_ids": evidence(item.evidence, f"bindings[{number}].evidence"), "reason": item.reason,
+            "binding_evidence_ids": staged[0], "reason": item.reason,
             "target_match": item.target_match, "property_name": item.property_name,
-            "statistic": item.statistic, "blockers": blockers,
-        }
-    if ambiguities:
+            "statistic": item.statistic, "blockers": blockers}
+        retain_evidence(staged)
+    if ambiguities and not partial:
         raise _reject("Evidence has multiple visible source positions; the whole decision requires review.",
-                      code="quote_ambiguous", phase="evidence", ambiguity_count=len(ambiguities),
-                      ambiguities=ambiguities)
+                      code="quote_ambiguous", phase="evidence", ambiguity_count=len(ambiguities), ambiguities=ambiguities)
+    # Objects affect only explicitly referencing bindings. A relation cannot be
+    # cited by a binding in this protocol, so its rejection does not establish
+    # additional dependencies by proximity or by sharing an otherwise valid owner.
+    for item in reviews:
+        if item["proposal_type"] == "object":
+            item["observation_ids"] = [binding.observation_id for binding in step.bindings
+                if binding.subject_id == item["proposal_id"] and updates[binding.observation_id]["binding_status"] == "review_required"]
     if evidence_contexts is not None:
         evidence_contexts.update(contexts)
+    if review_items is not None:
+        review_items.extend(reviews)
     return new_objects, new_relations, updates, new_entries

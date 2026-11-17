@@ -90,6 +90,16 @@ to locate original passages and understand relationships across paragraphs.
 The fixed `search` / `read` / `decide` response schema is unchanged; this is not
 a new task format or a per-provider dynamic-schema requirement.
 
+Ownership `status` and `target_match` answer different questions. A `supported`
+binding requires a nonempty subject ID referencing a known or locally declared
+object, plus nonempty source evidence. An `unknown` binding requires a null
+subject; its target-field match can independently be supported. When the source
+identifies a new object, the model can declare a local ID and reference it in
+the same answer. The framework assigns stable IDs. Lack of an existing ID is
+not evidence that the owner is unknowable. Field descriptions and neutral
+examples explain these rules; this does not make a JSON Object service enforce
+cross-field rules, and no new conditional-Schema capability is assumed.
+
 New object and relation proposals should explain the current targets. The
 framework does not silently delete extra declarations or require every object
 to have a directly bound value: an object's identity can be clear while a
@@ -125,16 +135,29 @@ or attribution may need a clause or multiple separately quoted passages.
 An explicit `occurrence` is zero-based within the complete named passage. With
 no occurrence, one actually visible exact match can be resolved; multiple
 visible matches are retained as alternatives. They are not combined into an
-assertion that the model cited all positions. Missing text, an invalid occurrence,
-an unknown passage or a quote outside the shown source remains a hard error.
+assertion that the model cited all positions.
 
-For ambiguity alone, the whole decision becomes `review_required`: original
-responses, all candidate locations and bounded context are preserved. None of
-that group's objects, relations or bindings enters the applied graph or later
-`known_objects`. Subsequent jobs may proceed within the existing budget. Hard
-errors anywhere in the same decision take priority and still stop the run.
-This deliberately holds otherwise usable proposals in that group for review;
-there is no inferred fine-grained dependency graph or automatic retry.
+Dev39 assesses each typed proposal independently after validating global source
+integrity, unambiguous object declarations and complete target coverage. Missing,
+unseen, ambiguous or out-of-range quotes, undeclared references and contradictory
+binding states reject the affected proposal. Rejected objects also block relations
+and bindings explicitly referencing them. Independent valid proposals remain
+available; the original observation values and rejected answers are retained.
+The validator collects independently checkable problems, not all scientific
+errors. Unparseable/ill-typed responses, ambiguous identifiers, coverage errors
+or corrupted source/checkpoints still stop without committing that decision.
+
+This dependency rule follows explicit object references only. Bindings cannot
+reference relation IDs in the current protocol, so the program does not infer
+semantic dependence on a rejected relationship. A surviving reference or exact
+quote is not proof that the underlying ownership inference is scientifically
+correct. Rejected objects never enter later `known_objects`; legitimate new
+objects are retained even when a separate binding to them is rejected.
+
+The invocation can continue with later jobs while status remains `partial`.
+Rejected proposals do not become model-declared `unknown` answers. No automatic
+retry, ID fabrication or answer correction occurs. Historical dev38 (analysis
+0.3) archives retain their whole-group isolation semantics when displayed.
 
 `evidence_contexts` separately records bounded display text, its source span,
 verification `artifact_id` and `model_visible` flag. True means the whole context
@@ -166,7 +189,7 @@ Review attribution and target-field status separately from execution status.
 
 `result.json` and its extraction schema remain unchanged. Python exposes the
 additional product as `result.analysis`. New analysis products and checkpoints
-use version `0.3`; older `0.1` and `0.2` analysis products remain readable/exportable.
+use version `0.4`; older `0.1`, `0.2` and `0.3` analysis products remain readable/exportable.
 Managed run directories contain:
 
 | File under `analysis/` | Purpose |
@@ -186,19 +209,26 @@ Managed run directories contain:
 | `review_groups.json` / `.csv` | Isolated job IDs, affected observations/fields, original response text and ambiguity diagnostics |
 | `evidence_contexts.json` / `.csv` | Display-only original context, source spans and per-step visibility |
 
-For versions `0.2` and `0.3`, a target-field cell receives a record only when ownership and
+For versions `0.2`, `0.3` and `0.4`, a target-field cell receives a record only when ownership and
 target matching are both model-supported. Existing extraction warnings still
 apply. Excluded observations remain in the complete observation table; they are
 not deleted or silently reassigned to a different field. Version `0.1` keeps its
 historical projection behavior because it did not have `target_match`.
 
-Version `0.3` keeps isolated observations in `observations.csv` with
+Versions `0.3` and `0.4` keep held observations in `observations.csv` with
 `binding_status=review_required`, null subjects and no applied binding evidence.
 They cannot fill the object table. SQLite includes corresponding `review_groups`
 and `evidence_contexts` tables. These companion exports do not require reading
 diagnostic files: Python calls without `output_dir` retain the response and
 diagnostic in memory and can export them later. The report lists all affected
 fields; omission from the object table never means absence from the source.
+Version `0.4` review groups add `target_observation_ids` and
+`applied_observation_ids`; `observation_ids` lists only held observations.
+Each diagnostic retains per-proposal issues, raw declarations and explicit
+dependencies. An object/relation-only rejection can have zero held observations
+and still keeps the run partial. Counts of retained, unknown, held and pending
+observations must accompany table coverage assessments; completion alone is
+not quality acceptance.
 
 Metadata columns cannot overwrite task field columns. CSV formula-like values
 receive presentation escaping; JSON and SQLite retain literal values. There is
@@ -224,12 +254,11 @@ upper bound is extraction's limit plus analysis's limit.
 Local lookup execution has no generation charge, but the model response asking
 for it does consume a reservation. Each analysis generation has one HTTP attempt
 and finite timeouts. The route is fixed; there is no hidden provider switch,
-format regeneration or automatic resend after an unknown outcome. Invalid or
-incomplete responses are retained and stop that invocation rather than being
-repaired into accepted decisions. The narrow exception is an otherwise valid
-decision with multiple visible exact locations for an unspecified occurrence:
-the entire group is isolated for review and later jobs may continue. No part of
-that group's proposed objects, relations or bindings is applied.
+format regeneration or automatic resend after an unknown outcome. Incomplete or
+structurally unreadable responses are retained and stop that invocation rather
+than being repaired into accepted decisions. Readable per-proposal validation failures are
+instead held with their explicit dependents while independent valid proposals
+are retained. This is controlled partial processing, not error correction.
 
 Verification protocol failures save structured details under
 `diagnostics/analysis/validation/<job-step>.errors.json`. Coverage diagnostics
@@ -266,16 +295,16 @@ request/response produces `failed`. Isolated review groups also keep analysis
 | Exit code | Meaning | Batch handling |
 | --- | --- | --- |
 | `0` | Extraction and analysis processing complete; scientific correctness remains unconfirmed | Continue |
-| `3` | Extraction complete; all analysis jobs processed; only isolated review groups remain | A caller may explicitly continue, recording partial status |
+| `3` | Extraction complete; all analysis jobs processed; only rejected proposals remain for review | A caller may explicitly continue, recording partial status |
 | Other nonzero | Failure, incomplete extraction, pending jobs or exhausted analysis limits | Stop and inspect diagnostics |
 
 Code `3` is not a general allowance for incomplete runs. In particular, an
 ambiguous group followed by unprocessed jobs at the call limit does not qualify.
 The report and manifest retain the distinction (`analysis_review_required`).
 Review counts and affected fields must accompany any table-quality assessment;
-the table deliberately excludes those observations and may therefore be biased
-toward easy cases. Later independent jobs can propose their own supported
-objects, but cannot see isolated objects as `known_objects`.
+the table excludes held observations and may therefore be biased toward easy
+cases. Later independent jobs can propose their own supported objects, but
+cannot see rejected objects as `known_objects`.
 
 ## Recovery and historical runs
 
@@ -313,7 +342,7 @@ In particular, ordinary resume can process later pending jobs while retaining
 an earlier failed job; it cannot make that run complete by correcting the
 failure. Review-required jobs are likewise replayed and preserved, not retried
 or promoted to valid decisions. Their original responses, diagnostic hashes,
-and recomputed ambiguity locations must agree before any new request. Inspect
+recomputed proposal/position issues and retained/held partition must agree before any new request. Inspect
 the reported cause before spending further calls.
 
 Historical version `0.1` checkpoints continue the legacy whole-document contract,
@@ -326,8 +355,10 @@ Dev36 used compatibility revision `bounded-source-verification-v2` for its
 corrected JSON instruction. Dev37 used `bounded-source-verification-v3` for the
 explicit target/reference contract. Dev38 uses `bounded-source-verification-v4`
 and analysis/checkpoint version `0.3` for quote guidance, review isolation and
-context provenance. Earlier bounded-analysis checkpoints cannot resume under
-v4; their `0.1`/`0.2` result archives remain readable. A mismatch is reported
+context provenance. Dev39 uses `bounded-source-verification-v5` and version
+`0.4` for per-proposal assessment and the corrected ownership contract. Earlier
+bounded-analysis checkpoints cannot resume under v5; their `0.1`/`0.2`/`0.3`
+result archives remain readable. A mismatch is reported
 before any new model request; do not edit hashes or delete old analysis files
 to bypass this check. The extraction compatibility revision is unchanged.
 

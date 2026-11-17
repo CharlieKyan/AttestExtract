@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.0.dev39
+
+- Clarify that ownership status and target-field matching are independent. A supported binding must reference a known or locally declared object and source evidence; the framework assigns stable IDs. Retain legal unknown ownership without changing values or spreading group observations to members.
+- Assess objects, relations and bindings independently after complete structural/scope checks. Preserve valid proposals, isolate invalid proposals and their explicit object-reference dependents, and collect all independently checkable issues. Do not rewrite rejected model answers into unknown judgments.
+- Introduce analysis snapshot/checkpoint 0.4 and verification revision v5. Review groups retain the complete target inventory, applied/held observation partition, original response and per-proposal diagnostics. Replay reconstructs both accepted and held results without new calls; old analysis archives remain readable and extraction recovery stays compatible.
+- Show retained versus held observations and preserve partial status even when only an object or relation was rejected. Existing exit code 3 remains restricted to fully processed analysis with review items; failed, pending, limited or incomplete extraction cannot use it.
+- Validate mixed decisions, rejected-object dependencies, source integrity, original-value preservation and installed Python/CLI entries with synthetic data. No new generation retries, semantic auto-correction, provider switches or expert acceptance are introduced.
+
 ## 0.1.0.dev38
 
 - Ask for continuous evidence sufficient to identify the claim, without a minimum quote length. Keep original quotations separate from bounded display context and its verification-step visibility; display context does not affect evidence or object identity.

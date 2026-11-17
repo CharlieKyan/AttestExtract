@@ -317,12 +317,21 @@ jobs:
                   assert set(checks["ambiguity_acceptance"]) == {"python", "cli"}
                   for entry_name, review in checks["ambiguity_acceptance"].items():
                       assert review["passed"] and review["observations"] == 12
-                      assert review["review_groups"] == 1 and review["review_observations"] == 6
-                      assert review["supported_observations"] == 6 and review["analysis_status"] == "partial"
+                      assert review["review_groups"] == 1 and review["review_observations"] == 1
+                      assert review["supported_observations"] == 11 and review["analysis_status"] == "partial"
                       assert review["analysis_calls"] == 2 and review["resume_new_calls"] == 0
                       assert review["known_objects_unpolluted"] and review["original_response_preserved"]
                       if entry_name == "cli":
                           assert review["cli_exit_status"] == 3
+                  assert set(checks["partial_acceptance"]) == {"python", "cli"}
+                  for entry_name, partial in checks["partial_acceptance"].items():
+                      assert partial["passed"] and partial["observations"] == 12
+                      assert partial["supported_observations"] == 9 and partial["unknown_observations"] == 1
+                      assert partial["first_group_applied"] == 4 and partial["first_group_held"] == 2
+                      assert partial["analysis_calls"] == 2 and partial["resume_new_calls"] == 0
+                      assert partial["original_response_preserved"] and partial["independent_proposals_retained"]
+                      if entry_name == "cli":
+                          assert partial["cli_exit_status"] == 3
               assert analysis["modes"]["json_object"]["json_object_prompt_gate"]
               assert analysis["package_version"] == expected_version
               assert Path(analysis["module_path"]).is_relative_to(environment)

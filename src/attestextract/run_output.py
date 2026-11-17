@@ -42,8 +42,14 @@ def save_run_result(result: ExtractionResult, directory: Path, trace: RunTrace) 
         from .analysis import is_review_only_partial
         if is_review_only_partial(result.analysis):
             count = sum(len(group["observation_ids"]) for group in result.analysis["review_groups"])
-            report = (f"**Partial analysis: {count} observations are isolated for review and excluded from object tables.** "
-                      "All planned groups were processed; this does not establish scientific accuracy.\n\n" + report)
+            if result.analysis.get("analysis_version") == "0.4":
+                proposals = sum(len(group["diagnostic"]["reviews"]) for group in result.analysis["review_groups"])
+                report = (f"**Partial analysis: {proposals} proposals were rejected; {count} observation bindings are held for review.** "
+                          "Independent validated proposals remain available; rejected objects, relations and bindings are not applied. "
+                          "All planned groups were processed; this does not establish scientific accuracy.\n\n" + report)
+            else:
+                report = (f"**Partial analysis: {count} observations are isolated for review and excluded from object tables.** "
+                          "All planned groups were processed; this does not establish scientific accuracy.\n\n" + report)
     # Exclusive files also protect against a user placing files here mid-run.
     with (directory / "result.json").open("x", encoding="utf-8", newline="") as stream:
         stream.write(serialized)

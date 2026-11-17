@@ -20,9 +20,9 @@ _SPEC.loader.exec_module(acceptance)
 
 @pytest.mark.parametrize("mode", ["json_object", "json_schema"])
 @pytest.mark.parametrize("entry", ["python", "cli"])
-def test_group_ambiguity_isolated_other_group_processed_and_resume_offline(tmp_path, mode, entry):
+def test_ambiguous_object_and_its_binding_isolated_other_proposals_retained(tmp_path, mode, entry):
     summary = acceptance.accept_ambiguity(tmp_path / "entry", mode, entry)
-    assert summary["review_observations"] == summary["supported_observations"] == 6
+    assert summary["review_observations"] == 1 and summary["supported_observations"] == 11
     assert summary["analysis_calls"] == 2 and summary["resume_new_calls"] == 0
 
 
@@ -41,8 +41,13 @@ def test_cli_review_exit_does_not_hide_hard_pending_or_limited_work(tmp_path, ca
     analysis = acceptance.read(output / "analysis/analysis.json")
     assert [job["status"] for job in analysis["jobs"]] == expected_jobs
     assert service.calls == expected_calls
-    assert analysis["objects"] == analysis["relations"] == []
-    assert all(item["subject_id"] is None for item in analysis["observations"])
+    assert analysis["relations"] == []
+    if case == "pending":
+        assert len(analysis["objects"]) == 5
+        assert sum(item["binding_status"] == "supported" for item in analysis["observations"]) == 5
+    else:
+        assert analysis["objects"] == []
+        assert all(item["subject_id"] is None for item in analysis["observations"])
     if case == "hard":
         assert analysis["status"] == "failed"
         assert analysis["jobs"][0]["steps"][-1]["error_code"] != "quote_ambiguous"
@@ -64,11 +69,12 @@ def test_python_without_output_retains_review_material_for_later_manual_export(t
     assert len(response["objects"]) == len(response["bindings"]) == 6
     assert response["objects"][0]["mentions"][0] == {
         "passage_id": "passage-000001", "quote": "Specimen A01", "occurrence": None}
-    assert group["diagnostic"]["ambiguity_count"] == 1
-    assert len(group["diagnostic"]["ambiguities"][0]["matches"]) == 2
+    ambiguous = [issue for review in group["diagnostic"]["reviews"] for issue in review["issues"]
+                 if issue["code"] == "quote_ambiguous"]
+    assert len(ambiguous) == 1 and len(ambiguous[0]["matches"]) == 2
     output = tmp_path / "manual-analysis"
     save_analysis(analysis, output)
     saved = acceptance.read(output / "review_groups.json")[0]
     assert saved["response_text"] == group["response_text"] and saved["diagnostic"] == group["diagnostic"]
-    assert len(acceptance.read(output / "objects.json")["objects"]) == 6
+    assert len(acceptance.read(output / "objects.json")["objects"]) == 11
     assert service.calls == ["extraction", "decide", "decide"]

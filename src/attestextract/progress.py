@@ -71,7 +71,11 @@ class ConsoleProgress:
                     if event["status"] == "failed":
                         self._write("Ordinary resume will not repair this failed job; pending jobs may still consume calls.")
                     elif event["status"] == "review_required":
-                        self._write("The isolated group remains unapplied and needs review; no response is regenerated.")
+                        if event.get("error_code") == "proposal_review":
+                            self._write("Retained proposals remain applied; rejected proposals and their dependencies remain unapplied. "
+                                        "No response is regenerated.")
+                        else:
+                            self._write("The isolated group remains unapplied and needs review; no response is regenerated.")
                 else:
                     self._write(f"Analysis {event.get('job_id', '?')}: reused validated response")
             elif kind == "tool":
@@ -85,10 +89,22 @@ class ConsoleProgress:
                 self._waiting_since = None
                 count = event.get("observation_count")
                 count = count if type(count) is int and count >= 0 else "?"
-                self._write(f"Analysis {event.get('job_id', '?')}: citation ambiguity; {count} observations isolated for review; "
-                            f"calls {event.get('used', '?')}/{event.get('limit', '?')}")
-                self._write("No group proposals were applied or supplied as known objects. "
-                            "Later jobs may continue within the existing budget; no automatic correction or retry.")
+                summary = event.get("validation_summary")
+                if isinstance(summary, dict) and summary.get("code") == "proposal_review":
+                    applied, proposals = event.get("applied_count"), event.get("proposal_count")
+                    applied = applied if type(applied) is int and applied >= 0 else "?"
+                    proposals = proposals if type(proposals) is int and proposals >= 0 else "?"
+                    self._write(f"Analysis {event.get('job_id', '?')}: retained {applied} observation decisions; "
+                                f"{count} observations held for review; {proposals} rejected proposals; "
+                                f"calls {event.get('used', '?')}/{event.get('limit', '?')}")
+                    self._write("Independent validated proposals were retained. Rejected proposals and dependent bindings were not applied; "
+                                "this is not a model unknown or expert acceptance. "
+                                "Later jobs may continue within the existing budget; no automatic correction or retry.")
+                else:
+                    self._write(f"Analysis {event.get('job_id', '?')}: citation ambiguity; {count} observations isolated for review; "
+                                f"calls {event.get('used', '?')}/{event.get('limit', '?')}")
+                    self._write("No group proposals were applied or supplied as known objects. "
+                                "Later jobs may continue within the existing budget; no automatic correction or retry.")
                 details = event.get("validation_details")
                 if isinstance(details, str) and re.fullmatch(r"analysis/validation/[A-Za-z0-9_.-]+\.errors\.json", details):
                     self._write(f"Analysis validation details: diagnostics/{details}")

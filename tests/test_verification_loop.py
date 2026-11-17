@@ -130,11 +130,11 @@ class AmbiguousGroupBackend:
                 "evidence": [full], "reason": "Explicit synthetic statement.", "target_match": "supported",
                 "property_name": "mass", "statistic": None} for item in payload["observations"]])
         if self.hard_error:
-            response["bindings"][-1]["subject_id"] = "undeclared"
+            response["bindings"][-1]["observation_id"] = "foreign-observation"
         return BackendResponse(text=json.dumps(response), model="synthetic-verifier")
 
 
-def test_ambiguous_group_is_isolated_while_later_group_completes_and_resume_spends_zero(tmp_path):
+def test_ambiguous_shared_object_holds_dependents_while_later_group_completes_and_resume_spends_zero(tmp_path):
     result = frozen_extraction(AMBIGUOUS_SOURCE, count=7)
     backend = AmbiguousGroupBackend()
     first = run(AMBIGUOUS_SOURCE, result, backend, trace=RunTrace(tmp_path / "first"), max_calls=2)
@@ -147,7 +147,7 @@ def test_ambiguous_group_is_isolated_while_later_group_completes_and_resume_spen
     group = first["review_groups"][0]
     assert set(group["observation_ids"]) == {item["observation_id"] for item in isolated}
     assert json.loads(group["response_text"])["objects"][0]["object_id"] == "specimen"
-    assert group["diagnostic"]["ambiguities"][0]["visible_match_count"] == 2
+    assert group["diagnostic"]["reviews"][0]["issues"][0]["visible_match_count"] == 2
     assert all(item["artifact_id"] == "verify-0002.step-01" for item in first["evidence_contexts"])
     files = {str(p.relative_to(tmp_path / "first")): p.read_bytes() for p in (tmp_path / "first").rglob("*") if p.is_file()}
     resumed_backend = AmbiguousGroupBackend()
@@ -167,7 +167,7 @@ def test_ambiguity_without_trace_retains_raw_proposal_and_alternatives():
     assert package["status"] == "partial" and package["review_only"] is True
     assert group["response_details"] is None and group["validation_details"] is None
     assert json.loads(group["response_text"])["bindings"][0]["status"] == "supported"
-    assert len(group["diagnostic"]["ambiguities"][0]["matches"]) == 2
+    assert len(group["diagnostic"]["reviews"][0]["issues"][0]["matches"]) == 2
     assert package["objects"] == [] and package["evidence_contexts"] == []
 
 
@@ -180,7 +180,7 @@ def test_ambiguity_mixed_with_hard_error_stops_without_review_or_followup_call(t
     assert len(backend.requests) == 1 and package["jobs"][1]["status"] == "pending"
 
 
-@pytest.mark.parametrize("damage", ["cache", "diagnostic", "coordinates"])
+@pytest.mark.parametrize("damage", ["cache", "diagnostic", "coordinates", "summary"])
 def test_review_cache_and_candidates_are_validated_before_pending_calls(tmp_path, damage):
     result = frozen_extraction(AMBIGUOUS_SOURCE, count=7)
     first = run(AMBIGUOUS_SOURCE, result, AmbiguousGroupBackend(), trace=RunTrace(tmp_path / "first"), max_calls=1)
@@ -193,9 +193,12 @@ def test_review_cache_and_candidates_are_validated_before_pending_calls(tmp_path
     else:
         diagnostic_path = tmp_path / "first" / step["validation_details"]
         diagnostic = json.loads(diagnostic_path.read_text(encoding="utf-8"))
-        diagnostic["ambiguities"][0]["matches"][0]["start"] += 1
+        if damage == "summary":
+            diagnostic["applied_count"] += 1
+        else:
+            diagnostic["reviews"][0]["issues"][0]["matches"][0]["start"] += 1
         diagnostic_path.write_text(json.dumps(diagnostic), encoding="utf-8")
-        if damage == "coordinates":
+        if damage in {"coordinates", "summary"}:
             step["validation_hash"] = digest(diagnostic)
             checkpoint["sha256"] = digest(checkpoint["state"])
             path.write_text(json.dumps(checkpoint), encoding="utf-8")
@@ -211,7 +214,7 @@ def test_long_document_search_read_decide_has_bounded_requests_and_cross_paragra
     before = result.model_dump(mode="json")
     package = run(LONG, result, backend, trace=RunTrace(tmp_path), input_budget=30000)
     assert len(LONG) > 60000
-    assert package["status"] == "complete" and package["analysis_version"] == "0.3"
+    assert package["status"] == "complete" and package["analysis_version"] == "0.4"
     assert len(backend.requests) == 3
     assert [step["action"] for step in package["jobs"][0]["steps"]] == ["search", "read", "decide"]
     assert all(request.chunk_id.startswith("verify-") for request in backend.requests)

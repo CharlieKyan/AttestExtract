@@ -32,7 +32,7 @@ def is_review_only_partial(data: dict) -> bool:
     This is not scientific acceptance and never covers pending jobs, exhausted
     limits, failed requests or incomplete extraction. Do not trust a saved flag.
     """
-    if (not isinstance(data, dict) or data.get("analysis_version") != "0.3"
+    if (not isinstance(data, dict) or data.get("analysis_version") not in {"0.3", "0.4"}
             or data.get("status") != "partial" or data.get("source_format_status") != "complete"):
         return False
     jobs, groups = data.get("jobs"), data.get("review_groups")
@@ -47,17 +47,64 @@ def is_review_only_partial(data: dict) -> bool:
             return False
         seen.add(key)
         if job["status"] == "review_required":
-            if job.get("error_code") != "quote_ambiguous" or not job.get("observation_ids"):
+            code = "proposal_review" if data["analysis_version"] == "0.4" else "quote_ambiguous"
+            if job.get("error_code") != code or not job.get("observation_ids"):
                 return False
-            expected[key] = job["observation_ids"]
+            expected[key] = job
     if len(groups) != len(expected):
         return False
     for group in groups:
         if (not isinstance(group, dict) or not isinstance(group.get("job_id"), str)
-                or group["job_id"] not in expected
-                or group.get("observation_ids") != expected.pop(group["job_id"])):
+                or group["job_id"] not in expected):
             return False
-    return not expected
+        job = expected.pop(group["job_id"])
+        if data["analysis_version"] == "0.3":
+            if group.get("observation_ids") != job["observation_ids"]:
+                return False
+        else:
+            held, applied = group.get("observation_ids"), group.get("applied_observation_ids")
+            targets = group.get("target_observation_ids")
+            if (any(not isinstance(values, list) or any(not isinstance(value, str) for value in values)
+                    or len(values) != len(set(values)) for values in (held, applied, targets))
+                    or targets != job["observation_ids"] or held != job.get("review_observation_ids")
+                    or set(held).intersection(applied) or set(held).union(applied) != set(targets)
+                    or not isinstance(group.get("diagnostic"), dict)
+                    or group["diagnostic"].get("code") != "proposal_review"
+                    or not isinstance(group["diagnostic"].get("reviews"), list)
+                    or not group["diagnostic"]["reviews"]):
+                return False
+    if expected:
+        return False
+    if data["analysis_version"] == "0.4":
+        observations = data.get("observations")
+        if not isinstance(observations, list):
+            return False
+        by_id = {}
+        for item in observations:
+            if (not isinstance(item, dict) or not isinstance(item.get("observation_id"), str)
+                    or item["observation_id"] in by_id):
+                return False
+            by_id[item["observation_id"]] = item
+        all_targets, held = set(), set()
+        for job in jobs:
+            targets = job.get("observation_ids")
+            if (not isinstance(targets, list) or not targets
+                    or any(not isinstance(key, str) or key not in by_id for key in targets)
+                    or len(targets) != len(set(targets)) or all_targets.intersection(targets)):
+                return False
+            all_targets.update(targets)
+        for group in groups:
+            held.update(group["observation_ids"])
+        if all_targets != set(by_id):
+            return False
+        for key, item in by_id.items():
+            if key in held:
+                if (item.get("binding_status") != "review_required" or item.get("subject_id") is not None
+                        or item.get("binding_evidence_ids") or item.get("target_match") != "unknown"):
+                    return False
+            elif item.get("binding_status") not in {"supported", "unknown"}:
+                return False
+    return True
 
 
 class _Quote(ContractModel):

@@ -22,7 +22,7 @@ from .verification_protocol import (Step, VerificationValidationError, apply_dec
 from .verification_sources import SourceIndex
 
 
-REVISION = "bounded-source-verification-v4"
+REVISION = "bounded-source-verification-v5"
 BATCH_SIZE = 6
 _SYSTEM = (
     "Verify scientific object identity, direct observation ownership and target-field meaning. "
@@ -55,8 +55,19 @@ _SYSTEM = (
     "Never concatenate separate passages into one quote. A cross-paragraph link needs each supporting passage. "
     "Same name, proximity or shared values do not establish identity. Distinguish sites, samples, models and groups. "
     "A measured property is not its owner. Never promote a sample's value to a whole parent or vice versa. "
-    "subject_id is the DIRECT owner, not a convenient target-table row. Unknown ownership requires subject_id=null. "
-    "Do not change unknown to supported merely to satisfy this rule; supported requires source evidence. "
+    "status judges ONLY direct ownership, not whether the value or field is mentioned. "
+    "subject_id is the DIRECT owner, not a convenient target-table row. "
+    "supported requires a nonempty subject_id referencing a known or newly declared object AND nonempty source evidence. "
+    "unknown requires subject_id=null; target_match remains independent and may still be supported. "
+    "Do not choose an arbitrary object to satisfy this rule. A missing existing ID does not mean the owner is unknowable: "
+    "declare the source-supported object in objects with a local ID, then reference that ID in bindings. "
+    "The framework generates stable IDs; you must not invent a pre-existing stable ID. "
+    "Example: if the source says specimen A has mass 10 g, declare specimen A as local object o1 if absent, "
+    "then bind its mass to o1 with status=supported and the exact source evidence. "
+    "If a mass is reported without enough evidence to choose its owner, use status=unknown, subject_id=null; "
+    "target_match may be supported if the observation is indeed the requested mass. "
+    "A statistic for an explicitly defined group belongs to that group, not automatically to each member. "
+    "These are instructional examples only; never extract them or quote them as source evidence. "
     "Independently judge target_match against the user's field definition; locating a number is not semantic support. "
     "property_name/statistic describe your interpretation; never generate or change original value, unit or conditions. "
     "If evidence is insufficient, return unknown with an explicit reason; search failure is not proof of absence. "
@@ -203,7 +214,7 @@ def _tool(step, index, objects):
 
 
 def _advance(response, *, batch, objects, relations, entries, shown, index, history, source_hash,
-             reference_ids=(), evidence_contexts=None, artifact_id=None):
+             reference_ids=(), evidence_contexts=None, artifact_id=None, review_items=None):
     if response.attempts != 1 or response.finish_reason not in (None, "stop"):
         raise VerificationValidationError("Verification requires one complete response; truncation/refusal is not applied.",
                                           code="invalid_analysis_completion", phase="response_contract")
@@ -212,7 +223,8 @@ def _advance(response, *, batch, objects, relations, entries, shown, index, hist
         contexts = {}
         objects, relations, updates, entries = apply_decision(step,
             source_text=index.text, source_hash=source_hash, batch=batch, objects=objects,
-            relations=relations, entries=entries, visible_passages=shown, source_index=index, reference_ids=reference_ids, evidence_contexts=contexts)
+            relations=relations, entries=entries, visible_passages=shown, source_index=index, reference_ids=reference_ids,
+            evidence_contexts=contexts, review_items=review_items)
         if evidence_contexts is not None:
             for key, context in contexts.items():
                 evidence_contexts[(key, artifact_id)] = {**context, "artifact_id": artifact_id}
@@ -233,11 +245,42 @@ def _mark(batch, status, reason):
             item.update(binding_status=status, reason=reason)
 
 
+def _review_diagnostic(reviews, batch):
+    held = [item["observation_id"] for item in batch if item["binding_status"] == "review_required"]
+    summary = {"category": "model_response", "phase": "proposal_validation", "code": "proposal_review",
+               "proposal_count": len(reviews), "observation_count": len(held),
+               "applied_count": len(batch) - len(held)}
+    return {**summary, "reviews": deepcopy(reviews)}, summary, held
+
+
+def _review_signature(diagnostic):
+    """Compare deterministic review structure while allowing credential redaction.
+
+    The saved diagnostic bytes have their own checksum; source text and original
+    proposals are independently bound by the replayed response/cache checksum.
+    """
+    def issue_signature(issue):
+        keys = ("path", "code", "phase", "passage_id", "total_match_count", "visible_match_count")
+        value = {key: issue[key] for key in keys if key in issue}
+        if "matches" in issue:
+            value["matches"] = [{**{key: match[key] for key in ("start", "end", "occurrence")},
+                                  "context": {key: match["context"][key] for key in ("start", "end", "model_visible")}}
+                                 for match in issue["matches"]]
+        return value
+    reviews = [{"proposal_type": item["proposal_type"], "path": item["path"],
+             "proposal_id": item["proposal_id"], "observation_ids": item["observation_ids"],
+             "dependencies": item["dependencies"], "code": item["code"],
+             "issues": [issue_signature(issue) for issue in item["issues"]]}
+            for item in diagnostic["reviews"]]
+    return {**{key: diagnostic[key] for key in (
+        "category", "phase", "code", "proposal_count", "observation_count", "applied_count")}, "reviews": reviews}
+
+
 def _load(path, fingerprint, jobs, max_calls, max_steps):
     try:
         payload = load_json(path.read_text(encoding="utf-8"))
         state = payload["state"]
-        if payload["sha256"] != digest(state) or state["version"] not in {"0.2", "0.3"}:
+        if payload["sha256"] != digest(state) or state["version"] not in {"0.2", "0.3", "0.4"}:
             raise ValueError("version or checksum")
         if state.get("revision") != REVISION:
             raise ConfigurationError(
@@ -245,7 +288,7 @@ def _load(path, fingerprint, jobs, max_calls, max_steps):
                 "Preserve the old run and reuse verified extraction in a new analysis branch; "
                 "no new model request was sent."
             )
-        if state["version"] != "0.3":
+        if state["version"] != "0.4":
             raise ValueError("version")
         if state["fingerprint"] != fingerprint:
             raise ValueError("identity")
@@ -371,31 +414,23 @@ def build_verification(text, result, *, table_subject, backend, generation=None,
                     visible[number].extend(shown)
                     if step["status"] in {"completed", "review_required"}:
                         response = cache[request.artifact_id]
-                        try:
-                            action, tool_result, objects, relations, entries = _advance(response,
-                                batch=batch, objects=objects, relations=relations, entries=entries,
-                                shown=visible[number], index=index, history=histories[number], source_hash=result.source.sha256,
-                                reference_ids=_reference_ids(request), evidence_contexts=contexts, artifact_id=request.artifact_id)
-                        except VerificationValidationError as exc:
+                        reviews = []
+                        action, tool_result, objects, relations, entries = _advance(response,
+                            batch=batch, objects=objects, relations=relations, entries=entries,
+                            shown=visible[number], index=index, history=histories[number], source_hash=result.source.sha256,
+                            reference_ids=_reference_ids(request), evidence_contexts=contexts,
+                            artifact_id=request.artifact_id, review_items=reviews)
+                        if reviews:
+                            diagnostic, summary, held = _review_diagnostic(reviews, batch)
                             if (step["status"] != "review_required" or job["status"] != "review_required"
-                                    or exc.code != "quote_ambiguous" or step.get("error_code") != exc.code
-                                    or step.get("validation_summary") != exc.summary):
-                                raise ValueError("review replay") from exc
-                            # The diagnostic can have been redacted with old credentials;
-                            # source coordinates and response paths must still reproduce.
+                                    or step.get("error_code") != "proposal_review" or job.get("error_code") != "proposal_review"
+                                    or step.get("validation_summary") != summary
+                                    or job.get("review_observation_ids") != held):
+                                raise ValueError("review replay")
                             saved_diagnostic = validations[step["validation_details"]]
-                            def coordinates(diagnostic):
-                                return [(item["path"], item["passage_id"], item["total_match_count"],
-                                         item["visible_match_count"],
-                                         [(match["start"], match["end"], match["occurrence"],
-                                           match["context"]["start"], match["context"]["end"],
-                                           match["context"]["model_visible"]) for match in item["matches"]])
-                                        for item in diagnostic["ambiguities"]]
-                            if coordinates(saved_diagnostic) != coordinates(exc.details):
-                                raise ValueError("review source positions")
+                            if _review_signature(saved_diagnostic) != _review_signature(diagnostic):
+                                raise ValueError("review proposal/position inventory")
                             review_diagnostics[request.artifact_id] = deepcopy(saved_diagnostic)
-                            action, tool_result = "decide", None
-                            _mark(batch, "review_required", "Ambiguous source positions; the whole decision remains isolated for review.")
                         else:
                             if step["status"] == "review_required":
                                 raise ValueError("review no longer reproducible")
@@ -421,7 +456,7 @@ def build_verification(text, result, *, table_subject, backend, generation=None,
         return sum(job["attempts"] for job in jobs)
 
     if check_only:
-        return {"analysis_version": "0.3", "status": "checked", "jobs": deepcopy(jobs),
+        return {"analysis_version": "0.4", "status": "checked", "jobs": deepcopy(jobs),
             "planned_calls": len(jobs), "maximum_steps": len(jobs) * max_steps,
             "reusable_jobs": sum(job["status"] == "completed" for job in jobs),
             "review_jobs": sum(job["status"] == "review_required" for job in jobs),
@@ -435,7 +470,7 @@ def build_verification(text, result, *, table_subject, backend, generation=None,
 
     def save():
         if trace is not None:
-            state = {"version": "0.3", "revision": REVISION, "fingerprint": fingerprint,
+            state = {"version": "0.4", "revision": REVISION, "fingerprint": fingerprint,
                      "max_calls": max_calls, "calls_used": used(), "jobs": jobs}
             trace.write_json("analysis/checkpoint.json", {"state": state, "sha256": digest(state)}, atomic=True)
 
@@ -467,7 +502,7 @@ def build_verification(text, result, *, table_subject, backend, generation=None,
         if stop:
             break
         if job["status"] in {"completed", "failed", "limited", "review_required"}:
-            event("reused", job_id=job["job_id"], status=job["status"])
+            event("reused", job_id=job["job_id"], status=job["status"], error_code=job.get("error_code"))
             continue
         while len(job["steps"]) < max_steps:
             if used() >= max_calls:
@@ -506,10 +541,12 @@ def build_verification(text, result, *, table_subject, backend, generation=None,
                     trace.write_text(f"analysis/responses/{request.artifact_id}.txt", response.text)
                     trace.write_json(f"analysis/responses/{request.artifact_id}.meta.json", {
                         key: value for key, value in response.model_dump(mode="json").items() if key != "text"})
+                reviews = []
                 action, tool_result, objects, relations, entries = _advance(response,
                     batch=batch, objects=objects, relations=relations, entries=entries,
                     shown=visible[number], index=index, history=histories[number], source_hash=result.source.sha256,
-                    reference_ids=_reference_ids(request), evidence_contexts=contexts, artifact_id=request.artifact_id)
+                    reference_ids=_reference_ids(request), evidence_contexts=contexts,
+                    artifact_id=request.artifact_id, review_items=reviews)
                 step.update(status="completed", action=action, tool_hash=digest(tool_result),
                             response_hash=digest(response.model_dump(mode="json")))
                 if trace is not None:
@@ -517,9 +554,26 @@ def build_verification(text, result, *, table_subject, backend, generation=None,
                     if tool_result is not None:
                         trace.write_json(f"analysis/tools/{request.artifact_id}.json", histories[number][-1])
                 if action == "decide":
-                    job["status"] = "completed"
+                    if reviews:
+                        diagnostic, summary, held = _review_diagnostic(reviews, batch)
+                        step.update(status="review_required", error_code="proposal_review", validation_summary=summary)
+                        job.update(status="review_required", error_code="proposal_review", review_observation_ids=held)
+                        cache[request.artifact_id] = response
+                        review_diagnostics[request.artifact_id] = diagnostic
+                        if trace is not None and trace.directory is not None:
+                            details = f"analysis/validation/{request.artifact_id}.errors.json"
+                            trace.write_json(details, diagnostic)
+                            saved_diagnostic = load_json((trace.directory / details).read_text(encoding="utf-8"))
+                            step.update(validation_details=details, validation_hash=digest(saved_diagnostic))
+                    else:
+                        job["status"] = "completed"
                     save()
-                    event("completed", job_id=job["job_id"])
+                    if reviews:
+                        event("review_required", job_id=job["job_id"], observation_count=len(held),
+                              applied_count=len(batch) - len(held), proposal_count=len(reviews),
+                              validation_summary=summary, validation_details=step.get("validation_details"))
+                    else:
+                        event("completed", job_id=job["job_id"])
                     break
                 save()
                 event("tool", job_id=job["job_id"], operation=action,
@@ -534,8 +588,7 @@ def build_verification(text, result, *, table_subject, backend, generation=None,
                 code = "interrupted" if isinstance(exc, KeyboardInterrupt) else getattr(exc, "code", "invalid_analysis_response")
                 if validation is not None:
                     code = validation.code
-                needs_review = validation is not None and code == "quote_ambiguous" and response is not None
-                step.update(status="review_required" if needs_review else "failed", error_code=code, outcome_unknown=response is None,
+                step.update(status="failed", error_code=code, outcome_unknown=response is None,
                             request_outcome="unknown" if response is None else "response_received",
                             error=(str(validation) if validation is not None else str(exc))
                             if not isinstance(exc, KeyboardInterrupt) else "Interrupted; request will not be resent.")
@@ -549,19 +602,6 @@ def build_verification(text, result, *, table_subject, backend, generation=None,
                         # Bind the saved, redacted artifact, not pre-redaction IDs.
                         saved_diagnostic = load_json((trace.directory / details).read_text(encoding="utf-8"))
                         step["validation_hash"] = digest(saved_diagnostic)
-                if needs_review:
-                    cache[request.artifact_id] = response
-                    review_diagnostics[request.artifact_id] = {**validation.details, "message": str(validation)}
-                    step.update(action="decide", tool_hash=digest(None),
-                                response_hash=digest(response.model_dump(mode="json")))
-                    if trace is not None:
-                        trace.write_json(f"analysis/cache/{request.artifact_id}.json", response.model_dump(mode="json"), atomic=True)
-                    job.update(status="review_required", error_code=code)
-                    _mark(batch, "review_required", "Ambiguous source positions; the whole decision remains isolated for review.")
-                    save()
-                    event("review_required", job_id=job["job_id"], observation_count=len(batch),
-                          validation_summary=step["validation_summary"], validation_details=step.get("validation_details"))
-                    break
                 if isinstance(exc, BackendError):
                     step["http_attempts"] = exc.attempts
                     if exc.status_code is not None:
@@ -602,7 +642,7 @@ def build_verification(text, result, *, table_subject, backend, generation=None,
     status = ("failed" if any(job["status"] == "failed" for job in jobs) else
               "complete" if all(job["status"] == "completed" for job in jobs) else "partial")
     package = {
-        "analysis_version": "0.3", "revision": REVISION, "status": status, "semantic_status": "model_proposed",
+        "analysis_version": "0.4", "revision": REVISION, "status": status, "semantic_status": "model_proposed",
         "source_format_status": result.format_status,
         "verification_scope": "bounded source lookup, identity, direct ownership and target-field meaning; no expert acceptance",
         "source": result.source.model_dump(mode="json"), "table_subject": table_subject,
@@ -611,8 +651,10 @@ def build_verification(text, result, *, table_subject, backend, generation=None,
         "objects": objects, "relations": relations, "observations": observations,
         "evidence": list(entries.values()), "evidence_contexts": list(contexts.values()),
         "jobs": jobs, "quarantined": quarantined,
-        "review_groups": [{"job_id": job["job_id"], "observation_ids": job["observation_ids"],
-            "record_types": sorted({item["record_type"] for item in batch}),
+        "review_groups": [{"job_id": job["job_id"], "observation_ids": job["review_observation_ids"],
+            "target_observation_ids": job["observation_ids"],
+            "applied_observation_ids": [key for key in job["observation_ids"] if key not in job["review_observation_ids"]],
+            "record_types": sorted({item["record_type"] for item in batch if item["binding_status"] == "review_required"}),
             "validation_details": job["steps"][-1].get("validation_details"),
             "validation_summary": job["steps"][-1]["validation_summary"],
             "response_details": (f"analysis/responses/{job['job_id']}.step-{job['steps'][-1]['number']:02d}.txt"

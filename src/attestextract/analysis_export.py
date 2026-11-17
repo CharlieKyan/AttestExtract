@@ -22,6 +22,7 @@ _REVIEW_FILES = ("review_groups.json", "review_groups.csv", "evidence_contexts.j
 _CONTEXT_COLUMNS = ("evidence_id", "artifact_id", "passage_id", "start", "end", "text", "model_visible")
 _GROUP_COLUMNS = ("job_id", "observation_ids", "record_types", "response_details", "validation_details",
                   "validation_summary", "response_text", "diagnostic")
+_PARTIAL_GROUP_COLUMNS = (*_GROUP_COLUMNS, "target_observation_ids", "applied_observation_ids")
 _OBSERVATION_COLUMNS = (
     "observation_id", "candidate_id", "source_record", "record_type", "source_kind",
     "entity", "value", "unit", "conditions", "subject_id", "binding_status", "reason",
@@ -56,7 +57,7 @@ def _refs(row: dict, field: str, known: dict) -> list[str]:
 
 
 def _validate(data: dict, *, check_context_text=True) -> None:
-    if (not isinstance(data, dict) or data.get("analysis_version") not in {"0.1", "0.2", "0.3"}
+    if (not isinstance(data, dict) or data.get("analysis_version") not in {"0.1", "0.2", "0.3", "0.4"}
             or data.get("semantic_status") != "model_proposed"
             or data.get("status") not in {"complete", "partial", "failed", "pending"}):
         raise ValueError("Unsupported analysis snapshot or verification status.")
@@ -89,14 +90,14 @@ def _validate(data: dict, *, check_context_text=True) -> None:
         if subject is not None and (not isinstance(subject, str) or subject not in objects):
             raise ValueError("Observation subjects must reference an existing object.")
         statuses = {"supported", "unknown", "pending", "failed"}
-        if data["analysis_version"] == "0.3":
+        if data["analysis_version"] in {"0.3", "0.4"}:
             statuses.add("review_required")
         if (item.get("binding_status") not in statuses
                 or item.get("binding_status") == "supported" and subject is None):
             raise ValueError("Observation binding status must agree with its subject reference.")
         if not isinstance(item.get("record_type"), str) or item["record_type"] not in fields:
             raise ValueError("Observation targets must be declared by the analysis task.")
-        if data["analysis_version"] in {"0.2", "0.3"}:
+        if data["analysis_version"] in {"0.2", "0.3", "0.4"}:
             target_match = item.get("target_match", "unknown")
             if not isinstance(target_match, str) or target_match not in {"supported", "unsupported", "unknown"}:
                 raise ValueError("Observation target matching must be supported, unsupported or unknown.")
@@ -107,26 +108,89 @@ def _validate(data: dict, *, check_context_text=True) -> None:
                 or not isinstance(item.get("blockers"), list)):
             raise ValueError("Observations require original result pointers and explicit blockers.")
         _refs(item, "evidence_ids", evidence)
-        _refs(item, "binding_evidence_ids", evidence)
+        binding_evidence = _refs(item, "binding_evidence_ids", evidence)
+        if data["analysis_version"] == "0.4" and (
+                item["binding_status"] == "supported" and not binding_evidence
+                or item["binding_status"] == "unknown" and subject is not None):
+            raise ValueError("Retained binding proposals must satisfy ownership and evidence requirements.")
     for item in relations.values():
         if (not isinstance(item.get("source_id"), str) or item["source_id"] not in objects
                 or not isinstance(item.get("target_id"), str) or item["target_id"] not in objects
                 or not isinstance(item.get("predicate"), str) or not item["predicate"]):
             raise ValueError("Relations require existing object endpoints and a predicate.")
         _refs(item, "evidence_ids", evidence)
-    if data["analysis_version"] == "0.3":
+    if data["analysis_version"] in {"0.3", "0.4"}:
         _validate_review_materials(data, observations, evidence, check_context_text=check_context_text)
+
+
+def _validate_partial_group(group, job, observations):
+    targets = _refs(group, "target_observation_ids", observations)
+    held = _refs(group, "observation_ids", observations)
+    applied = _refs(group, "applied_observation_ids", observations)
+    if (not targets or job.get("observation_ids") != targets
+            or job.get("review_observation_ids") != held or job.get("error_code") != "proposal_review"
+            or set(held).intersection(applied) or set(held).union(applied) != set(targets)
+            or any(observations[key]["binding_status"] not in {"supported", "unknown"} for key in applied)):
+        raise ValueError("Partial decisions must partition all job targets into retained and held observations.")
+    diagnostic = group["diagnostic"]
+    reviews = diagnostic.get("reviews")
+    if not isinstance(reviews, list) or not reviews:
+        raise ValueError("Partial decisions must retain their rejected proposals and issues.")
+    affected, paths = set(), set()
+    for item in reviews:
+        if not isinstance(item, dict):
+            raise ValueError("Rejected proposals must be objects.")
+        kind, path, raw = item.get("proposal_type"), item.get("path"), item.get("raw_proposal")
+        folder = {"object": "objects", "relation": "relations", "binding": "bindings"}.get(kind)
+        if (folder is None or not isinstance(path, str) or not re.fullmatch(rf"{folder}\[[0-9]+\]", path)
+                or path in paths or not isinstance(raw, dict)
+                or not isinstance(item.get("proposal_id"), str) or not item["proposal_id"]
+                or not isinstance(item.get("code"), str) or not item["code"]):
+            raise ValueError("Rejected proposals require unique canonical paths and original payloads.")
+        paths.add(path)
+        ids = _refs(item, "observation_ids", observations)
+        if not set(ids).issubset(held):
+            raise ValueError("Rejected proposal dependencies cannot include retained observations.")
+        affected.update(ids)
+        if kind == "binding" and (ids != [item["proposal_id"]] or raw.get("observation_id") != item["proposal_id"]):
+            raise ValueError("Rejected bindings must identify their original target observation.")
+        dependencies = item.get("dependencies")
+        issues = item.get("issues")
+        if (not isinstance(dependencies, list) or any(not isinstance(value, str) or not value for value in dependencies)
+                or len(set(dependencies)) != len(dependencies)
+                or not isinstance(issues, list) or not issues):
+            raise ValueError("Rejected proposals need explicit dependency lists and validation issues.")
+        for issue in issues:
+            if (not isinstance(issue, dict) or any(not isinstance(issue.get(key), str) or not issue[key]
+                    for key in ("code", "phase", "message", "path"))):
+                raise ValueError("Proposal issues require paths, codes, phases and explanations.")
+    if affected != set(held):
+        raise ValueError("Every held observation must be explained by a rejected proposal.")
+    for summary in (group["validation_summary"], diagnostic):
+        for key, expected in (("proposal_count", len(reviews)), ("observation_count", len(held)),
+                              ("applied_count", len(applied))):
+            if type(summary.get(key)) is not int or summary[key] != expected:
+                raise ValueError("Partial decision counts must agree with the retained and rejected proposals.")
 
 
 def _validate_review_materials(data, observations, evidence, *, check_context_text):
     groups = _index(data.get("review_groups"), "job_id")
     jobs = _index(data.get("jobs"), "job_id")
+    if data["analysis_version"] == "0.4":
+        targets = set()
+        for job in jobs.values():
+            ids = _refs(job, "observation_ids", observations)
+            if not ids or targets.intersection(ids):
+                raise ValueError("Verification jobs must have nonempty, disjoint target sets.")
+            targets.update(ids)
+        if targets != set(observations):
+            raise ValueError("Verification job targets must cover every original observation.")
     held = set()
     for key, group in groups.items():
         job = jobs.get(key, {})
         ids = _refs(group, "observation_ids", observations)
-        if (not ids or job.get("status") != "review_required" or job.get("observation_ids") != ids
-                or held.intersection(ids)):
+        if (job.get("status") != "review_required" or held.intersection(ids)
+                or data["analysis_version"] == "0.3" and (not ids or job.get("observation_ids") != ids)):
             raise ValueError("Review groups must reference disjoint isolated jobs and observations.")
         held.update(ids)
         expected_fields = sorted({observations[value]["record_type"] for value in ids})
@@ -143,12 +207,15 @@ def _validate_review_materials(data, observations, evidence, *, check_context_te
             if path is not None and (not isinstance(path, str) or not re.fullmatch(
                     rf"analysis/{folder}/{re.escape(key)}\.step-[0-9]+\.{re.escape(suffix)}", path)):
                 raise ValueError("Review artifact references must use canonical diagnostic paths.")
-        if not isinstance(group.get("validation_summary"), dict) or group["validation_summary"].get("code") != "quote_ambiguous":
-            raise ValueError("Review groups must describe citation ambiguity explicitly.")
+        code = "proposal_review" if data["analysis_version"] == "0.4" else "quote_ambiguous"
+        if not isinstance(group.get("validation_summary"), dict) or group["validation_summary"].get("code") != code:
+            raise ValueError("Review groups must identify the applicable validation policy.")
         if (not isinstance(group.get("response_text"), str) or not group["response_text"]
                 or not isinstance(group.get("diagnostic"), dict)
-                or group["diagnostic"].get("code") != "quote_ambiguous"):
-            raise ValueError("Review groups must retain the original answer and ambiguity diagnostic.")
+                or group["diagnostic"].get("code") != code):
+            raise ValueError("Review groups must retain the original answer and validation diagnostic.")
+        if data["analysis_version"] == "0.4":
+            _validate_partial_group(group, job, observations)
     if (held != {key for key, item in observations.items() if item["binding_status"] == "review_required"}
             or set(groups) != {key for key, job in jobs.items() if job.get("status") == "review_required"}
             or groups and data["status"] not in {"partial", "failed"}):
@@ -195,7 +262,7 @@ def _object_view(data: dict) -> dict:
         if not _direct(item):
             unbound.append(item)
             continue
-        if data["analysis_version"] in {"0.2", "0.3"} and item.get("target_match") != "supported":
+        if data["analysis_version"] in {"0.2", "0.3", "0.4"} and item.get("target_match") != "supported":
             unmatched.append(item)
             continue
         subject = by_id[item["subject_id"]]
@@ -251,7 +318,7 @@ def _database(path: Path, data: dict) -> None:
             CREATE TABLE relation_evidence (relation_id TEXT REFERENCES relations(relation_id),
                 evidence_id TEXT REFERENCES evidence(evidence_id), PRIMARY KEY (relation_id, evidence_id));
         """)
-        if data["analysis_version"] == "0.3":
+        if data["analysis_version"] in {"0.3", "0.4"}:
             connection.executescript("""
                 CREATE TABLE review_groups (job_id TEXT PRIMARY KEY, observation_ids_json TEXT NOT NULL,
                     record_types_json TEXT NOT NULL, response_details TEXT, validation_details TEXT,
@@ -261,6 +328,9 @@ def _database(path: Path, data: dict) -> None:
                     end INTEGER NOT NULL, text TEXT NOT NULL, model_visible INTEGER NOT NULL,
                     PRIMARY KEY (evidence_id, artifact_id));
             """)
+            if data["analysis_version"] == "0.4":
+                connection.execute("ALTER TABLE review_groups ADD COLUMN target_observation_ids_json TEXT NOT NULL DEFAULT '[]'")
+                connection.execute("ALTER TABLE review_groups ADD COLUMN applied_observation_ids_json TEXT NOT NULL DEFAULT '[]'")
         with connection:
             connection.executemany("INSERT INTO metadata VALUES (?, ?)",
                                    [(key, _json(value)) for key, value in data.items()
@@ -289,12 +359,19 @@ def _database(path: Path, data: dict) -> None:
                 for key in item.get(field, [])])
             connection.executemany("INSERT INTO relation_evidence VALUES (?, ?)", [
                 (item["relation_id"], key) for item in data["relations"] for key in item.get("evidence_ids", [])])
-            if data["analysis_version"] == "0.3":
-                connection.executemany("INSERT INTO review_groups VALUES (?, ?, ?, ?, ?, ?, ?, ?)", [
+            if data["analysis_version"] in {"0.3", "0.4"}:
+                connection.executemany("INSERT INTO review_groups (job_id, observation_ids_json, record_types_json, "
+                    "response_details, validation_details, validation_summary_json, response_text, diagnostic_json) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)", [
                     (item["job_id"], _json(item["observation_ids"]), _json(item["record_types"]),
                      item.get("response_details"), item.get("validation_details"), _json(item["validation_summary"]),
                      item["response_text"], _json(item["diagnostic"]))
                     for item in data["review_groups"]])
+                if data["analysis_version"] == "0.4":
+                    connection.executemany("UPDATE review_groups SET target_observation_ids_json=?, "
+                        "applied_observation_ids_json=? WHERE job_id=?", [
+                            (_json(item["target_observation_ids"]), _json(item["applied_observation_ids"]), item["job_id"])
+                            for item in data["review_groups"]])
                 connection.executemany("INSERT INTO evidence_contexts VALUES (?, ?, ?, ?, ?, ?, ?)", [
                     (item["evidence_id"], item["artifact_id"], item["passage_id"], item["start"], item["end"],
                      item["text"], int(item["model_visible"])) for item in data["evidence_contexts"]])
@@ -315,6 +392,8 @@ def _verification_stop_reason(job: dict) -> str | None:
         reason = "原文或内部状态校验失败；不能当作模型回答错误纠正。"
     elif summary.get("code") == "quote_ambiguous":
         reason = "引文存在多个可见位置；整组提议隔离待复核，未应用到对象、关系或汇总表。"
+    elif summary.get("code") == "proposal_review":
+        reason = "不合格提议及其明确引用依赖未应用；同组独立通过检查的提议已保留。原始观测未删除，仍需复核。"
     elif summary.get("code") == "binding_scope_mismatch":
         def count(key):
             value = summary.get(key)
@@ -345,9 +424,11 @@ def _markdown(data: dict, view: dict) -> str:
             [*item.get("evidence_ids", []), *item.get("binding_evidence_ids", [])])]
         problems = "; ".join(str(blocker.get("message") or blocker.get("code") or blocker)
                              if isinstance(blocker, dict) else str(blocker) for blocker in item["blockers"])
-        if not _direct(item):
+        if item["binding_status"] == "review_required" and data["analysis_version"] == "0.4":
+            problems = "归属提议不合格、未应用：" + str(item.get("reason") or "请查看提议校验详情") + ("；" + problems if problems else "")
+        elif not _direct(item):
             problems = "归属未确定：" + str(item.get("reason") or item["binding_status"]) + ("；" + problems if problems else "")
-        if data["analysis_version"] in {"0.2", "0.3"}:
+        if data["analysis_version"] in {"0.2", "0.3", "0.4"}:
             target = item.get("target_match", "unknown")
             matching = {"supported": "模型认为符合目标字段", "unsupported": "不符合目标字段", "unknown": "目标字段匹配未确定"}[target]
             labels = "; ".join(f"{label}：{item[key]}" for key, label in
@@ -364,7 +445,7 @@ def _markdown(data: dict, view: dict) -> str:
     lines = ["# 对象与观测分析", "", _NOTICE, "", "运行状态：" + status + " / " + show(data["status"]),
              "目标表主体：" + show(data.get("table_subject")),
              "同名对象按不同ID展示。下面仅展示直接绑定的观测；不沿关系传播数值。", ""]
-    if data["analysis_version"] in {"0.2", "0.3"}:
+    if data["analysis_version"] in {"0.2", "0.3", "0.4"}:
         lines += ["目标表仅纳入模型判断归属有支持且字段匹配有支持的观测；仍不是专家确认。其他观测单独保留。", ""]
         observations = data["observations"]
         binding_counts = {status: sum(item["binding_status"] == status for item in observations)
@@ -399,6 +480,40 @@ def _markdown(data: dict, view: dict) -> str:
                 lines += ["", "原回答完整保留；候选位置表示可能的位置，不表示模型同时引用全部位置。"
                           "普通恢复保留隔离状态，不会自动重答或把提议提升为已应用结果。"]
             lines.append("")
+        elif data["analysis_version"] == "0.4":
+            groups = data["review_groups"]
+            proposal_count = sum(len(group["diagnostic"]["reviews"]) for group in groups)
+            lines += [f"逐提议隔离：{len(groups)}个任务涉及{proposal_count}项不合格提议，"
+                      f"{binding_counts['review_required']}条观测的归属暂未应用。"
+                      "其他独立通过检查的提议保留；不能把隔离与合法未知混为一谈。",
+                      "所有原始观测保留；不合格对象、关系或归属不进入分析表，也不代表原文未报告。",
+                      "只跟踪显式对象引用依赖，不推断未声明的语义依赖；可检索不等于科学归属正确。", "",
+                      "## 未应用的提议与受影响观测", "",
+                      "| 任务 | 目标观测 | 保留有归属 | 保留未知 | 隔离观测 | 不合格提议 | 涉及字段 |",
+                      "| --- | --- | --- | --- | --- | --- | --- |"]
+            by_observation = {item["observation_id"]: item for item in observations}
+            for group in groups:
+                kept = [by_observation[key] for key in group["applied_observation_ids"]]
+                values = (group["job_id"], len(group["target_observation_ids"]),
+                          sum(item["binding_status"] == "supported" for item in kept),
+                          sum(item["binding_status"] == "unknown" for item in kept),
+                          len(group["observation_ids"]), len(group["diagnostic"]["reviews"]),
+                          ", ".join(group["record_types"]) or "仅对象/关系提议")
+                lines.append("| " + " | ".join(show(value) for value in values) + " |")
+            if not groups:
+                lines += ["", "无。"]
+            for group in groups:
+                lines += ["", "任务：" + show(group["job_id"]),
+                          "原回答：" + show("diagnostics/" + group["response_details"] if group.get("response_details")
+                              else "review_groups.json 的 response_text"),
+                          "已发现的校验问题与未应用原提议：" + show("diagnostics/" + group["validation_details"]
+                              if group.get("validation_details") else "review_groups.json 的 diagnostic"), "",
+                          "| 提议位置 | 问题代码 | 受影响观测 | 显式依赖 |", "| --- | --- | --- | --- |"]
+                for item in group["diagnostic"]["reviews"]:
+                    values = (item["path"], item["code"], ", ".join(item["observation_ids"]), ", ".join(item["dependencies"]))
+                    lines.append("| " + " | ".join(show(value) for value in values) + " |")
+            lines += ["", "普通恢复保留已应用与未应用的划分，不会自动修改回答或重新调用模型。"
+                      "请结合未归属、隔离和未处理数量评估分析表覆盖；这些数量不是准确率或召回率。", ""]
     for title, collection in (("目标对象", view["objects"]), ("相关对象（不作为目标表行）", view["related_objects"])):
         lines += ["## " + title, ""]
         for row in collection:
@@ -413,7 +528,7 @@ def _markdown(data: dict, view: dict) -> str:
     lines.extend(observation(item) for item in view["unbound_observations"])
     if not view["unbound_observations"]:
         lines += ["", "无。"]
-    if data["analysis_version"] in {"0.2", "0.3"}:
+    if data["analysis_version"] in {"0.2", "0.3", "0.4"}:
         lines += ["", "## 已有归属但尚不能填入目标字段的观测", "", *header]
         lines.extend(observation(item) for item in view["unmatched_observations"])
         if not view["unmatched_observations"]:
@@ -424,7 +539,7 @@ def _markdown(data: dict, view: dict) -> str:
         values = (item["source_id"], item["predicate"], item["target_id"],
                   " / ".join(evidence[key]["quote"] for key in item.get("evidence_ids", [])))
         lines.append("| " + " | ".join(show(value) for value in values) + " |")
-    if data["analysis_version"] == "0.3":
+    if data["analysis_version"] in {"0.3", "0.4"}:
         lines += ["", "## 引文与审阅上下文", "",
                   "原始引文保持模型选择的范围。上下文由程序从原文补充展示，不参与证据或对象ID，"
                   "不能用它代替模型原本的依据。位置为原文Unicode偏移；脱敏文本长度可能不同。", ""]
@@ -438,9 +553,9 @@ def _markdown(data: dict, view: dict) -> str:
         if not data["evidence_contexts"]:
             lines += ["无已应用查证引文的展示上下文；原抽取证据仍在观测记录中。", ""]
     lines += ["", "## 其他待核对材料", "", "原格式隔离记录：" + str(len(data.get("quarantined", []))),
-              "完整隔离声明、任务记录及复核项保存在 analysis.json；隔离声明不会填入目标表。",
+              "完整隔离声明、任务记录及复核项保存在 analysis.json；未应用提议不会填入目标表。",
               "SQLite / JSON 保留原值和引用；CSV 对可能执行公式的文本添加前导单引号，仅改变展示。", ""]
-    if data["analysis_version"] in {"0.2", "0.3"}:
+    if data["analysis_version"] in {"0.2", "0.3", "0.4"}:
         lines += ["## 有限查证任务", "", "| 任务 | 状态 | 模型调用 | 停止原因 |", "| --- | --- | --- | --- |"]
         for job in data.get("jobs", []):
             values = (job.get("job_id"), job.get("status"), job.get("attempts", 0),
@@ -463,7 +578,7 @@ def save_analysis(analysis: dict, directory: Path, secrets=()) -> None:
     view = _object_view(data)
     markdown = _markdown(data, view)
     directory = Path(directory)
-    filenames = _FILES + (_REVIEW_FILES if data["analysis_version"] == "0.3" else ())
+    filenames = _FILES + (_REVIEW_FILES if data["analysis_version"] in {"0.3", "0.4"} else ())
     if any((directory / name).exists() or (directory / name).is_symlink() for name in filenames):
         raise FileExistsError("Analysis output already exists; choose a new directory.")
     directory.mkdir(parents=True, exist_ok=True)
@@ -481,12 +596,13 @@ def save_analysis(analysis: dict, directory: Path, secrets=()) -> None:
     _write_csv(directory / "relations.csv", ("relation_id", "source_id", "target_id", "predicate",
                                             "evidence_ids", "semantic_status"), data["relations"])
     _write_csv(directory / "evidence.csv", ("evidence_id", "quote", "start", "end"), data["evidence"])
-    if data["analysis_version"] == "0.3":
+    if data["analysis_version"] in {"0.3", "0.4"}:
         for stem in ("review_groups", "evidence_contexts"):
             with (directory / (stem + ".json")).open("x", encoding="utf-8", newline="") as stream:
                 json.dump(data[stem], stream, ensure_ascii=False, allow_nan=False, indent=2)
                 stream.write("\n")
-        _write_csv(directory / "review_groups.csv", _GROUP_COLUMNS, data["review_groups"])
+        group_columns = _PARTIAL_GROUP_COLUMNS if data["analysis_version"] == "0.4" else _GROUP_COLUMNS
+        _write_csv(directory / "review_groups.csv", group_columns, data["review_groups"])
         _write_csv(directory / "evidence_contexts.csv", _CONTEXT_COLUMNS, data["evidence_contexts"])
     # Task field names are arbitrary; an extracted field named "name" must
     # neither replace the object label nor produce duplicate CSV columns.

@@ -457,10 +457,11 @@ AMBIGUITY_SOURCE = "\n\n".join(item[0] for item in AMBIGUITY_CLAIMS)
 class AmbiguityService(Service):
     """Two independent answer groups; the first has one repeated owner quote."""
 
-    def __init__(self, *, mode, invalid_after_ambiguity=False, lookup_only=False):
+    def __init__(self, *, mode, invalid_after_ambiguity=False, lookup_only=False, partial_kind=None):
         super().__init__(mode=mode)
         self.invalid_after_ambiguity = invalid_after_ambiguity
         self.lookup_only = lookup_only
+        self.partial_kind = partial_kind
 
     def handle(self, request):
         assert not self.forbidden, "Quarantined and completed groups must resume without generation"
@@ -483,9 +484,12 @@ class AmbiguityService(Service):
             targets = payload["observations"]
             numbers = tuple(int(item["value"]) for item in targets)
             assert numbers in ((1, 2, 3, 4, 5, 6), (7, 8, 9, 10, 11, 12))
-            # The rejected first group's proposals must not become context for
-            # the second group, even though they were valid object declarations.
-            assert payload["known_objects"] == []
+            # Only independent valid objects may become later context.
+            expected_known = set()
+            if numbers[0] == 7 and not self.lookup_only:
+                expected_known = ({"A01", "A02", "A03"} if self.partial_kind == "binding"
+                                  else {f"A{n:02d}" for n in range(2, 7)})
+            assert {item["name"] for item in payload["known_objects"]} == expected_known
             self.calls.append("search" if self.lookup_only else "decide")
             response = {"action": "search" if self.lookup_only else "decide",
                 "question": "Check the reported owner of each specimen mass.",
@@ -503,13 +507,25 @@ class AmbiguityService(Service):
                     local_id = f"specimen-{number}"
                     response["objects"].append({"object_id": local_id, "name": name, "kind": "sample",
                         "scope": "Synthetic specimen register", "is_table_subject": True,
-                        "mentions": [cite("Specimen A01" if number == 1 else quote)]})
+                        "mentions": [cite("Specimen A01" if number == 1 and self.partial_kind is None else quote)]})
                     response["bindings"].append({"observation_id": target["observation_id"],
                         "subject_id": local_id, "status": "supported", "evidence": [cite(quote)],
                         "reason": "The stated specimen owns this mass.", "target_match": "supported",
                         "property_name": "mass", "statistic": None})
                 if numbers[0] == 1 and self.invalid_after_ambiguity:
-                    response["bindings"][-1]["subject_id"] = "undeclared-owner"
+                    # Ambiguous target identity cannot be partitioned safely.
+                    response["bindings"][-1]["observation_id"] = targets[0]["observation_id"]
+                if numbers[0] == 1 and self.partial_kind == "binding":
+                    response["objects"] = response["objects"][:3]
+                    response["bindings"][3].update(subject_id=None, status="unknown", target_match="unsupported",
+                        reason="This observation cannot be assigned to a specimen and does not match the requested field.")
+                    for binding in response["bindings"][4:]:
+                        binding.update(subject_id=None, reason="The source supports the property, but no owner ID was declared.")
+                if numbers[0] == 1 and self.partial_kind == "object":
+                    response["objects"][0]["mentions"][0]["quote"] = "A nonexistent source statement."
+                    response["bindings"][1]["subject_id"] = "specimen-1"
+                    response["relations"] = [{"source_id": "specimen-1", "target_id": "specimen-3",
+                        "predicate": "different_from", "evidence": [cite(AMBIGUITY_CLAIMS[0][0])]}]
         return httpx.Response(200, json={"model": "synthetic-ambiguity-model", "choices": [
             {"finish_reason": "stop", "message": {"role": "assistant", "content": json.dumps(response)}}],
             "usage": {"prompt_tokens": 20, "completion_tokens": 10, "total_tokens": 30}})
@@ -563,25 +579,26 @@ def accept_ambiguity(root, mode, entry):
     else:
         assert outcome.analysis["status"] == "partial"
     analysis = read(first / "analysis/analysis.json")
-    assert analysis["analysis_version"] == "0.3" and analysis["status"] == "partial"
+    assert analysis["analysis_version"] == "0.4" and analysis["status"] == "partial"
     assert [job["status"] for job in analysis["jobs"]] == ["review_required", "completed"]
     assert analysis["budget"]["reserved"] == 2 and service.calls == ["extraction", "decide", "decide"]
     by_value = {int(item["value"]): item for item in analysis["observations"]}
     assert set(by_value) == set(range(1, 13))
     for number, item in by_value.items():
         assert item["value"] == str(number) and item["unit"] == "g"
-        assert item["binding_status"] == ("review_required" if number <= 6 else "supported")
-        if number <= 6:
+        assert item["binding_status"] == ("review_required" if number == 1 else "supported")
+        if number == 1:
             assert item["subject_id"] is None and item["binding_evidence_ids"] == []
-    assert {item["name"] for item in analysis["objects"]} == {f"A{n:02d}" for n in range(7, 13)}
+    assert {item["name"] for item in analysis["objects"]} == {f"A{n:02d}" for n in range(2, 13)}
     assert analysis["relations"] == []
     assert len(analysis["review_groups"]) == 1
-    assert set(analysis["review_groups"][0]["observation_ids"]) == {by_value[n]["observation_id"] for n in range(1, 7)}
+    assert analysis["review_groups"][0]["observation_ids"] == [by_value[1]["observation_id"]]
     step = analysis["jobs"][0]["steps"][-1]
     diagnostic = first / "diagnostics" / step["validation_details"]
     details = read(diagnostic)
-    assert details["code"] == "quote_ambiguous" and details["ambiguity_count"] == 1
-    ambiguous = details["ambiguities"][0]
+    assert details["code"] == "proposal_review"
+    ambiguous = next(issue for review in details["reviews"] for issue in review["issues"]
+                     if issue["code"] == "quote_ambiguous")
     assert ambiguous["total_match_count"] == ambiguous["visible_match_count"] == 2
     assert ambiguous["quote"] == "Specimen A01"
     assert len({match["start"] for match in ambiguous["matches"]}) == 2
@@ -596,10 +613,10 @@ def accept_ambiguity(root, mode, entry):
     assert raw["objects"][0]["mentions"][0]["quote"] == "Specimen A01"
     assert raw["objects"][0]["mentions"][0]["occurrence"] is None
     with (first / "analysis/object_table.csv").open(encoding="utf-8-sig", newline="") as stream:
-        assert len(list(csv.DictReader(stream))) == 6
+        assert len(list(csv.DictReader(stream))) == 11
     with sqlite3.connect(first / "analysis/analysis.sqlite") as db:
-        assert db.execute("SELECT count(*) FROM objects").fetchone()[0] == 6
-        assert db.execute("SELECT count(*) FROM observations WHERE subject_id IS NULL").fetchone()[0] == 6
+        assert db.execute("SELECT count(*) FROM objects").fetchone()[0] == 11
+        assert db.execute("SELECT count(*) FROM observations WHERE subject_id IS NULL").fetchone()[0] == 1
         assert db.execute("PRAGMA foreign_key_check").fetchall() == []
     old = hashes(first)
     service.forbidden = True
@@ -616,10 +633,70 @@ def accept_ambiguity(root, mode, entry):
     for artifact in first.rglob("*"):
         if artifact.is_file():
             assert b"synthetic-install-secret" not in artifact.read_bytes()
-    return {"passed": True, "observations": 12, "review_groups": 1, "review_observations": 6,
-            "supported_observations": 6, "analysis_calls": 2, "synthetic_http_calls": 3,
+    return {"passed": True, "observations": 12, "review_groups": 1, "review_observations": 1,
+            "supported_observations": 11, "analysis_calls": 2, "synthetic_http_calls": 3,
             "resume_new_calls": 0, "analysis_status": "partial", "cli_exit_status": 3 if entry == "cli" else None,
             "known_objects_unpolluted": True, "original_response_preserved": True}
+
+
+def accept_partial(root, mode, entry, *, kind="binding"):
+    """Independently expected proposal partition, not a replay of validator logic."""
+    service = AmbiguityService(mode=mode, partial_kind=kind)
+    service, invoke = ambiguity_entry(root, mode, entry, service=service)
+    first, replay = root / "first", root / "replay"
+    outcome = invoke(first)
+    assert (outcome == 3 if entry == "cli" else outcome.analysis["status"] == "partial")
+    analysis = read(first / "analysis/analysis.json")
+    assert analysis["analysis_version"] == "0.4" and analysis["status"] == "partial"
+    assert [job["status"] for job in analysis["jobs"]] == ["review_required", "completed"]
+    by_value = {int(item["value"]): item for item in analysis["observations"]}
+    assert set(by_value) == set(range(1, 13))
+    held = {5, 6} if kind == "binding" else {1, 2}
+    unknown = {4} if kind == "binding" else set()
+    for number, item in by_value.items():
+        expected = "review_required" if number in held else "unknown" if number in unknown else "supported"
+        assert item["binding_status"] == expected
+        assert item["value"] == str(number) and item["unit"] == "g" and item["conditions"] is None
+        if number in held:
+            assert item["subject_id"] is None and item["binding_evidence_ids"] == []
+    group = analysis["review_groups"][0]
+    assert set(group["observation_ids"]) == {by_value[n]["observation_id"] for n in held}
+    assert set(group["target_observation_ids"]) == {by_value[n]["observation_id"] for n in range(1, 7)}
+    assert set(group["applied_observation_ids"]) == {by_value[n]["observation_id"] for n in range(1, 7) if n not in held}
+    details = group["diagnostic"]
+    assert details["code"] == "proposal_review"
+    if kind == "binding":
+        reviews = details["reviews"]
+        assert len(reviews) == 2
+        assert {item["code"] for item in reviews} == {"invalid_binding_status"}
+        assert all(item["raw_proposal"]["status"] == "supported" and
+                   item["raw_proposal"]["subject_id"] is None for item in reviews)
+        assert by_value[4]["target_match"] == "unsupported"
+    else:
+        assert {item["proposal_type"] for item in details["reviews"]} == {"object", "relation", "binding"}
+        assert analysis["relations"] == []
+        assert "A01" not in {item["name"] for item in analysis["objects"]}
+    view = read(first / "analysis/objects.json")
+    projected = [obs for obj in view["objects"] for values in obj["fields"].values() for obs in values]
+    assert {int(item["value"]) for item in projected} == set(range(1, 13)) - held - unknown
+    assert service.calls == ["extraction", "decide", "decide"]
+    raw_path = first / "diagnostics/analysis/responses/verify-0001.step-01.txt"
+    raw = raw_path.read_text(encoding="utf-8")
+    assert group["response_text"] == raw
+    snapshot = hashes(first)
+    service.forbidden = True
+    resumed = invoke(replay, first)
+    assert (resumed == 3 if entry == "cli" else resumed.analysis["status"] == "partial")
+    restored = read(replay / "analysis/analysis.json")
+    assert restored["objects"] == analysis["objects"] and restored["observations"] == analysis["observations"]
+    assert hashes(first) == snapshot and len(service.calls) == 3
+    assert (replay / "diagnostics/analysis/responses/verify-0001.step-01.txt").read_bytes() == raw_path.read_bytes()
+    return {"passed": True, "observations": 12, "review_observations": len(held),
+            "supported_observations": 12 - len(held) - len(unknown), "unknown_observations": len(unknown),
+            "first_group_applied": 6 - len(held), "first_group_held": len(held),
+            "analysis_calls": 2, "synthetic_http_calls": 3, "resume_new_calls": 0,
+            "cli_exit_status": 3 if entry == "cli" else None, "original_response_preserved": True,
+            "independent_proposals_retained": True, "rejected_dependencies_excluded": True}
 
 
 def main():
@@ -650,6 +727,8 @@ def main():
                                                 for entry in ("python", "cli")}
             modes[mode]["ambiguity_acceptance"] = {entry: accept_ambiguity(directory / ("ambiguity-" + entry), mode, entry)
                                                     for entry in ("python", "cli")}
+            modes[mode]["partial_acceptance"] = {entry: accept_partial(directory / ("partial-" + entry), mode, entry)
+                                                  for entry in ("python", "cli")}
     assert not network_attempts
     summary = {"passed": True, "package_version": attestextract.__version__,
                "module_path": str(module_path), "installed_package_verified": True,
@@ -657,6 +736,7 @@ def main():
                "synthetic_http_calls": sum(item["synthetic_http_calls"] + item["cli_synthetic_http_calls"] +
                                            sum(scope["synthetic_http_calls"] for scope in item["scope_acceptance"].values())
                                            + sum(check["synthetic_http_calls"] for check in item["ambiguity_acceptance"].values())
+                                           + sum(check["synthetic_http_calls"] for check in item["partial_acceptance"].values())
                                            for item in modes.values()),
                "notice": "Synthetic offline acceptance; not provider or scientific-quality validation."}
     (root / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
