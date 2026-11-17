@@ -181,6 +181,7 @@ def test_verification_console_distinguishes_model_steps_and_local_tools():
     assert "no generation for the local tool" in output and "unresolved observations retained" in output
     assert "private source query" not in output
     assert "preserved failed state; no request resent" in output
+    assert "pending jobs may still consume calls" in output
     assert "reused validated response" not in output
 
 
@@ -200,3 +201,60 @@ def test_verification_console_explains_known_rejection_without_echoing_provider_
     assert "No automatic retry or mode downgrade" in output
     assert "diagnostics/http/verify-1.error.json" in output
     assert "PRIVATE PROVIDER" not in output and "outcome is unknown" not in output
+
+
+def test_verification_console_reports_scope_counts_without_echoing_response_ids():
+    import io
+    from attestextract.progress import ConsoleProgress
+
+    stream = io.StringIO()
+    console = ConsoleProgress(stream=stream)
+    console({"stage": "analysis", "event": "failed", "job_id": "verify-1", "used": 2, "limit": 8,
+             "request_outcome": "response_received", "error_code": "binding_scope_mismatch",
+             "validation_summary": {"category": "model_response", "code": "binding_scope_mismatch",
+                 "phase": "binding_scope", "expected_count": 6, "returned_count": 18,
+                 "missing_count": 0, "duplicate_count": 0, "unexpected_count": 12, "reference_count": 12,
+                 "unexpected_ids": ["PRIVATE MODEL VALUE"]},
+             "validation_details": "analysis/validation/verify-1.step-02.errors.json",
+             "error": "PRIVATE SOURCE ERROR"})
+    console.close()
+    output = stream.getvalue()
+    assert "expected 6, received 18; missing 0; duplicate IDs 0; unexpected 12" in output
+    assert "12 from read-only references" in output
+    assert "diagnostics/analysis/validation/verify-1.step-02.errors.json" in output
+    assert "No automatic retry or response correction" in output
+    assert "will not repair this failure" in output
+    assert "PRIVATE" not in output and "outcome is unknown" not in output
+
+
+@pytest.mark.parametrize("category,code,expected", [
+    ("internal_state", "verification_state_error", "not a model answer to correct"),
+    ("model_response", "binding_status_mismatch", "no proposals were applied"),
+])
+def test_verification_console_keeps_internal_and_response_failures_distinct(category, code, expected):
+    import io
+    from attestextract.progress import ConsoleProgress
+
+    stream = io.StringIO()
+    console = ConsoleProgress(stream=stream)
+    console({"stage": "analysis", "event": "failed", "job_id": "verify-1", "used": 1, "limit": 4,
+             "validation_summary": {"category": category, "code": code, "phase": "PRIVATE PHASE"},
+             "validation_details": "../PRIVATE/secret.json", "error": "PRIVATE EXCEPTION"})
+    console.close()
+    output = stream.getvalue()
+    assert expected in output and "PRIVATE" not in output
+    assert "validation details" not in output
+
+
+def test_verification_console_does_not_echo_invalid_count_values():
+    import io
+    from attestextract.progress import ConsoleProgress
+
+    stream = io.StringIO()
+    console = ConsoleProgress(stream=stream)
+    console({"stage": "analysis", "event": "failed", "validation_summary": {
+        "category": "model_response", "code": "binding_scope_mismatch",
+        "expected_count": "PRIVATE", "returned_count": True, "missing_count": -1}})
+    console.close()
+    assert "expected ?, received ?; missing ?" in stream.getvalue()
+    assert "PRIVATE" not in stream.getvalue()

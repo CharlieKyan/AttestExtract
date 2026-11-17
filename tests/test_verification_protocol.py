@@ -6,7 +6,8 @@ import json
 
 import pytest
 
-from attestextract.verification_protocol import Step, apply_decision, parse_step
+from attestextract.verification_protocol import (Step, VerificationValidationError,
+                                                apply_decision, parse_step)
 
 
 TEXT = ("East reactor R contains sample A. Sample A has a mass of 17 g.\n\n"
@@ -271,3 +272,86 @@ def test_free_form_question_and_query_do_not_require_a_predefined_gap_category()
 def test_duplicate_json_keys_are_not_silently_selected():
     with pytest.raises(ValueError):
         parse_step('{"action":"read","action":"decide","question":"why"}')
+
+
+def test_six_targets_and_twelve_readonly_references_are_rejected_transactionally():
+    state, payload = inputs(), decision()
+    targets = [f"target-{n}" for n in range(6)]
+    references = [f"reference-{n}" for n in range(12)]
+    state["batch"] = [{**deepcopy(state["batch"][0]), "observation_id": key} for key in targets]
+    payload["bindings"] = [{**deepcopy(payload["bindings"][0]), "observation_id": key}
+                           for key in [*targets, *references]]
+    before = deepcopy({k: v for k, v in state.items() if k != "source_index"})
+    with pytest.raises(VerificationValidationError) as caught:
+        apply_decision(parse_step(json.dumps(payload)), **state, reference_ids=references)
+    failure = caught.value
+    assert failure.summary == {
+        "category": "model_response", "phase": "binding_scope", "code": "binding_scope_mismatch",
+        "expected_count": 6, "returned_count": 18, "missing_count": 0, "duplicate_count": 0,
+        "unexpected_count": 12, "reference_count": 12,
+    }
+    assert set(failure.details["reference_ids"]) == set(references)
+    assert failure.details["foreign_ids"] == failure.details["missing_ids"] == failure.details["duplicate_ids"] == []
+    assert all(key not in str(failure) for key in [*targets, *references])
+    assert {k: v for k, v in state.items() if k != "source_index"} == before
+
+
+def test_scope_diagnostic_separates_missing_duplicates_references_and_foreign_ids():
+    state, payload = inputs(), decision()
+    state["batch"].append({**deepcopy(state["batch"][0]), "observation_id": "obs2"})
+    payload["bindings"] = [{**deepcopy(payload["bindings"][0]), "observation_id": key}
+                           for key in ["obs1", "obs1", "reference-only", "invented"]]
+    with pytest.raises(VerificationValidationError) as caught:
+        apply_decision(parse_step(json.dumps(payload)), **state, reference_ids=["reference-only"])
+    details = caught.value.details
+    assert details["expected_count"] == 2 and details["returned_count"] == 4
+    assert details["missing_ids"] == ["obs2"]
+    assert details["duplicate_ids"] == ["obs1"]
+    assert details["unexpected_ids"] == ["invented", "reference-only"]
+    assert details["reference_ids"] == ["reference-only"] and details["foreign_ids"] == ["invented"]
+
+
+@pytest.mark.parametrize("damage", ["duplicate_batch", "duplicate_objects", "index", "visible"])
+def test_framework_invariant_failures_are_not_model_errors(damage):
+    state, payload = inputs(), decision()
+    if damage == "duplicate_batch":
+        state["batch"] *= 2
+    elif damage == "duplicate_objects":
+        state["objects"] = [{"object_id": "existing"}, {"object_id": "existing"}]
+    elif damage == "index":
+        state["source_index"].passages["p1"]["text"] = "Corrupted indexed data"
+    else:
+        state["visible_passages"][0] = {**state["visible_passages"][0], "text": "Corrupted visible data"}
+    with pytest.raises(VerificationValidationError) as caught:
+        apply_decision(parse_step(json.dumps(payload)), **state)
+    assert caught.value.summary == {"category": "internal_state", "phase": "internal_state",
+                                    "code": "verification_state_error"}
+    assert state["relations"] == [] and state["entries"] == {}
+
+
+def test_unknown_binding_error_identifies_observation_without_changing_it():
+    state, payload = inputs(), decision()
+    payload["bindings"][0]["status"] = "unknown"
+    with pytest.raises(VerificationValidationError) as caught:
+        apply_decision(parse_step(json.dumps(payload)), **state)
+    assert caught.value.code == "invalid_binding_status"
+    assert caught.value.details["observation_id"] == "obs1"
+    assert "observation_id" not in caught.value.summary
+    assert state["objects"] == [] and state["entries"] == {}
+
+
+def test_unbound_but_source_supported_object_is_not_silently_removed_or_forced_to_bind():
+    state, payload = inputs(), decision()
+    payload["bindings"][0].update(status="unknown", subject_id=None, evidence=[], target_match="unknown",
+                                  reason="The specimen exists, but this attribution is unresolved.")
+    objects, _, updates, _ = apply_decision(parse_step(json.dumps(payload)), **state)
+    assert len(objects) == 1 and updates["obs1"]["subject_id"] is None
+    assert updates["obs1"]["binding_status"] == "unknown"
+
+
+def test_oversized_json_integer_is_a_response_decoding_error():
+    text = '{"action":"search","query":"sample","question":"Which sample?","search_offset":' + "9" * 5000 + '}'
+    with pytest.raises(VerificationValidationError) as caught:
+        parse_step(text)
+    assert caught.value.code == "invalid_analysis_json"
+    assert caught.value.summary["category"] == "model_response"

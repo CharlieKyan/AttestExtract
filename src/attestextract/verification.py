@@ -17,11 +17,12 @@ from .errors import BackendError, ConfigurationError
 from .execution import digest
 from .json_validation import load_json
 from .models import BackendResponse, ExtractionRequest, GenerationOptions
-from .verification_protocol import Step, apply_decision, parse_step
+from .verification_protocol import (Step, VerificationValidationError, apply_decision,
+                                    parse_step, target_observation_ids)
 from .verification_sources import SourceIndex
 
 
-REVISION = "bounded-source-verification-v2"
+REVISION = "bounded-source-verification-v3"
 BATCH_SIZE = 6
 _SYSTEM = (
     "Verify scientific object identity, direct observation ownership and target-field meaning. "
@@ -36,15 +37,21 @@ _SYSTEM = (
     "not a natural-language question. Use search_offset to page results; try alternate terms when needed. "
     "read returns original passages by passage_ids, optionally neighbors=1. No web or filesystem access. "
     "Search/read actions must leave objects, relations and bindings empty. "
-    "On decide, return one binding for EVERY supplied observation_id, even when unknown. "
+    "target_scope.observation_ids is the complete and ONLY list of observations to decide in this job. "
+    "On decide, return exactly one binding for each target_scope.observation_ids entry, even when unknown; "
+    "do not return any other observation IDs. observations contains these targets. "
+    "extraction_hints is read-only context: its reference_observation_id preserves source identity "
+    "but is NOT an additional target and must not become a binding. Use its content to guide source lookup only. "
     "You may propose source-supported missing objects with local object_id values or reuse supplied stable IDs. "
+    "Propose only objects and relations needed to explain the current targets; do not inventory background objects. "
     "name is a readable display label and may combine source-supported identity and scope; it is NOT a quote. "
     "mentions/evidence must quote continuous original text from a passage actually provided to you. "
     "Use passage_id and quote; occurrence is null for a unique match or its zero-based occurrence WITHIN that passage. "
     "Never concatenate separate passages into one quote. A cross-paragraph link needs each supporting passage. "
     "Same name, proximity or shared values do not establish identity. Distinguish sites, samples, models and groups. "
     "A measured property is not its owner. Never promote a sample's value to a whole parent or vice versa. "
-    "subject_id is the DIRECT owner, not a convenient target-table row. Unknown ownership requires null. "
+    "subject_id is the DIRECT owner, not a convenient target-table row. Unknown ownership requires subject_id=null. "
+    "Do not change unknown to supported merely to satisfy this rule; supported requires source evidence. "
     "Independently judge target_match against the user's field definition; locating a number is not semantic support. "
     "property_name/statistic describe your interpretation; never generate or change original value, unit or conditions. "
     "If evidence is insufficient, return unknown with an explicit reason; search failure is not proof of absence. "
@@ -60,6 +67,17 @@ def _position(item, entries):
 def _compact(item):
     return {key: deepcopy(item.get(key)) for key in (
         "observation_id", "candidate_id", "record_type", "entity", "value", "unit", "conditions", "blockers")}
+
+
+def _reference(item):
+    value = _compact(item)
+    value["reference_observation_id"] = value.pop("observation_id")
+    return value
+
+
+def _reference_ids(request):
+    payload = json.loads(request.messages[-1]["content"])
+    return [item["reference_observation_id"] for item in payload["extraction_hints"]]
 
 
 def _initial(batch, index, entries):
@@ -78,8 +96,9 @@ def _request(job, step_number, result, table_subject, batch, observations, objec
             "The framework verification prompt must explicitly request JSON output; "
             "no verification model request was sent."
         )
+    target_ids = target_observation_ids(batch)
     anchor = min((_position(item, entries) for item in batch), default=0)
-    batch_ids = {item["observation_id"] for item in batch}
+    batch_ids = set(target_ids)
     hints = sorted((item for item in observations if item["observation_id"] not in batch_ids),
                    key=lambda item: abs(_position(item, entries) - anchor))[:12]
     known = sorted(objects, key=lambda item: min(
@@ -90,7 +109,8 @@ def _request(job, step_number, result, table_subject, batch, observations, objec
         "task": {"description": result.task.description,
                  "fields": {name: spec.description for name, spec in result.task.record_types.items()}},
         "table_subject": table_subject, "observations": [_compact(item) for item in batch],
-        "extraction_hints": [_compact(item) for item in hints], "known_objects": deepcopy(known),
+        "target_scope": {"observation_ids": target_ids, "count": len(target_ids)},
+        "extraction_hints": [_reference(item) for item in hints], "known_objects": deepcopy(known),
         "source_inventory": {"characters": len(index.text), "passages": len(index.passages)},
         "initial_context": _initial(batch, index, entries), "lookup_history": deepcopy(history),
         "remaining_steps": max_steps - step_number + 1,
@@ -177,14 +197,16 @@ def _tool(step, index, objects):
         return {"error": str(exc), "passages": [], "has_more": False}
 
 
-def _advance(response, *, batch, objects, relations, entries, shown, index, history, source_hash):
+def _advance(response, *, batch, objects, relations, entries, shown, index, history, source_hash,
+             reference_ids=()):
     if response.attempts != 1 or response.finish_reason not in (None, "stop"):
-        raise ValueError("Verification requires one complete response; truncation/refusal is not applied.")
+        raise VerificationValidationError("Verification requires one complete response; truncation/refusal is not applied.",
+                                          code="invalid_analysis_completion", phase="response_contract")
     step = parse_step(response.text)
     if step.action == "decide":
         objects, relations, updates, entries = apply_decision(step,
             source_text=index.text, source_hash=source_hash, batch=batch, objects=objects,
-            relations=relations, entries=entries, visible_passages=shown, source_index=index)
+            relations=relations, entries=entries, visible_passages=shown, source_index=index, reference_ids=reference_ids)
         for item in batch:
             item.update(updates[item["observation_id"]])
         return step.action, None, objects, relations, entries
@@ -221,7 +243,7 @@ def _load(path, fingerprint, jobs, max_calls, max_steps):
             (old["job_id"], old["observation_ids"], old["kind"]) !=
             (new["job_id"], new["observation_ids"], new["kind"]) for old, new in zip(saved, jobs)):
             raise ValueError("job inventory")
-        cache = {}
+        cache, validations = {}, {}
         for job in saved:
             steps = job["steps"]
             if (job["status"] not in {"pending", "active", "completed", "failed", "limited"}
@@ -243,11 +265,24 @@ def _load(path, fingerprint, jobs, max_calls, max_steps):
                     cache[name] = BackendResponse.model_validate(raw)
                 elif step.get("response_hash") is not None:
                     raise ValueError("unapplied cache")
+                if step.get("validation_details") is not None:
+                    name = f"{job['job_id']}.step-{number:02d}.errors.json"
+                    relative = f"analysis/validation/{name}"
+                    target = (path.parent / "validation" / name).resolve()
+                    if (step["status"] != "failed" or step["validation_details"] != relative
+                            or not target.is_relative_to(path.parent.resolve())):
+                        raise ValueError("validation path")
+                    diagnostic = load_json(target.read_text(encoding="utf-8"))
+                    if digest(diagnostic) != step.get("validation_hash"):
+                        raise ValueError("validation checksum")
+                    validations[relative] = diagnostic
+                elif step.get("validation_hash") is not None:
+                    raise ValueError("missing validation path")
         used = sum(job["attempts"] for job in saved)
         if (type(state["calls_used"]) is not int or used != state["calls_used"]
                 or type(state["max_calls"]) is not int or not used <= state["max_calls"] <= 1000 or used > max_calls):
             raise ValueError("budget ledger")
-        return saved, cache
+        return saved, cache, validations
     except (KeyError, TypeError, ValueError, OSError):
         raise ConfigurationError("Verification checkpoint or cache is damaged or incompatible; no new model request was sent.") from None
 
@@ -283,6 +318,8 @@ def build_verification(text, result, *, table_subject, backend, generation=None,
         try:
             _request({"job_id": "verification-plan"}, 1, result, table_subject, batch,
                      observations, [], entries, index, [], generation, max_steps, input_budget)
+        except VerificationValidationError as exc:
+            raise ConfigurationError("Verification input state is invalid; no model request was sent.") from exc
         except ValueError:
             if len(batch) > 1:
                 middle = len(batch) // 2
@@ -298,7 +335,7 @@ def build_verification(text, result, *, table_subject, backend, generation=None,
         "quarantined": quarantined, "table_subject": table_subject,
         "backend": backend_hash, "route_id": route_id, "generation": generation.model_dump(mode="json"),
         "max_steps": max_steps, "input_budget": input_budget})
-    objects, relations, cache = [], [], {}
+    objects, relations, cache, validations = [], [], {}, {}
     replayed = []
     histories = [[] for _ in jobs]
     visible = [[] for _ in jobs]
@@ -306,7 +343,7 @@ def build_verification(text, result, *, table_subject, backend, generation=None,
         path = _checkpoint_path(resume_from)
         if not check_only and (trace is None or trace.directory is None or path.is_relative_to(trace.directory.resolve())):
             raise ConfigurationError("Verification recovery requires a separate new persistent trace directory.")
-        jobs, cache = _load(path, fingerprint, jobs, max_calls, max_steps)
+        jobs, cache, validations = _load(path, fingerprint, jobs, max_calls, max_steps)
         try:
             # Validate and reconstruct ALL saved decisions and lookups before the
             # first pending job can spend another reservation.
@@ -324,7 +361,8 @@ def build_verification(text, result, *, table_subject, backend, generation=None,
                         response = cache[request.artifact_id]
                         action, tool_result, objects, relations, entries = _advance(response,
                             batch=batch, objects=objects, relations=relations, entries=entries,
-                            shown=visible[number], index=index, history=histories[number], source_hash=result.source.sha256)
+                            shown=visible[number], index=index, history=histories[number], source_hash=result.source.sha256,
+                            reference_ids=_reference_ids(request))
                         if action != step["action"] or digest(tool_result) != step["tool_hash"]:
                             raise ValueError("tool replay")
                         replayed.append((request, response, deepcopy(histories[number][-1]) if tool_result is not None else None))
@@ -370,6 +408,15 @@ def build_verification(text, result, *, table_subject, backend, generation=None,
             "passages": [{key: value for key, value in item.items() if key != "text"} for item in index.passages]})
         for key, response in cache.items():
             trace.write_json(f"analysis/cache/{key}.json", response.model_dump(mode="json"), atomic=True)
+        for relative, diagnostic in validations.items():
+            trace.write_json(relative, diagnostic)
+        if trace.directory is not None:
+            for job in jobs:
+                for step in job["steps"]:
+                    if step.get("validation_details") in validations:
+                        # New connection credentials may redact additional text.
+                        copied = load_json((trace.directory / step["validation_details"]).read_text(encoding="utf-8"))
+                        step["validation_hash"] = digest(copied)
         for request, response, tool_frame in replayed:
             trace.write_json(f"analysis/requests/{request.artifact_id}.json", request.model_dump(mode="json"))
             trace.write_text(f"analysis/responses/{request.artifact_id}.txt", response.text)
@@ -394,6 +441,8 @@ def build_verification(text, result, *, table_subject, backend, generation=None,
             try:
                 request, shown, size = _request(job, step_number, result, table_subject,
                     batch, observations, objects, entries, index, histories[number], generation, max_steps, input_budget)
+            except VerificationValidationError as exc:
+                raise ConfigurationError("Verification input state is invalid; no model request was sent.") from exc
             except ValueError as exc:
                 job.update(status="limited", reason=str(exc), error_code="context_limit")
                 _mark(batch, "unknown", str(exc))
@@ -422,7 +471,8 @@ def build_verification(text, result, *, table_subject, backend, generation=None,
                         key: value for key, value in response.model_dump(mode="json").items() if key != "text"})
                 action, tool_result, objects, relations, entries = _advance(response,
                     batch=batch, objects=objects, relations=relations, entries=entries,
-                    shown=visible[number], index=index, history=histories[number], source_hash=result.source.sha256)
+                    shown=visible[number], index=index, history=histories[number], source_hash=result.source.sha256,
+                    reference_ids=_reference_ids(request))
                 step.update(status="completed", action=action, tool_hash=digest(tool_result),
                             response_hash=digest(response.model_dump(mode="json")))
                 if trace is not None:
@@ -438,10 +488,29 @@ def build_verification(text, result, *, table_subject, backend, generation=None,
                 event("tool", job_id=job["job_id"], operation=action,
                       count=len(tool_result.get("passages", tool_result.get("matches", []))))
             except (BackendError, ValueError, KeyboardInterrupt) as exc:
+                validation = exc if isinstance(exc, VerificationValidationError) else None
+                if isinstance(exc, ValueError) and validation is None:
+                    # Unclassified validation failures may indicate broken
+                    # framework state, not a model response to regenerate.
+                    validation = VerificationValidationError("Verification internal state validation failed.",
+                        code="verification_state_error", phase="internal_state", category="internal_state")
                 code = "interrupted" if isinstance(exc, KeyboardInterrupt) else getattr(exc, "code", "invalid_analysis_response")
+                if validation is not None:
+                    code = validation.code
                 step.update(status="failed", error_code=code, outcome_unknown=response is None,
                             request_outcome="unknown" if response is None else "response_received",
-                            error=str(exc) if not isinstance(exc, KeyboardInterrupt) else "Interrupted; request will not be resent.")
+                            error=(str(validation) if validation is not None else str(exc))
+                            if not isinstance(exc, KeyboardInterrupt) else "Interrupted; request will not be resent.")
+                if validation is not None:
+                    step["validation_summary"] = deepcopy(validation.summary)
+                    if trace is not None and trace.directory is not None:
+                        details = f"analysis/validation/{request.artifact_id}.errors.json"
+                        diagnostic = {**validation.details, "message": str(validation)}
+                        trace.write_json(details, diagnostic)
+                        step["validation_details"] = details
+                        # Bind the saved, redacted artifact, not pre-redaction IDs.
+                        saved_diagnostic = load_json((trace.directory / details).read_text(encoding="utf-8"))
+                        step["validation_hash"] = digest(saved_diagnostic)
                 if isinstance(exc, BackendError):
                     step["http_attempts"] = exc.attempts
                     if exc.status_code is not None:
@@ -465,7 +534,8 @@ def build_verification(text, result, *, table_subject, backend, generation=None,
                 save()
                 event("failed", job_id=job["job_id"], error_code=code,
                       http_status=step.get("http_status"), request_outcome=step["request_outcome"],
-                      http_details=step.get("http_details"))
+                      http_details=step.get("http_details"), validation_summary=step.get("validation_summary"),
+                      validation_details=step.get("validation_details"))
                 stop = True
                 break
         if job["status"] == "active" and len(job["steps"]) == max_steps:

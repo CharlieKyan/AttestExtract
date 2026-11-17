@@ -80,6 +80,23 @@ or exact calls for a new run.
 5. Save supported or unknown attribution and target-field matching. Values,
    units and original conditions are not rewritten.
 
+Each job has an explicit `target_scope` generated from its current observations:
+an ordered list of allowed observation IDs and their count. Only these targets
+receive bindings on `decide`, exactly once each. Reference observations remain
+available under `extraction_hints`, but use `reference_observation_id` to retain
+their original identity without presenting them as additional tasks. They are
+read-only context, not evidence by themselves. The model may use that context
+to locate original passages and understand relationships across paragraphs.
+The fixed `search` / `read` / `decide` response schema is unchanged; this is not
+a new task format or a per-provider dynamic-schema requirement.
+
+New object and relation proposals should explain the current targets. The
+framework does not silently delete extra declarations or require every object
+to have a directly bound value: an object's identity can be clear while a
+measurement's owner remains unknown. This release adds no global identity
+merge or semantic relevance rule. Original proposals and diagnostic counts
+remain available for review; extra objects are not proof of better coverage.
+
 `search` performs case-insensitive literal phrase matching in this document,
 with paginated results. It does not search the web or arbitrary files. The model
 can try alternate phrases; this is not embedding-based semantic retrieval and
@@ -116,6 +133,11 @@ dry-mass field. `property_name` and `statistic` preserve the model's interpretat
 alongside the immutable original values. All judgments remain `model_proposed`;
 an exact quotation proves location, not the correctness of semantic reasoning.
 Original mechanical blockers and quarantined records remain available.
+
+An unknown attribution keeps `subject_id` null. A model must not turn an
+uncertain attribution into `supported` simply to satisfy the response contract.
+Similarly, a program-complete run can contain legitimate unknown decisions.
+Review attribution and target-field status separately from execution status.
 
 ## Outputs
 
@@ -173,6 +195,16 @@ format regeneration or automatic resend after an unknown outcome. Invalid or
 incomplete responses are retained and stop that invocation rather than being
 repaired into accepted decisions.
 
+Verification protocol failures save structured details under
+`diagnostics/analysis/validation/<job-step>.errors.json`. Coverage diagnostics
+distinguish missing, duplicate and unexpected IDs, and identify unexpected IDs
+that came from the request's read-only references. The terminal shows bounded
+counts and the diagnostic location, not arbitrary model text or identifier
+content. Response-contract errors and internal source/index/state failures are
+separate categories. Neither triggers an automatic correction or a new request.
+The original response is retained, and a rejected decision applies no objects,
+relations or bindings from that response.
+
 The framework explicitly requests one valid JSON object in its verification
 system message. This instruction is present before request hashing and byte
 accounting, and checked locally before reserving a generation. Users do not
@@ -227,6 +259,9 @@ Increasing an exhausted total analysis budget permits pending steps/jobs to
 continue; spent calls are not refunded. It does not resend failed/unknown steps
 or reopen jobs that reached their step/context limit. The step limit and input
 byte budget are bound into checkpoint identity and cannot be changed on resume.
+In particular, ordinary resume can process later pending jobs while retaining
+an earlier failed job; it cannot make that run complete by correcting the
+failure. Inspect the reported cause before spending further calls.
 
 Historical version `0.1` checkpoints continue the legacy whole-document contract,
 including its 60,000-character restriction and existing failure behavior. They
@@ -234,12 +269,13 @@ are not automatically migrated to the new loop; new lookup controls cannot
 retrofit an old failed discovery. Use a fresh run, without `--resume` from that
 old analysis, when evaluating the new policy. Historical files are not rewritten.
 
-Starting with dev36, bounded verification uses compatibility revision
-`bounded-source-verification-v2`. The corrected output instruction changes
-request identity. Dev35 revision-v1 analysis checkpoints therefore cannot be
-resumed under v2, even though both use analysis schema `0.2`. A mismatch is
-reported before any new model request; do not edit hashes or delete old analysis
-files to bypass this check. The extraction compatibility revision is unchanged.
+Dev36 used compatibility revision `bounded-source-verification-v2` for its
+corrected JSON instruction. Dev37 uses `bounded-source-verification-v3` for the
+explicit target/reference contract. These prompt changes alter request
+identity: bounded v1/v2 analysis checkpoints cannot resume under v3, even
+though all use analysis schema `0.2`. A mismatch is reported before any new
+model request; do not edit hashes or delete old analysis files to bypass this
+check. The extraction compatibility revision is unchanged.
 
 To reuse extraction while explicitly starting a new analysis branch, the
 existing public CLI can first restore extraction **without** `--table-subject`,

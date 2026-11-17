@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.0.dev37
+
+- Separate each verification job's binding targets from read-only reference observations. Preserve reference identity and source context while making the target list explicit; keep the fixed search/read/decide response schema and strict local coverage checks.
+- Save structured verification diagnostics for missing, duplicate and unexpected bindings, distinguish response-contract failures from internal state errors, and show safe counts and diagnostic locations in progress and reports. No automatic correction, filtering or additional retry is introduced.
+- Advance bounded-verification compatibility to v3 because the request contract changed. Extraction caches remain reusable; old analysis requests and spent reservations are preserved rather than silently rewritten or retried.
+- Extend synthetic scope, cross-paragraph, uncertainty, transaction, recovery and installed-entry acceptance. Object proposals and table rows remain model proposals requiring semantic review; successful execution is not scientific validation.
+
 ## 0.1.0.dev36
 
 - Require an explicit single-JSON-object instruction in every bounded verification request before hashing, byte accounting or call reservation. This fixes JSON Object endpoints rejecting the first verification step; original extraction and output-mode selection are unchanged.

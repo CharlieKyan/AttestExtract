@@ -253,6 +253,199 @@ def accept_cli(root, mode):
             "cli_analysis_calls": 3, "cli_resume_new_calls": 0, "cli_exit_status": 0}
 
 
+SCOPE_GROUPS = ((1, 2, 3, 4, 5, 6), (7, 8, 9, 10, 11, 12), (13, 14, 15, 16, 17, 18))
+SCOPE_UNKNOWN = {6, 12, 18}
+SCOPE_IDENTITY = "Measurement M01 was taken on specimen S01."
+SCOPE_CLAIMS = tuple(
+    ("Measurement M01 has mass 1 g." if number == 1 else
+     f"Unassigned report {number} lists mass {number} g; owner not given." if number in SCOPE_UNKNOWN else
+     f"Specimen S{number:02d} has mass {number} g.",
+     "M01" if number == 1 else None if number in SCOPE_UNKNOWN else f"S{number:02d}", str(number))
+    for number in range(1, 19)
+)
+SCOPE_SOURCE = "\n\n".join([*(item[0] for item in SCOPE_CLAIMS), SCOPE_IDENTITY])
+SCOPE_TASK = {"prompt_description": "Extract reported specimen masses; preserve unknown ownership.",
+              "field_list": {"mass": "The original mass of each measured specimen"}}
+
+
+class ScopeService(Service):
+    """A frozen 18-observation exercise with independent six-item answer groups."""
+
+    def __init__(self, *, mode, answer_references=False):
+        super().__init__(mode=mode)
+        self.answer_references = answer_references
+        self.decisions = 0
+        self.target_ids = []
+        self.reference_ids = []
+        self.scope_schema = None
+        self.identity_by_value = None
+
+    def handle(self, request):
+        assert not self.forbidden, "Completed scope acceptance must resume without generation"
+        assert request.url.host == "synthetic.invalid" and request.method == "POST"
+        assert request.headers["authorization"] == "Bearer synthetic-install-secret"
+        body = json.loads(request.content)
+        self.requests.append(body)
+        assert body["response_format"]["type"] == self.mode
+        assert "json" in body["messages"][0]["content"].casefold()
+        payload = json.loads(body["messages"][-1]["content"])
+        if "source" in payload:
+            self.calls.append("extraction")
+            records = []
+            for quote, entity, value in SCOPE_CLAIMS:
+                if quote not in payload["source"]:
+                    continue
+                values = {"entity": entity, "value": value, "unit": "g", "conditions": None}
+                records.append({"record_type": "mass", "values": values,
+                                "quotes": {key: quote if val is not None else "" for key, val in values.items()}})
+            response = {"records": records}
+        else:
+            expected = SCOPE_GROUPS[self.decisions]
+            targets, references = payload["observations"], payload["extraction_hints"]
+            assert tuple(int(item["value"]) for item in targets) == expected
+            assert {int(item["value"]) for item in references} == set(range(1, 19)) - set(expected)
+            assert len(targets) == 6 and len(references) == 12
+            self.target_ids = [item["observation_id"] for item in targets]
+            self.reference_ids = [item["reference_observation_id"] for item in references]
+            assert payload["target_scope"] == {"observation_ids": self.target_ids, "count": 6}
+            assert not set(self.target_ids) & set(self.reference_ids)
+            assert all("observation_id" not in item for item in references)
+            assert len(set(self.target_ids + self.reference_ids)) == 18
+            identities = {int(item["value"]): item["observation_id"] for item in targets}
+            identities.update({int(item["value"]): item["reference_observation_id"] for item in references})
+            if self.identity_by_value is None:
+                self.identity_by_value = identities
+                self.scope_schema = payload["response_contract"]
+            assert identities == self.identity_by_value
+            assert payload["response_contract"] == self.scope_schema
+            if self.mode == "json_schema":
+                assert body["response_format"]["json_schema"]["schema"] == self.scope_schema
+            # Literal task scope must also be visible in the transmitted system
+            # instruction, not only understood by this synthetic service.
+            system = body["messages"][0]["content"]
+            assert "target_scope" in system and "reference_observation_id" in system
+            assert "EVERY supplied observation_id" not in system
+            response = {"action": "decide", "question": "Identify direct owners within this task scope.",
+                        "query": None, "search_offset": 0, "passage_ids": [], "neighbors": 0,
+                        "objects": [], "relations": [], "bindings": []}
+            history = payload["lookup_history"]
+            if expected == SCOPE_GROUPS[0] and not history:
+                self.calls.append("search")
+                response.update(action="search", query="Measurement M01 was taken")
+            elif expected == SCOPE_GROUPS[0] and history[-1]["action"] == "search":
+                self.calls.append("read")
+                response.update(action="read", passage_ids=[history[-1]["result"]["matches"][0]["passage_id"]])
+            else:
+                self.calls.append("decide")
+                self.decisions += 1
+                response.update(self.scoped_decision(payload, expected))
+        return httpx.Response(200, json={"model": "synthetic-scope-model", "choices": [
+            {"finish_reason": "stop", "message": {"role": "assistant", "content": json.dumps(response)}}],
+            "usage": {"prompt_tokens": 20, "completion_tokens": 10, "total_tokens": 30}})
+
+    def scoped_decision(self, payload, expected):
+        passages = list(payload["initial_context"]["passages"])
+        for frame in payload["lookup_history"]:
+            passages.extend(frame["result"].get("matches", []))
+            passages.extend(frame["result"].get("passages", []))
+
+        def cite(quote):
+            found = next(part for part in passages if quote in part["text"])
+            return {"passage_id": found["passage_id"], "quote": quote, "occurrence": None}
+
+        ids = {int(item["value"]): item["observation_id"] for item in payload["observations"]}
+        objects, bindings = [], []
+        for number in expected:  # Independent answer groups, not every supplied ID.
+            unknown = number in SCOPE_UNKNOWN
+            evidence = [] if unknown else [cite(SCOPE_CLAIMS[number - 1][0])]
+            if number == 1:
+                evidence.append(cite(SCOPE_IDENTITY))
+            local_id = f"specimen-{number}"
+            if not unknown:
+                objects.append({"object_id": local_id, "name": f"S{number:02d}", "kind": "sample",
+                    "scope": "Synthetic specimen register", "is_table_subject": True, "mentions": evidence})
+            bindings.append({"observation_id": ids[number], "subject_id": None if unknown else local_id,
+                "status": "unknown" if unknown else "supported", "evidence": evidence,
+                "reason": "Owner was not reported." if unknown else "The original statement identifies this specimen.",
+                "target_match": "supported", "property_name": "mass", "statistic": None})
+        if self.answer_references:
+            bindings.extend({"observation_id": item["reference_observation_id"], "subject_id": None,
+                "status": "unknown", "evidence": [], "reason": "Synthetic reference-scope violation.",
+                "target_match": "unknown", "property_name": None, "statistic": None}
+                for item in payload["extraction_hints"])
+        return {"objects": objects, "bindings": bindings}
+
+
+def accept_scope(root, mode, entry):
+    root.mkdir()
+    service = ScopeService(mode=mode)
+    first, replay = root / "first", root / "replay"
+    if entry == "python":
+        backend = OpenAICompatibleBackend("https://synthetic.invalid/v1", "synthetic-scope-model",
+            api_key="synthetic-install-secret", structured_output=mode,
+            max_attempts=1, transport=httpx.MockTransport(service.handle))
+
+        def invoke(destination, resume=None):
+            return extract(SCOPE_SOURCE, SCOPE_TASK, backend=backend, output_dir=destination, progress="quiet",
+                execution=ExecutionOptions(adaptive_chunking=False, max_model_calls=1), max_chunk_chars=6000,
+                table_subject="one individual specimen", max_analysis_calls=5, resume_from=resume)
+
+        assert invoke(first).analysis["status"] == "complete"
+    else:
+        source, task, config = root / "source.md", root / "task.json", root / "models.toml"
+        source.write_bytes(SCOPE_SOURCE.encode("utf-8"))
+        task.write_text(json.dumps(SCOPE_TASK), encoding="utf-8")
+        config.write_text('[profiles.synthetic]\nbase_url = "https://synthetic.invalid/v1"\n'
+            f'model = "synthetic-scope-model"\nstructured_output = "{mode}"\n'
+            'api_key_env = "ATTESTEXTRACT_TEST_API_KEY"\nmax_attempts = 1\nformat_retries = 0\n', encoding="utf-8")
+        registry = BackendRegistry()
+
+        def factory(*, config, api_key, trace):
+            return OpenAICompatibleBackend(config.base_url, config.model, api_key=api_key, trace=trace,
+                structured_output=config.structured_output, transport=httpx.MockTransport(service.handle))
+
+        registry.register("openai-compatible", factory)
+        arguments = ["extract", "--input", str(source), "--task", str(task), "--config", str(config),
+            "--profile", "synthetic", "--chunking", "fixed", "--max-chunk-chars", "6000",
+            "--max-model-calls", "1", "--max-analysis-calls", "5", "--table-subject", "one individual specimen",
+            "--progress", "quiet"]
+
+        def invoke(destination, resume=None):
+            extra = ["--resume", str(resume)] if resume else []
+            with patch.dict(os.environ, {"ATTESTEXTRACT_TEST_API_KEY": "synthetic-install-secret"}), redirect_stdout(io.StringIO()):
+                return cli.main([*arguments, *extra, "--output-dir", str(destination)], registry=registry)
+
+        assert invoke(first) == 0
+    analysis = read(first / "analysis/analysis.json")
+    assert analysis["status"] == "complete" and len(analysis["observations"]) == 18
+    assert service.calls == ["extraction", "search", "read", "decide", "decide", "decide"]
+    by_value = {int(item["value"]): item for item in analysis["observations"]}
+    names = {item["object_id"]: item["name"] for item in analysis["objects"]}
+    for number in range(1, 19):
+        item = by_value[number]
+        assert item["unit"] == "g" and item["value"] == str(number)
+        assert item["binding_status"] == ("unknown" if number in SCOPE_UNKNOWN else "supported")
+        if number in SCOPE_UNKNOWN:
+            assert item["subject_id"] is None
+        else:
+            assert names[item["subject_id"]] == f"S{number:02d}"
+    assert len(by_value[1]["binding_evidence_ids"]) == 2
+    old = hashes(first)
+    service.forbidden = True
+    resumed = invoke(replay, first)
+    if entry == "cli":
+        assert resumed == 0
+    else:
+        assert resumed.analysis["status"] == "complete"
+    assert len(service.calls) == 6 and hashes(first) == old
+    for artifact in first.rglob("*"):
+        if artifact.is_file():
+            assert b"synthetic-install-secret" not in artifact.read_bytes()
+    return {"observations": 18, "targets_per_job": 6, "readonly_references_per_job": 12,
+            "supported": 15, "unknown": 3, "analysis_calls": 5, "synthetic_http_calls": 6,
+            "resume_new_calls": 0, "cross_paragraph_evidence": True, "passed": True}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
@@ -277,11 +470,14 @@ def main():
             directory.mkdir()
             modes[mode] = accept(directory, mode)
             modes[mode].update(accept_cli(directory, mode))
+            modes[mode]["scope_acceptance"] = {entry: accept_scope(directory / ("scope-" + entry), mode, entry)
+                                                for entry in ("python", "cli")}
     assert not network_attempts
     summary = {"passed": True, "package_version": attestextract.__version__,
                "module_path": str(module_path), "installed_package_verified": True,
                "network_attempts": 0, "real_model_calls": 0, "modes": modes,
-               "synthetic_http_calls": sum(item["synthetic_http_calls"] + item["cli_synthetic_http_calls"]
+               "synthetic_http_calls": sum(item["synthetic_http_calls"] + item["cli_synthetic_http_calls"] +
+                                           sum(scope["synthetic_http_calls"] for scope in item["scope_acceptance"].values())
                                            for item in modes.values()),
                "notice": "Synthetic offline acceptance; not provider or scientific-quality validation."}
     (root / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

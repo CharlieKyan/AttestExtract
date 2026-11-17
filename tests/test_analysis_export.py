@@ -223,3 +223,67 @@ def test_verification_job_stop_reason_is_visible(tmp_path):
     markdown = (tmp_path / "analysis.md").read_text(encoding="utf-8")
     assert "Step limit reached" in markdown and "verify\\-0001" in markdown
     assert "Citation outside viewed passages" in markdown
+
+
+def test_verification_scope_diagnostic_is_readable_and_does_not_echo_raw_error(tmp_path):
+    analysis = sample()
+    analysis.update(analysis_version="0.2", status="failed", jobs=[{
+        "job_id": "verify-0001", "status": "failed", "attempts": 2,
+        "error": "PRIVATE JOB ERROR", "steps": [{
+            "error": "PRIVATE RAW ANSWER", "validation_summary": {
+                "category": "model_response", "phase": "binding_scope", "code": "binding_scope_mismatch",
+                "expected_count": 6, "returned_count": 18, "missing_count": 0,
+                "duplicate_count": 0, "unexpected_count": 12, "reference_count": 12,
+                "unexpected_ids": ["PRIVATE OBSERVATION"]},
+            "validation_details": "analysis/validation/verify-0001.step-02.errors.json"}]}])
+    before = deepcopy(analysis)
+    save_analysis(analysis, tmp_path)
+    markdown = (tmp_path / "analysis.md").read_text(encoding="utf-8")
+    assert "期望6条，返回18条" in markdown and "越界12条（其中12条来自只读参考）" in markdown
+    assert "详情：diagnostics/analysis/validation/" in markdown
+    assert "普通恢复会保留失败任务" in markdown and "不会修复已失败任务" in markdown
+    assert "PRIVATE" not in markdown
+    assert json.loads((tmp_path / "analysis.json").read_text(encoding="utf-8")) == before
+    assert analysis == before
+
+
+@pytest.mark.parametrize("category,expected", [
+    ("internal_state", "原文或内部状态校验失败"),
+    ("model_response", "模型回答未通过查证协议检查"),
+])
+def test_verification_error_category_uses_safe_report_text(tmp_path, category, expected):
+    analysis = sample()
+    analysis.update(analysis_version="0.2", status="failed", jobs=[{
+        "job_id": "verify-0001", "status": "failed", "attempts": 1,
+        "steps": [{"error": "PRIVATE EXCEPTION", "validation_summary": {
+            "category": category, "code": "PRIVATE CODE", "phase": "PRIVATE PHASE"},
+            "validation_details": "../PRIVATE/path.json"}]}])
+    save_analysis(analysis, tmp_path)
+    markdown = (tmp_path / "analysis.md").read_text(encoding="utf-8")
+    assert expected in markdown and "PRIVATE" not in markdown
+
+
+def test_verification_audit_counts_preserve_unknowns_unmatched_and_unbound_objects(tmp_path):
+    analysis = sample()
+    analysis["analysis_version"] = "0.2"
+    for item, match in zip(analysis["observations"], ("unsupported", "unknown", "supported", "unknown")):
+        item["target_match"] = match
+    # L1 has direct observations despite target mismatch; L2 only participates
+    # in a source relation and is retained, not treated as invalid or deleted.
+    pending = deepcopy(analysis["observations"][3])
+    pending.update(observation_id="o5", candidate_id="candidate-o5", source_record="/candidates/5",
+                   binding_status="pending")
+    failed = deepcopy(pending)
+    failed.update(observation_id="o6", candidate_id="candidate-o6", source_record="/candidates/6",
+                  binding_status="failed")
+    analysis["observations"].extend([pending, failed])
+    before = deepcopy(analysis)
+    save_analysis(analysis, tmp_path)
+    markdown = (tmp_path / "analysis.md").read_text(encoding="utf-8")
+    assert "观测共6条；模型认为归属有支持3条，归属未知1条，待处理1条，查证失败1条" in markdown
+    assert "模型认为有支持1条，不支持1条，未确定4条" in markdown
+    assert "未被归属明确的观测直接引用的对象1个" in markdown
+    assert "不据此删除或判定错误" in markdown and "不是准确率" in markdown
+    assert len(read_csv(tmp_path / "objects.csv")) == 3
+    assert len(read_csv(tmp_path / "object_table.csv")) == 2
+    assert analysis == before

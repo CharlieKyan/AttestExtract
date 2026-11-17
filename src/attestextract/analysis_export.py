@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import json
 from pathlib import Path
+import re
 import sqlite3
 
 from .diagnostics import RunTrace
@@ -213,6 +214,31 @@ def _database(path: Path, data: dict) -> None:
         connection.close()
 
 
+def _verification_stop_reason(job: dict) -> str | None:
+    step = next((item for item in reversed(job.get("steps", []))
+                 if item.get("error") or item.get("validation_summary")), {})
+    summary = step.get("validation_summary")
+    if not isinstance(summary, dict):
+        # Historical snapshots retain their original diagnostic presentation.
+        return job.get("error") or job.get("reason") or step.get("error") or job.get("error_code")
+    if summary.get("category") == "internal_state":
+        reason = "原文或内部状态校验失败；不能当作模型回答错误纠正。"
+    elif summary.get("code") == "binding_scope_mismatch":
+        def count(key):
+            value = summary.get(key)
+            return value if type(value) is int and value >= 0 else "未报告"
+
+        reason = (f"作答范围不符：期望{count('expected_count')}条，返回{count('returned_count')}条；"
+                  f"遗漏{count('missing_count')}条，重复ID {count('duplicate_count')}个，"
+                  f"越界{count('unexpected_count')}条（其中{count('reference_count')}条来自只读参考）。")
+    else:
+        reason = "模型回答未通过查证协议检查；本次提议未应用。"
+    details = step.get("validation_details")
+    if isinstance(details, str) and re.fullmatch(r"analysis/validation/[A-Za-z0-9_.-]+\.errors\.json", details):
+        reason += " 详情：diagnostics/" + details
+    return reason
+
+
 def _markdown(data: dict, view: dict) -> str:
     evidence = {item["evidence_id"]: item for item in data["evidence"]}
 
@@ -245,6 +271,21 @@ def _markdown(data: dict, view: dict) -> str:
              "同名对象按不同ID展示。下面仅展示直接绑定的观测；不沿关系传播数值。", ""]
     if data["analysis_version"] == "0.2":
         lines += ["目标表仅纳入模型判断归属有支持且字段匹配有支持的观测；仍不是专家确认。其他观测单独保留。", ""]
+        observations = data["observations"]
+        binding_counts = {status: sum(item["binding_status"] == status for item in observations)
+                          for status in ("supported", "unknown", "pending", "failed")}
+        target_counts = {status: sum(item.get("target_match", "unknown") == status for item in observations)
+                         for status in ("supported", "unsupported", "unknown")}
+        direct_subjects = {item["subject_id"] for item in observations if _direct(item)}
+        unbound_objects = sum(item["object_id"] not in direct_subjects for item in data["objects"])
+        lines += ["## 查证状态摘要", "",
+                  f"观测共{len(observations)}条；模型认为归属有支持{binding_counts['supported']}条，"
+                  f"归属未知{binding_counts['unknown']}条，待处理{binding_counts['pending']}条，查证失败{binding_counts['failed']}条。",
+                  f"目标字段匹配：模型认为有支持{target_counts['supported']}条，不支持{target_counts['unsupported']}条，"
+                  f"未确定{target_counts['unknown']}条。",
+                  f"对象共{len(data['objects'])}个；未被归属明确的观测直接引用的对象{unbound_objects}个。"
+                  "这些对象可能参与关系或仍待查证，不据此删除或判定错误。",
+                  "以上是独立维度的状态计数，不是准确率；运行完成不表示所有归属明确或通过专家确认。", ""]
     for title, collection in (("目标对象", view["objects"]), ("相关对象（不作为目标表行）", view["related_objects"])):
         lines += ["## " + title, ""]
         for row in collection:
@@ -276,10 +317,12 @@ def _markdown(data: dict, view: dict) -> str:
     if data["analysis_version"] == "0.2":
         lines += ["## 有限查证任务", "", "| 任务 | 状态 | 模型调用 | 停止原因 |", "| --- | --- | --- | --- |"]
         for job in data.get("jobs", []):
-            failed_step = next((step for step in reversed(job.get("steps", [])) if step.get("error")), {})
             values = (job.get("job_id"), job.get("status"), job.get("attempts", 0),
-                      job.get("error") or job.get("reason") or failed_step.get("error") or job.get("error_code"))
+                      _verification_stop_reason(job))
             lines.append("| " + " | ".join(show(value) for value in values) + " |")
+        if any(job.get("status") == "failed" for job in data.get("jobs", [])):
+            lines += ["", "本次失败后未自动重试或纠正回答。普通恢复会保留失败任务；"
+                      "可能继续处理待执行任务，但不会修复已失败任务。请先审查失败原因。"]
         lines += ["", "search/read 是对本篇原文的有限查找；未找到不代表全文不存在。详细请求与查找记录保存在 diagnostics/analysis。", ""]
     return "\n".join(lines)
 

@@ -250,7 +250,7 @@ def test_previous_analysis_revision_is_rejected_before_any_request(monkeypatch, 
     from attestextract import verification
 
     with monkeypatch.context() as old_revision:
-        old_revision.setattr(verification, "REVISION", "bounded-source-verification-v1")
+        old_revision.setattr(verification, "REVISION", "bounded-source-verification-v2")
         run(max_calls=1, trace=RunTrace(tmp_path / "old"))
     checkpoint = tmp_path / "old/analysis/checkpoint.json"
     original = checkpoint.read_bytes()
@@ -337,3 +337,132 @@ def test_backend_error_cannot_publish_an_arbitrary_diagnostic_path(tmp_path, det
     step = package["jobs"][0]["steps"][0]
     assert step["request_outcome"] == "http_error_received"
     assert "http_details" not in step
+
+
+def test_reference_bindings_are_diagnosed_without_retry_or_partial_application(tmp_path):
+    class OverbroadBackend(LookupBackend):
+        def generate(self, request):
+            self.requests.append(request)
+            payload = json.loads(request.messages[-1]["content"])
+            targets = payload["target_scope"]["observation_ids"]
+            references = [item["reference_observation_id"] for item in payload["extraction_hints"]]
+            assert len(targets) == 6 and len(references) == 12
+            assert all("observation_id" not in item for item in payload["extraction_hints"])
+            self.references = references
+            binding = {"subject_id": None, "status": "unknown", "evidence": [], "reason": "Unresolved.",
+                       "target_match": "unknown", "property_name": None, "statistic": None}
+            return BackendResponse(model="synthetic-verifier", text=json.dumps(action("decide",
+                bindings=[{**binding, "observation_id": key} for key in [*targets, *references]])))
+
+    backend, events = OverbroadBackend(), []
+    original = frozen_extraction(count=18)
+    before = original.model_dump(mode="json")
+    package = run(result=original, backend=backend, max_calls=48,
+                  trace=RunTrace(tmp_path / "first", on_event=events.append))
+    assert len(backend.requests) == 1 and package["budget"]["reserved"] == 1
+    assert [job["status"] for job in package["jobs"]] == ["failed", "pending", "pending"]
+    assert package["objects"] == package["relations"] == []
+    assert original.model_dump(mode="json") == before
+    step = package["jobs"][0]["steps"][0]
+    assert step["error_code"] == "binding_scope_mismatch"
+    assert step["request_outcome"] == "response_received"
+    assert step["validation_details"] == "analysis/validation/verify-0001.step-01.errors.json"
+    details = json.loads((tmp_path / "first" / step["validation_details"]).read_text(encoding="utf-8"))
+    assert details["expected_count"] == 6 and details["returned_count"] == 18
+    assert set(details["reference_ids"]) == set(backend.references)
+    failed = next(e for e in events if e.get("stage") == "analysis" and e.get("event") == "failed")
+    assert failed["validation_summary"] == step["validation_summary"]
+    assert not any(key in json.dumps(failed) for key in backend.references)
+    # Ordinary resume does not reopen a failed decision, even with more budget.
+    checked = run(result=original, backend=LookupBackend(), max_calls=48, check_only=True,
+                  resume_from=tmp_path / "first/analysis/checkpoint.json")
+    assert checked["jobs"][0]["status"] == "failed" and checked["budget"]["reserved"] == 1
+    assert checked["pending_jobs"] == 2
+
+
+def test_internal_validation_error_is_classified_and_stops_without_retry(monkeypatch, tmp_path):
+    from attestextract import verification
+
+    def broken_state(*args, **kwargs):
+        raise ValueError("Private internal-state details must not become a model error.")
+
+    monkeypatch.setattr(verification, "_advance", broken_state)
+    backend = LookupBackend()
+    package = run(backend=backend, trace=RunTrace(tmp_path), max_calls=5)
+    step = package["jobs"][0]["steps"][0]
+    assert step["error_code"] == "verification_state_error"
+    assert step["validation_summary"]["category"] == "internal_state"
+    assert "Private internal-state" not in step["error"]
+    assert len(backend.requests) == 1 and package["budget"]["reserved"] == 1
+
+
+def test_invalid_target_state_fails_preflight_without_becoming_context_limit(monkeypatch, tmp_path):
+    from attestextract import verification
+
+    original = verification._input_observations
+
+    def duplicate_batch(*args):
+        observations, quarantine = original(*args)
+        return [observations[0], deepcopy(observations[0])], quarantine
+
+    monkeypatch.setattr(verification, "_input_observations", duplicate_batch)
+    backend = LookupBackend()
+    with pytest.raises(ConfigurationError, match="input state is invalid"):
+        run(backend=backend, trace=RunTrace(tmp_path))
+    assert backend.requests == [] and not (tmp_path / "analysis/checkpoint.json").exists()
+
+
+@pytest.mark.parametrize("damage", [None, "content", "path", "missing"])
+def test_failed_validation_artifact_is_verified_and_copied_on_resume(tmp_path, damage):
+    class InvalidBackend(LookupBackend):
+        def generate(self, request):
+            self.requests.append(request)
+            return BackendResponse(text=json.dumps(action("decide")), model="synthetic-verifier")
+
+    first = run(backend=InvalidBackend(), trace=RunTrace(tmp_path / "first"))
+    step = first["jobs"][0]["steps"][0]
+    artifact = tmp_path / "first" / step["validation_details"]
+    checkpoint = tmp_path / "first/analysis/checkpoint.json"
+    if damage == "content":
+        artifact.write_text('{}', encoding="utf-8")
+    elif damage == "missing":
+        artifact.unlink()
+    elif damage == "path":
+        envelope = json.loads(checkpoint.read_text(encoding="utf-8"))
+        envelope["state"]["jobs"][0]["steps"][0]["validation_details"] = "../outside.json"
+        envelope["sha256"] = digest(envelope["state"])
+        checkpoint.write_text(json.dumps(envelope), encoding="utf-8")
+    backend = LookupBackend()
+    if damage:
+        with pytest.raises(ConfigurationError, match="damaged or incompatible"):
+            run(backend=backend, resume_from=checkpoint, trace=RunTrace(tmp_path / "second"))
+    else:
+        resumed = run(backend=backend, resume_from=checkpoint, trace=RunTrace(tmp_path / "second"))
+        assert resumed["status"] == "failed" and resumed["budget"]["reserved"] == 1
+        assert (tmp_path / "second" / step["validation_details"]).read_bytes() == artifact.read_bytes()
+    assert backend.requests == []
+
+
+@pytest.mark.parametrize("redact_first", [False, True])
+def test_redacted_validation_artifact_hash_can_be_resumed(tmp_path, redact_first):
+    secret = "synthetic-secret-in-invalid-id"
+
+    class InvalidBackend(LookupBackend):
+        def generate(self, request):
+            self.requests.append(request)
+            return BackendResponse(text=json.dumps(action("decide", bindings=[{
+                "observation_id": secret, "subject_id": None, "status": "unknown", "evidence": [],
+                "reason": "Unknown.", "target_match": "unknown", "property_name": None, "statistic": None,
+            }])), model="synthetic-verifier")
+
+    first = run(backend=InvalidBackend(), trace=RunTrace(tmp_path / "first", secrets=[secret] if redact_first else []))
+    details = first["jobs"][0]["steps"][0]["validation_details"]
+    assert (secret not in (tmp_path / "first" / details).read_text(encoding="utf-8")) == redact_first
+    backend = LookupBackend()
+    resumed = run(backend=backend, resume_from=tmp_path / "first/analysis/checkpoint.json",
+                  trace=RunTrace(tmp_path / "second", secrets=[secret]))
+    assert resumed["status"] == "failed" and backend.requests == []
+    assert secret not in (tmp_path / "second" / details).read_text(encoding="utf-8")
+    checked = run(backend=backend, check_only=True,
+                  resume_from=tmp_path / "second/analysis/checkpoint.json")
+    assert checked["jobs"][0]["status"] == "failed" and checked["budget"]["reserved"] == 1

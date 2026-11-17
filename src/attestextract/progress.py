@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import re
 import threading
 import time
 from typing import Any, TextIO
@@ -67,6 +68,8 @@ class ConsoleProgress:
             elif kind == "reused":
                 if event.get("status") in {"failed", "limited"}:
                     self._write(f"Analysis {event.get('job_id', '?')}: preserved {event['status']} state; no request resent")
+                    if event["status"] == "failed":
+                        self._write("Ordinary resume will not repair this failed job; pending jobs may still consume calls.")
                 else:
                     self._write(f"Analysis {event.get('job_id', '?')}: reused validated response")
             elif kind == "tool":
@@ -80,7 +83,24 @@ class ConsoleProgress:
                 self._waiting_since = None
                 self._write(f"Analysis {event.get('job_id', '?')}: {kind}; calls {event.get('used', '?')}/{event.get('limit', '?')}")
                 if kind == "failed":
-                    if event.get("error_code") == "json_prompt_required":
+                    summary = event.get("validation_summary")
+                    if isinstance(summary, dict):
+                        if summary.get("category") == "internal_state":
+                            self._write("Analysis stopped: internal source or state validation failed; "
+                                        "this is not a model answer to correct.")
+                        elif summary.get("code") == "binding_scope_mismatch":
+                            def count(key):
+                                value = summary.get(key)
+                                return value if type(value) is int and value >= 0 else "?"
+
+                            self._write(f"Analysis scope mismatch: expected {count('expected_count')}, "
+                                        f"received {count('returned_count')}; missing {count('missing_count')}; "
+                                        f"duplicate IDs {count('duplicate_count')}; unexpected {count('unexpected_count')} "
+                                        f"({count('reference_count')} from read-only references).")
+                        else:
+                            self._write("Analysis response did not satisfy the verification contract; no proposals were applied.")
+                        self._write("No automatic retry or response correction was attempted.")
+                    elif event.get("error_code") == "json_prompt_required":
                         self._write("Analysis request rejected: JSON Object mode requires an explicit JSON output instruction; "
                                     "the framework request must be corrected. No automatic retry or mode downgrade.")
                     elif event.get("request_outcome") == "http_error_received":
@@ -90,6 +110,10 @@ class ConsoleProgress:
                         self._write("Analysis request outcome is unknown; no automatic retry.")
                     if event.get("http_details"):
                         self._write(f"Analysis HTTP details: diagnostics/{event['http_details']}")
+                    details = event.get("validation_details")
+                    if isinstance(details, str) and re.fullmatch(r"analysis/validation/[A-Za-z0-9_.-]+\.errors\.json", details):
+                        self._write(f"Analysis validation details: diagnostics/{details}")
+                    self._write("Ordinary resume preserves this failed job; it may process pending jobs but will not repair this failure.")
             elif kind == "finished":
                 self._waiting_since = None
                 self._write(f"Document analysis: {event.get('status', '?')}; analysis calls {event.get('used', '?')}/{event.get('limit', '?')}; "

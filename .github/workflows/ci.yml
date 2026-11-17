@@ -307,6 +307,13 @@ jobs:
                   assert checks["analysis_budget_reserved"] == checks["analysis_budget_limit"] == 3
                   assert checks["cli_check_new_calls"] == checks["cli_exit_status"] == 0
                   assert checks["credential_isolation"]
+                  assert set(checks["scope_acceptance"]) == {"python", "cli"}
+                  for scope in checks["scope_acceptance"].values():
+                      assert scope["passed"] and scope["observations"] == 18
+                      assert scope["targets_per_job"] == 6 and scope["readonly_references_per_job"] == 12
+                      assert scope["supported"] == 15 and scope["unknown"] == 3
+                      assert scope["analysis_calls"] == 5 and scope["resume_new_calls"] == 0
+                      assert scope["cross_paragraph_evidence"]
               assert analysis["modes"]["json_object"]["json_object_prompt_gate"]
               assert analysis["package_version"] == expected_version
               assert Path(analysis["module_path"]).is_relative_to(environment)
