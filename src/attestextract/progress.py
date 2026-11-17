@@ -66,10 +66,12 @@ class ConsoleProgress:
                 step = f"; step {event['step']}" if event.get("step") is not None else ""
                 self._write(f"Analysis {event.get('job_id', '?')}: calls {event.get('used', '?')}/{event.get('limit', '?')}{step}")
             elif kind == "reused":
-                if event.get("status") in {"failed", "limited"}:
+                if event.get("status") in {"failed", "limited", "review_required"}:
                     self._write(f"Analysis {event.get('job_id', '?')}: preserved {event['status']} state; no request resent")
                     if event["status"] == "failed":
                         self._write("Ordinary resume will not repair this failed job; pending jobs may still consume calls.")
+                    elif event["status"] == "review_required":
+                        self._write("The isolated group remains unapplied and needs review; no response is regenerated.")
                 else:
                     self._write(f"Analysis {event.get('job_id', '?')}: reused validated response")
             elif kind == "tool":
@@ -79,6 +81,17 @@ class ConsoleProgress:
             elif kind in {"step_limit", "context_limit", "budget_exhausted"}:
                 self._waiting_since = None
                 self._write(f"Analysis {event.get('job_id', '?')}: {kind}; unresolved observations retained")
+            elif kind == "review_required":
+                self._waiting_since = None
+                count = event.get("observation_count")
+                count = count if type(count) is int and count >= 0 else "?"
+                self._write(f"Analysis {event.get('job_id', '?')}: citation ambiguity; {count} observations isolated for review; "
+                            f"calls {event.get('used', '?')}/{event.get('limit', '?')}")
+                self._write("No group proposals were applied or supplied as known objects. "
+                            "Later jobs may continue within the existing budget; no automatic correction or retry.")
+                details = event.get("validation_details")
+                if isinstance(details, str) and re.fullmatch(r"analysis/validation/[A-Za-z0-9_.-]+\.errors\.json", details):
+                    self._write(f"Analysis validation details: diagnostics/{details}")
             elif kind in {"completed", "failed"}:
                 self._waiting_since = None
                 self._write(f"Analysis {event.get('job_id', '?')}: {kind}; calls {event.get('used', '?')}/{event.get('limit', '?')}")
@@ -244,6 +257,10 @@ class ConsoleProgress:
         elif stage == "complete" and kind == "analysis_incomplete":
             self._waiting_since = None
             self._write("Extraction saved; document analysis is incomplete. Inspect analysis/analysis.md and its checkpoint.")
+        elif stage == "complete" and kind == "analysis_review_required":
+            self._waiting_since = None
+            self._write("Extraction saved; all verification groups were processed, but isolated proposals require review. "
+                        "Analysis remains partial; inspect analysis/analysis.md and review_groups.json.")
         elif stage == "complete" and kind == "succeeded":
             run = event.get("run", {})
             elapsed = run.get("elapsed_seconds", 0)

@@ -26,6 +26,40 @@ MAX_CHARACTERS = 60000
 BATCH_SIZE = 12
 
 
+def is_review_only_partial(data: dict) -> bool:
+    """A partial run may continue a batch only when all unfinished facts are quarantined.
+
+    This is not scientific acceptance and never covers pending jobs, exhausted
+    limits, failed requests or incomplete extraction. Do not trust a saved flag.
+    """
+    if (not isinstance(data, dict) or data.get("analysis_version") != "0.3"
+            or data.get("status") != "partial" or data.get("source_format_status") != "complete"):
+        return False
+    jobs, groups = data.get("jobs"), data.get("review_groups")
+    if not isinstance(jobs, list) or not jobs or not isinstance(groups, list) or not groups:
+        return False
+    expected, seen = {}, set()
+    for job in jobs:
+        if not isinstance(job, dict) or job.get("status") not in {"completed", "review_required"}:
+            return False
+        key = job.get("job_id")
+        if not isinstance(key, str) or not key or key in seen:
+            return False
+        seen.add(key)
+        if job["status"] == "review_required":
+            if job.get("error_code") != "quote_ambiguous" or not job.get("observation_ids"):
+                return False
+            expected[key] = job["observation_ids"]
+    if len(groups) != len(expected):
+        return False
+    for group in groups:
+        if (not isinstance(group, dict) or not isinstance(group.get("job_id"), str)
+                or group["job_id"] not in expected
+                or group.get("observation_ids") != expected.pop(group["job_id"])):
+            return False
+    return not expected
+
+
 class _Quote(ContractModel):
     quote: str = Field(min_length=1)
     occurrence: int | None = Field(default=None, ge=0)

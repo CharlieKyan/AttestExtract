@@ -117,8 +117,31 @@ An object `name` is a display label and may combine source-supported identity
 and scope. It need not occur as one literal phrase. Supporting mentions and
 decision quotations must be continuous exact source text in passages actually
 shown to the model. Distinct passages cannot be concatenated into a fabricated
-quotation. Repeated quotations require the correct occurrence within the named
-passage; positions are computed and checked by the program.
+quotation. Quotes should contain enough continuous information to identify the
+claim and its context; there is no minimum length or requirement to copy an
+entire paragraph. A short unambiguous name can be appropriate, while a relation
+or attribution may need a clause or multiple separately quoted passages.
+
+An explicit `occurrence` is zero-based within the complete named passage. With
+no occurrence, one actually visible exact match can be resolved; multiple
+visible matches are retained as alternatives. They are not combined into an
+assertion that the model cited all positions. Missing text, an invalid occurrence,
+an unknown passage or a quote outside the shown source remains a hard error.
+
+For ambiguity alone, the whole decision becomes `review_required`: original
+responses, all candidate locations and bounded context are preserved. None of
+that group's objects, relations or bindings enters the applied graph or later
+`known_objects`. Subsequent jobs may proceed within the existing budget. Hard
+errors anywhere in the same decision take priority and still stop the run.
+This deliberately holds otherwise usable proposals in that group for review;
+there is no inferred fine-grained dependency graph or automatic retry.
+
+`evidence_contexts` separately records bounded display text, its source span,
+verification `artifact_id` and `model_visible` flag. True means the whole context
+was supplied in that verification job by the named decision step; false means
+some display text is program-added and must not be assumed to have been seen.
+The original quote stays unchanged. Display context is excluded from evidence
+and object identity hashes and is not fed back as an accepted model quotation.
 
 The model may reuse supplied object IDs or propose source-supported missing
 objects. Identical names alone do not establish identity; different sites,
@@ -143,7 +166,7 @@ Review attribution and target-field status separately from execution status.
 
 `result.json` and its extraction schema remain unchanged. Python exposes the
 additional product as `result.analysis`. New analysis products and checkpoints
-use version `0.2`; older `0.1` analysis products remain readable/exportable.
+use version `0.3`; older `0.1` and `0.2` analysis products remain readable/exportable.
 Managed run directories contain:
 
 | File under `analysis/` | Purpose |
@@ -160,12 +183,22 @@ Managed run directories contain:
 | `evidence.csv` | Exact quotations and original Unicode locations |
 | `analysis.sqlite` | Relational copies of all observations for joins and filtering |
 | `analysis.json` | Complete analysis state, review items, policies and call accounting |
+| `review_groups.json` / `.csv` | Isolated job IDs, affected observations/fields, original response text and ambiguity diagnostics |
+| `evidence_contexts.json` / `.csv` | Display-only original context, source spans and per-step visibility |
 
-For version `0.2`, a target-field cell receives a record only when ownership and
+For versions `0.2` and `0.3`, a target-field cell receives a record only when ownership and
 target matching are both model-supported. Existing extraction warnings still
 apply. Excluded observations remain in the complete observation table; they are
 not deleted or silently reassigned to a different field. Version `0.1` keeps its
 historical projection behavior because it did not have `target_match`.
+
+Version `0.3` keeps isolated observations in `observations.csv` with
+`binding_status=review_required`, null subjects and no applied binding evidence.
+They cannot fill the object table. SQLite includes corresponding `review_groups`
+and `evidence_contexts` tables. These companion exports do not require reading
+diagnostic files: Python calls without `output_dir` retain the response and
+diagnostic in memory and can export them later. The report lists all affected
+fields; omission from the object table never means absence from the source.
 
 Metadata columns cannot overwrite task field columns. CSV formula-like values
 receive presentation escaping; JSON and SQLite retain literal values. There is
@@ -193,7 +226,10 @@ for it does consume a reservation. Each analysis generation has one HTTP attempt
 and finite timeouts. The route is fixed; there is no hidden provider switch,
 format regeneration or automatic resend after an unknown outcome. Invalid or
 incomplete responses are retained and stop that invocation rather than being
-repaired into accepted decisions.
+repaired into accepted decisions. The narrow exception is an otherwise valid
+decision with multiple visible exact locations for an unspecified occurrence:
+the entire group is isolated for review and later jobs may continue. No part of
+that group's proposed objects, relations or bindings is applied.
 
 Verification protocol failures save structured details under
 `diagnostics/analysis/validation/<job-step>.errors.json`. Coverage diagnostics
@@ -224,8 +260,22 @@ permission to resend.
 explicitly report unknown ownership or field meaning, so complete does not mean
 all facts are correct or ready for quantitative analysis. Exhausted step/input
 limits or unfinished work at the call budget produce `partial`; a failed model
-request/response produces `failed`. CLI returns nonzero for incomplete analysis
-and preserves the successful extraction.
+request/response produces `failed`. Isolated review groups also keep analysis
+`partial`. CLI preserves successful extraction and distinguishes these cases:
+
+| Exit code | Meaning | Batch handling |
+| --- | --- | --- |
+| `0` | Extraction and analysis processing complete; scientific correctness remains unconfirmed | Continue |
+| `3` | Extraction complete; all analysis jobs processed; only isolated review groups remain | A caller may explicitly continue, recording partial status |
+| Other nonzero | Failure, incomplete extraction, pending jobs or exhausted analysis limits | Stop and inspect diagnostics |
+
+Code `3` is not a general allowance for incomplete runs. In particular, an
+ambiguous group followed by unprocessed jobs at the call limit does not qualify.
+The report and manifest retain the distinction (`analysis_review_required`).
+Review counts and affected fields must accompany any table-quality assessment;
+the table deliberately excludes those observations and may therefore be biased
+toward easy cases. Later independent jobs can propose their own supported
+objects, but cannot see isolated objects as `known_objects`.
 
 ## Recovery and historical runs
 
@@ -261,7 +311,10 @@ or reopen jobs that reached their step/context limit. The step limit and input
 byte budget are bound into checkpoint identity and cannot be changed on resume.
 In particular, ordinary resume can process later pending jobs while retaining
 an earlier failed job; it cannot make that run complete by correcting the
-failure. Inspect the reported cause before spending further calls.
+failure. Review-required jobs are likewise replayed and preserved, not retried
+or promoted to valid decisions. Their original responses, diagnostic hashes,
+and recomputed ambiguity locations must agree before any new request. Inspect
+the reported cause before spending further calls.
 
 Historical version `0.1` checkpoints continue the legacy whole-document contract,
 including its 60,000-character restriction and existing failure behavior. They
@@ -270,12 +323,13 @@ retrofit an old failed discovery. Use a fresh run, without `--resume` from that
 old analysis, when evaluating the new policy. Historical files are not rewritten.
 
 Dev36 used compatibility revision `bounded-source-verification-v2` for its
-corrected JSON instruction. Dev37 uses `bounded-source-verification-v3` for the
-explicit target/reference contract. These prompt changes alter request
-identity: bounded v1/v2 analysis checkpoints cannot resume under v3, even
-though all use analysis schema `0.2`. A mismatch is reported before any new
-model request; do not edit hashes or delete old analysis files to bypass this
-check. The extraction compatibility revision is unchanged.
+corrected JSON instruction. Dev37 used `bounded-source-verification-v3` for the
+explicit target/reference contract. Dev38 uses `bounded-source-verification-v4`
+and analysis/checkpoint version `0.3` for quote guidance, review isolation and
+context provenance. Earlier bounded-analysis checkpoints cannot resume under
+v4; their `0.1`/`0.2` result archives remain readable. A mismatch is reported
+before any new model request; do not edit hashes or delete old analysis files
+to bypass this check. The extraction compatibility revision is unchanged.
 
 To reuse extraction while explicitly starting a new analysis branch, the
 existing public CLI can first restore extraction **without** `--table-subject`,

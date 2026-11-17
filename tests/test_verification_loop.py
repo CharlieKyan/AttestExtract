@@ -107,13 +107,111 @@ def run(source=SHORT, result=None, backend=None, **options):
                           generation=GenerationOptions(max_output_tokens=2048), **options)
 
 
+AMBIGUOUS_SOURCE = MEASUREMENT + " " + MEASUREMENT + "\n\n" + RELATION
+
+
+class AmbiguousGroupBackend:
+    name, max_attempts = "synthetic-bounded-verification", 1
+
+    def __init__(self, hard_error=False):
+        self.requests = []
+        self.hard_error = hard_error
+
+    def generate(self, request):
+        self.requests.append(request)
+        payload = json.loads(request.messages[-1]["content"])
+        assert payload["known_objects"] == []
+        paragraph = payload["initial_context"]["passages"][0]
+        full = {"passage_id": paragraph["passage_id"], "quote": paragraph["text"], "occurrence": None}
+        mention = {**full, "quote": "Sample A"} if request.chunk_id == "verify-0001" else full
+        response = action("decide", objects=[{"object_id": "specimen", "name": "Sample A", "kind": "sample",
+            "scope": "synthetic group", "is_table_subject": True, "mentions": [mention]}], bindings=[{
+                "observation_id": item["observation_id"], "subject_id": "specimen", "status": "supported",
+                "evidence": [full], "reason": "Explicit synthetic statement.", "target_match": "supported",
+                "property_name": "mass", "statistic": None} for item in payload["observations"]])
+        if self.hard_error:
+            response["bindings"][-1]["subject_id"] = "undeclared"
+        return BackendResponse(text=json.dumps(response), model="synthetic-verifier")
+
+
+def test_ambiguous_group_is_isolated_while_later_group_completes_and_resume_spends_zero(tmp_path):
+    result = frozen_extraction(AMBIGUOUS_SOURCE, count=7)
+    backend = AmbiguousGroupBackend()
+    first = run(AMBIGUOUS_SOURCE, result, backend, trace=RunTrace(tmp_path / "first"), max_calls=2)
+    assert first["status"] == "partial" and first["review_only"] is True
+    assert [job["status"] for job in first["jobs"]] == ["review_required", "completed"]
+    assert first["budget"]["reserved"] == len(backend.requests) == 2
+    assert len(first["objects"]) == 1 and first["relations"] == []
+    isolated = [item for item in first["observations"] if item["binding_status"] == "review_required"]
+    assert len(isolated) == 6 and all(item["subject_id"] is None and item["binding_evidence_ids"] == [] for item in isolated)
+    group = first["review_groups"][0]
+    assert set(group["observation_ids"]) == {item["observation_id"] for item in isolated}
+    assert json.loads(group["response_text"])["objects"][0]["object_id"] == "specimen"
+    assert group["diagnostic"]["ambiguities"][0]["visible_match_count"] == 2
+    assert all(item["artifact_id"] == "verify-0002.step-01" for item in first["evidence_contexts"])
+    files = {str(p.relative_to(tmp_path / "first")): p.read_bytes() for p in (tmp_path / "first").rglob("*") if p.is_file()}
+    resumed_backend = AmbiguousGroupBackend()
+    resumed = run(AMBIGUOUS_SOURCE, result, resumed_backend, trace=RunTrace(tmp_path / "second"), max_calls=2,
+                  resume_from=tmp_path / "first/analysis/checkpoint.json")
+    assert resumed["status"] == "partial" and resumed["review_only"] is True
+    assert resumed_backend.requests == [] and resumed["budget"]["reserved"] == 2
+    assert resumed["objects"] == first["objects"] and resumed["evidence_contexts"] == first["evidence_contexts"]
+    assert (tmp_path / "second" / group["validation_details"]).is_file()
+    assert {str(p.relative_to(tmp_path / "first")): p.read_bytes() for p in (tmp_path / "first").rglob("*") if p.is_file()} == files
+
+
+def test_ambiguity_without_trace_retains_raw_proposal_and_alternatives():
+    backend = AmbiguousGroupBackend()
+    package = run(AMBIGUOUS_SOURCE, frozen_extraction(AMBIGUOUS_SOURCE), backend, max_calls=1)
+    group = package["review_groups"][0]
+    assert package["status"] == "partial" and package["review_only"] is True
+    assert group["response_details"] is None and group["validation_details"] is None
+    assert json.loads(group["response_text"])["bindings"][0]["status"] == "supported"
+    assert len(group["diagnostic"]["ambiguities"][0]["matches"]) == 2
+    assert package["objects"] == [] and package["evidence_contexts"] == []
+
+
+def test_ambiguity_mixed_with_hard_error_stops_without_review_or_followup_call(tmp_path):
+    backend = AmbiguousGroupBackend(hard_error=True)
+    package = run(AMBIGUOUS_SOURCE, frozen_extraction(AMBIGUOUS_SOURCE, count=7), backend,
+                  trace=RunTrace(tmp_path), max_calls=2)
+    assert package["status"] == "failed" and not package["review_only"]
+    assert package["review_groups"] == [] and package["objects"] == []
+    assert len(backend.requests) == 1 and package["jobs"][1]["status"] == "pending"
+
+
+@pytest.mark.parametrize("damage", ["cache", "diagnostic", "coordinates"])
+def test_review_cache_and_candidates_are_validated_before_pending_calls(tmp_path, damage):
+    result = frozen_extraction(AMBIGUOUS_SOURCE, count=7)
+    first = run(AMBIGUOUS_SOURCE, result, AmbiguousGroupBackend(), trace=RunTrace(tmp_path / "first"), max_calls=1)
+    assert not first["review_only"] and first["jobs"][1]["status"] == "pending"
+    path = tmp_path / "first/analysis/checkpoint.json"
+    checkpoint = json.loads(path.read_text(encoding="utf-8"))
+    step = checkpoint["state"]["jobs"][0]["steps"][0]
+    if damage == "cache":
+        (tmp_path / "first/analysis/cache/verify-0001.step-01.json").write_text("{}", encoding="utf-8")
+    else:
+        diagnostic_path = tmp_path / "first" / step["validation_details"]
+        diagnostic = json.loads(diagnostic_path.read_text(encoding="utf-8"))
+        diagnostic["ambiguities"][0]["matches"][0]["start"] += 1
+        diagnostic_path.write_text(json.dumps(diagnostic), encoding="utf-8")
+        if damage == "coordinates":
+            step["validation_hash"] = digest(diagnostic)
+            checkpoint["sha256"] = digest(checkpoint["state"])
+            path.write_text(json.dumps(checkpoint), encoding="utf-8")
+    backend = AmbiguousGroupBackend()
+    with pytest.raises(ConfigurationError):
+        run(AMBIGUOUS_SOURCE, result, backend, resume_from=path, trace=RunTrace(tmp_path / "second"), max_calls=2)
+    assert backend.requests == []
+
+
 def test_long_document_search_read_decide_has_bounded_requests_and_cross_paragraph_evidence(tmp_path):
     backend = LookupBackend()
     result = frozen_extraction(LONG)
     before = result.model_dump(mode="json")
     package = run(LONG, result, backend, trace=RunTrace(tmp_path), input_budget=30000)
     assert len(LONG) > 60000
-    assert package["status"] == "complete" and package["analysis_version"] == "0.2"
+    assert package["status"] == "complete" and package["analysis_version"] == "0.3"
     assert len(backend.requests) == 3
     assert [step["action"] for step in package["jobs"][0]["steps"]] == ["search", "read", "decide"]
     assert all(request.chunk_id.startswith("verify-") for request in backend.requests)

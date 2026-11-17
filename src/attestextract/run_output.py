@@ -39,6 +39,11 @@ def save_run_result(result: ExtractionResult, directory: Path, trace: RunTrace) 
                   "See [analysis tables](analysis/analysis.md) and "
                   "[SQLite database](analysis/analysis.sqlite). "
                   "Model proposals require review; extraction values remain unchanged.\n\n" + report)
+        from .analysis import is_review_only_partial
+        if is_review_only_partial(result.analysis):
+            count = sum(len(group["observation_ids"]) for group in result.analysis["review_groups"])
+            report = (f"**Partial analysis: {count} observations are isolated for review and excluded from object tables.** "
+                      "All planned groups were processed; this does not establish scientific accuracy.\n\n" + report)
     # Exclusive files also protect against a user placing files here mid-run.
     with (directory / "result.json").open("x", encoding="utf-8", newline="") as stream:
         stream.write(serialized)

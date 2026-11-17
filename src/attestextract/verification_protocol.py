@@ -28,7 +28,7 @@ class VerificationValidationError(ValueError):
         self.details = {"category": category, "phase": phase, "code": code, **details}
         self.summary = {key: value for key, value in self.details.items()
                         if key in {"category", "phase", "code", "expected_count", "returned_count",
-                                   "missing_count", "duplicate_count", "unexpected_count", "reference_count"}}
+                                   "missing_count", "duplicate_count", "unexpected_count", "reference_count", "ambiguity_count"}}
 
 
 def _reject(message, *, code="invalid_decision", phase="decision", **details):
@@ -137,32 +137,27 @@ def parse_step(text: str) -> Step:
                       code="invalid_analysis_contract", phase="response_contract", errors=errors) from None
 
 
-def _quoted_evidence(item: Evidence, source_text, source_index, visible, entries):
+def _context(source_text, passage, start, end, visible):
+    """Display-only original context; never part of evidence or object identity."""
+    left, right = max(passage["start"], start - 160), min(passage["end"], end + 160)
+    return {"start": left, "end": right, "text": source_text[left:right],
+            "model_visible": any(item["start"] <= left and right <= item["end"] for item in visible)}
+
+
+def _quoted_evidence(item: Evidence, source_text, source_index, visible, entries,
+                     *, path, ambiguities, contexts):
     from .analysis import _evidence
 
     try:
         passage = source_index.get(item.passage_id)
     except ValueError:
-        raise _reject("Evidence references an unknown source passage.", code="invalid_evidence",
-                      phase="evidence", passage_id=item.passage_id) from None
+        raise _reject("Evidence references an unknown source passage.", code="unknown_passage",
+                      phase="evidence", path=path, passage_id=item.passage_id) from None
     start, end = passage["start"], passage["end"]
     if (type(start) is not int or type(end) is not int or not 0 <= start < end <= len(source_text)
             or source_text[start:end] != passage["text"]):
         raise _state_error("Indexed passage does not match the original source.")
-    positions, cursor = [], 0
-    while (cursor := passage["text"].find(item.quote, cursor)) >= 0:
-        positions.append(start + cursor)
-        cursor += 1
-    if not positions or len(positions) > 1 and item.occurrence is None:
-        raise _reject("Evidence is absent or ambiguous within its passage; specify occurrence when repeated.",
-                      code="invalid_evidence", phase="evidence", passage_id=item.passage_id)
-    occurrence = 0 if item.occurrence is None else item.occurrence
-    if occurrence >= len(positions):
-        raise _reject("Evidence occurrence is outside its passage.", code="invalid_evidence", phase="evidence",
-                      passage_id=item.passage_id)
-    quote_start = positions[occurrence]
-    quote_end = quote_start + len(item.quote)
-    shown = False
+    fragments = []
     for fragment in visible:
         if fragment.get("passage_id") != item.passage_id:
             continue
@@ -170,16 +165,45 @@ def _quoted_evidence(item: Evidence, source_text, source_index, visible, entries
         if (type(left) is not int or type(right) is not int or not start <= left < right <= end
                 or source_text[left:right] != fragment.get("text")):
             raise _state_error("Visible passage does not match its original indexed range.")
-        if left <= quote_start < quote_end <= right:
-            shown = True
-    if not shown:
+        fragments.append(fragment)
+    positions, cursor = [], 0
+    while (cursor := passage["text"].find(item.quote, cursor)) >= 0:
+        positions.append(start + cursor)
+        cursor += 1
+    matches = [{"start": left, "end": left + len(item.quote), "occurrence": number}
+               for number, left in enumerate(positions)
+               if any(part["start"] <= left and left + len(item.quote) <= part["end"] for part in fragments)]
+    details = {"path": path, "passage_id": item.passage_id,
+               "total_match_count": len(positions), "visible_match_count": len(matches)}
+    if not positions:
+        raise _reject("Evidence quote does not occur in its source passage.", code="quote_not_found",
+                      phase="evidence", **details)
+    if item.occurrence is not None and item.occurrence >= len(positions):
+        raise _reject("Evidence occurrence is outside its passage.", code="occurrence_out_of_range",
+                      phase="evidence", **details)
+    if item.occurrence is not None:
+        matches = [match for match in matches if match["occurrence"] == item.occurrence]
+    if not matches:
         raise _reject("Evidence was not contained in a source fragment supplied to the model.",
-                      code="invalid_evidence", phase="evidence", passage_id=item.passage_id)
-    return _evidence(source_text, {"quote": item.quote, "start": quote_start, "end": quote_end}, entries)
+                      code="not_visible", phase="evidence", **details)
+    if len(matches) > 1:
+        ambiguity = {**details, "quote": item.quote, "matches": [
+            {**match, "context": _context(source_text, passage, match["start"], match["end"], fragments)}
+            for match in matches]}
+        ambiguities.append(ambiguity)
+        # This token exists only in the discarded validation workspace. It
+        # denotes alternatives, never a selected occurrence or stored evidence.
+        return "unresolved-" + digest({"passage": item.passage_id, "quote": item.quote,
+                                       "matches": matches})[:24]
+    match = matches[0]
+    key = _evidence(source_text, {"quote": item.quote, "start": match["start"], "end": match["end"]}, entries)
+    contexts[key] = {"evidence_id": key, "passage_id": item.passage_id,
+                     **_context(source_text, passage, match["start"], match["end"], fragments)}
+    return key
 
 
 def apply_decision(step: Step, *, source_text, source_hash, batch, objects, relations,
-                   entries, visible_passages, source_index, reference_ids=()):
+                   entries, visible_passages, source_index, reference_ids=(), evidence_contexts=None):
     """Validate a whole decision before publishing any changes to caller state.
 
 Return ``objects, relations, binding_updates, evidence_entries``. Original
@@ -212,16 +236,19 @@ observations stay immutable; field-match reservations are additional blockers.
     local = {}
     declared = set()
 
-    def evidence(items):
-        return sorted({_quoted_evidence(item, source_text, source_index, visible_passages, new_entries)
-                       for item in items})
+    ambiguities, contexts = [], {}
 
-    for item in step.objects:
+    def evidence(items, path):
+        return sorted({_quoted_evidence(item, source_text, source_index, visible_passages, new_entries,
+                                        path=f"{path}[{number}]", ambiguities=ambiguities, contexts=contexts)
+                       for number, item in enumerate(items)})
+
+    for number, item in enumerate(step.objects):
         if not item.name.strip() or not item.object_id.strip():
             raise _reject("Object names and local identifiers must not be blank.")
         if item.object_id in local or item.object_id in known:
             raise _reject("New objects cannot replace existing IDs or repeat a local ID.")
-        mentions = evidence(item.mentions)
+        mentions = evidence(item.mentions, f"objects[{number}].mentions")
         key = "object-" + digest({"source": source_hash, "name": item.name, "kind": item.kind,
                                   "scope": item.scope, "mentions": mentions})[:24]
         if key in declared or key in local:
@@ -248,12 +275,12 @@ observations stay immutable; field-match reservations are additional blockers.
 
     relation_keys = {item["relation_id"] for item in relations}
     declared_relations = set()
-    for item in step.relations:
+    for number, item in enumerate(step.relations):
         source, target = endpoint(item.source_id), endpoint(item.target_id)
         if source == target:
             raise _reject("A relation must connect distinct objects.")
         value = {"source_id": source, "target_id": target, "predicate": item.predicate,
-                 "evidence_ids": evidence(item.evidence)}
+                 "evidence_ids": evidence(item.evidence, f"relations[{number}].evidence")}
         key = "relation-" + digest(value)[:24]
         if key in declared_relations:
             raise _reject("A relation is repeated in the decision.")
@@ -265,7 +292,7 @@ observations stay immutable; field-match reservations are additional blockers.
 
     by_id = {item["observation_id"]: item for item in batch}
     updates = {}
-    for item in step.bindings:
+    for number, item in enumerate(step.bindings):
         if not item.reason.strip():
             raise _reject("A binding must explain its proposed attribution or uncertainty.", phase="binding")
         if item.status == "unknown" and item.subject_id is not None:
@@ -282,8 +309,14 @@ observations stay immutable; field-match reservations are additional blockers.
                 blockers.append({"code": code, "message": "Model did not support mapping this observation to the requested field definition."})
         updates[item.observation_id] = {
             "subject_id": subject, "binding_status": item.status,
-            "binding_evidence_ids": evidence(item.evidence), "reason": item.reason,
+            "binding_evidence_ids": evidence(item.evidence, f"bindings[{number}].evidence"), "reason": item.reason,
             "target_match": item.target_match, "property_name": item.property_name,
             "statistic": item.statistic, "blockers": blockers,
         }
+    if ambiguities:
+        raise _reject("Evidence has multiple visible source positions; the whole decision requires review.",
+                      code="quote_ambiguous", phase="evidence", ambiguity_count=len(ambiguities),
+                      ambiguities=ambiguities)
+    if evidence_contexts is not None:
+        evidence_contexts.update(contexts)
     return new_objects, new_relations, updates, new_entries

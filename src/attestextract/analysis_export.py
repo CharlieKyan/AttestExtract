@@ -18,6 +18,10 @@ _FILES = (
     "objects.csv", "observations.csv", "relations.csv", "evidence.csv",
     "related_observations.csv", "unbound_observations.csv", "unmatched_observations.csv",
 )
+_REVIEW_FILES = ("review_groups.json", "review_groups.csv", "evidence_contexts.json", "evidence_contexts.csv")
+_CONTEXT_COLUMNS = ("evidence_id", "artifact_id", "passage_id", "start", "end", "text", "model_visible")
+_GROUP_COLUMNS = ("job_id", "observation_ids", "record_types", "response_details", "validation_details",
+                  "validation_summary", "response_text", "diagnostic")
 _OBSERVATION_COLUMNS = (
     "observation_id", "candidate_id", "source_record", "record_type", "source_kind",
     "entity", "value", "unit", "conditions", "subject_id", "binding_status", "reason",
@@ -51,8 +55,8 @@ def _refs(row: dict, field: str, known: dict) -> list[str]:
     return values
 
 
-def _validate(data: dict) -> None:
-    if (not isinstance(data, dict) or data.get("analysis_version") not in {"0.1", "0.2"}
+def _validate(data: dict, *, check_context_text=True) -> None:
+    if (not isinstance(data, dict) or data.get("analysis_version") not in {"0.1", "0.2", "0.3"}
             or data.get("semantic_status") != "model_proposed"
             or data.get("status") not in {"complete", "partial", "failed", "pending"}):
         raise ValueError("Unsupported analysis snapshot or verification status.")
@@ -84,12 +88,15 @@ def _validate(data: dict) -> None:
         subject = item.get("subject_id")
         if subject is not None and (not isinstance(subject, str) or subject not in objects):
             raise ValueError("Observation subjects must reference an existing object.")
-        if (item.get("binding_status") not in {"supported", "unknown", "pending", "failed"}
+        statuses = {"supported", "unknown", "pending", "failed"}
+        if data["analysis_version"] == "0.3":
+            statuses.add("review_required")
+        if (item.get("binding_status") not in statuses
                 or item.get("binding_status") == "supported" and subject is None):
             raise ValueError("Observation binding status must agree with its subject reference.")
         if not isinstance(item.get("record_type"), str) or item["record_type"] not in fields:
             raise ValueError("Observation targets must be declared by the analysis task.")
-        if data["analysis_version"] == "0.2":
+        if data["analysis_version"] in {"0.2", "0.3"}:
             target_match = item.get("target_match", "unknown")
             if not isinstance(target_match, str) or target_match not in {"supported", "unsupported", "unknown"}:
                 raise ValueError("Observation target matching must be supported, unsupported or unknown.")
@@ -107,6 +114,69 @@ def _validate(data: dict) -> None:
                 or not isinstance(item.get("predicate"), str) or not item["predicate"]):
             raise ValueError("Relations require existing object endpoints and a predicate.")
         _refs(item, "evidence_ids", evidence)
+    if data["analysis_version"] == "0.3":
+        _validate_review_materials(data, observations, evidence, check_context_text=check_context_text)
+
+
+def _validate_review_materials(data, observations, evidence, *, check_context_text):
+    groups = _index(data.get("review_groups"), "job_id")
+    jobs = _index(data.get("jobs"), "job_id")
+    held = set()
+    for key, group in groups.items():
+        job = jobs.get(key, {})
+        ids = _refs(group, "observation_ids", observations)
+        if (not ids or job.get("status") != "review_required" or job.get("observation_ids") != ids
+                or held.intersection(ids)):
+            raise ValueError("Review groups must reference disjoint isolated jobs and observations.")
+        held.update(ids)
+        expected_fields = sorted({observations[value]["record_type"] for value in ids})
+        if group.get("record_types") != expected_fields:
+            raise ValueError("Review groups must retain all affected target fields.")
+        for value in ids:
+            item = observations[value]
+            if (item["binding_status"] != "review_required" or item.get("subject_id") is not None
+                    or item.get("binding_evidence_ids") or item.get("target_match") != "unknown"):
+                raise ValueError("Isolated proposals cannot enter applied observation bindings.")
+        for field, folder, suffix in (("response_details", "responses", "txt"),
+                                      ("validation_details", "validation", "errors.json")):
+            path = group.get(field)
+            if path is not None and (not isinstance(path, str) or not re.fullmatch(
+                    rf"analysis/{folder}/{re.escape(key)}\.step-[0-9]+\.{re.escape(suffix)}", path)):
+                raise ValueError("Review artifact references must use canonical diagnostic paths.")
+        if not isinstance(group.get("validation_summary"), dict) or group["validation_summary"].get("code") != "quote_ambiguous":
+            raise ValueError("Review groups must describe citation ambiguity explicitly.")
+        if (not isinstance(group.get("response_text"), str) or not group["response_text"]
+                or not isinstance(group.get("diagnostic"), dict)
+                or group["diagnostic"].get("code") != "quote_ambiguous"):
+            raise ValueError("Review groups must retain the original answer and ambiguity diagnostic.")
+    if (held != {key for key, item in observations.items() if item["binding_status"] == "review_required"}
+            or set(groups) != {key for key, job in jobs.items() if job.get("status") == "review_required"}
+            or groups and data["status"] not in {"partial", "failed"}):
+        raise ValueError("Isolated review groups must remain visible as incomplete analysis.")
+    contexts = data.get("evidence_contexts")
+    if not isinstance(contexts, list):
+        raise ValueError("Display evidence contexts must be an explicit collection.")
+    seen = set()
+    for item in contexts:
+        if not isinstance(item, dict):
+            raise ValueError("Display evidence contexts must be objects.")
+        key, artifact = item.get("evidence_id"), item.get("artifact_id")
+        identity = (key, artifact)
+        if (not isinstance(key, str) or key not in evidence or not isinstance(artifact, str)
+                or not re.fullmatch(r"verify-[0-9]+\.step-[0-9]+", artifact) or identity in seen):
+            raise ValueError("Display contexts need unique evidence and verification-step references.")
+        seen.add(identity)
+        entry = evidence[key]
+        left, right, text = item.get("start"), item.get("end"), item.get("text")
+        if (type(left) is not int or type(right) is not int or not 0 <= left < right
+                or type(entry.get("start")) is not int or type(entry.get("end")) is not int
+                or not left <= entry["start"] < entry["end"] <= right
+                or not isinstance(text, str) or type(item.get("model_visible")) is not bool
+                or not isinstance(item.get("passage_id"), str)):
+            raise ValueError("Display context must contain its original evidence span and visibility label.")
+        if check_context_text and (len(text) != right - left
+                or text[entry["start"] - left:entry["end"] - left] != entry["quote"]):
+            raise ValueError("Display context cannot rewrite the original quoted evidence.")
 
 
 def _direct(item: dict) -> bool:
@@ -125,7 +195,7 @@ def _object_view(data: dict) -> dict:
         if not _direct(item):
             unbound.append(item)
             continue
-        if data["analysis_version"] == "0.2" and item.get("target_match") != "supported":
+        if data["analysis_version"] in {"0.2", "0.3"} and item.get("target_match") != "supported":
             unmatched.append(item)
             continue
         subject = by_id[item["subject_id"]]
@@ -181,10 +251,21 @@ def _database(path: Path, data: dict) -> None:
             CREATE TABLE relation_evidence (relation_id TEXT REFERENCES relations(relation_id),
                 evidence_id TEXT REFERENCES evidence(evidence_id), PRIMARY KEY (relation_id, evidence_id));
         """)
+        if data["analysis_version"] == "0.3":
+            connection.executescript("""
+                CREATE TABLE review_groups (job_id TEXT PRIMARY KEY, observation_ids_json TEXT NOT NULL,
+                    record_types_json TEXT NOT NULL, response_details TEXT, validation_details TEXT,
+                    validation_summary_json TEXT NOT NULL, response_text TEXT NOT NULL, diagnostic_json TEXT NOT NULL);
+                CREATE TABLE evidence_contexts (evidence_id TEXT REFERENCES evidence(evidence_id),
+                    artifact_id TEXT NOT NULL, passage_id TEXT NOT NULL, start INTEGER NOT NULL,
+                    end INTEGER NOT NULL, text TEXT NOT NULL, model_visible INTEGER NOT NULL,
+                    PRIMARY KEY (evidence_id, artifact_id));
+            """)
         with connection:
             connection.executemany("INSERT INTO metadata VALUES (?, ?)",
                                    [(key, _json(value)) for key, value in data.items()
-                                    if key not in {"objects", "observations", "relations", "evidence"}])
+                                    if key not in {"objects", "observations", "relations", "evidence",
+                                                   "review_groups", "evidence_contexts"}])
             connection.executemany("INSERT INTO objects VALUES (?, ?, ?, ?, ?, ?)", [
                 (item["object_id"], item["name"], item["kind"], _json(item.get("scope")),
                  int(item["is_table_subject"]), item["semantic_status"]) for item in data["objects"]])
@@ -208,6 +289,15 @@ def _database(path: Path, data: dict) -> None:
                 for key in item.get(field, [])])
             connection.executemany("INSERT INTO relation_evidence VALUES (?, ?)", [
                 (item["relation_id"], key) for item in data["relations"] for key in item.get("evidence_ids", [])])
+            if data["analysis_version"] == "0.3":
+                connection.executemany("INSERT INTO review_groups VALUES (?, ?, ?, ?, ?, ?, ?, ?)", [
+                    (item["job_id"], _json(item["observation_ids"]), _json(item["record_types"]),
+                     item.get("response_details"), item.get("validation_details"), _json(item["validation_summary"]),
+                     item["response_text"], _json(item["diagnostic"]))
+                    for item in data["review_groups"]])
+                connection.executemany("INSERT INTO evidence_contexts VALUES (?, ?, ?, ?, ?, ?, ?)", [
+                    (item["evidence_id"], item["artifact_id"], item["passage_id"], item["start"], item["end"],
+                     item["text"], int(item["model_visible"])) for item in data["evidence_contexts"]])
             if connection.execute("PRAGMA foreign_key_check").fetchall():
                 raise ValueError("Analysis database contains invalid references.")
     finally:
@@ -223,6 +313,8 @@ def _verification_stop_reason(job: dict) -> str | None:
         return job.get("error") or job.get("reason") or step.get("error") or job.get("error_code")
     if summary.get("category") == "internal_state":
         reason = "原文或内部状态校验失败；不能当作模型回答错误纠正。"
+    elif summary.get("code") == "quote_ambiguous":
+        reason = "引文存在多个可见位置；整组提议隔离待复核，未应用到对象、关系或汇总表。"
     elif summary.get("code") == "binding_scope_mismatch":
         def count(key):
             value = summary.get(key)
@@ -232,7 +324,10 @@ def _verification_stop_reason(job: dict) -> str | None:
                   f"遗漏{count('missing_count')}条，重复ID {count('duplicate_count')}个，"
                   f"越界{count('unexpected_count')}条（其中{count('reference_count')}条来自只读参考）。")
     else:
-        reason = "模型回答未通过查证协议检查；本次提议未应用。"
+        reason = {"quote_not_found": "引文未在指定原文中找到；本次提议未应用。",
+                  "occurrence_out_of_range": "引文出现序号越界；本次提议未应用。",
+                  "not_visible": "引文不在该查证任务实际可见的片段中；本次提议未应用。"}.get(
+                      summary.get("code"), "模型回答未通过查证协议检查；本次提议未应用。")
     details = step.get("validation_details")
     if isinstance(details, str) and re.fullmatch(r"analysis/validation/[A-Za-z0-9_.-]+\.errors\.json", details):
         reason += " 详情：diagnostics/" + details
@@ -252,7 +347,7 @@ def _markdown(data: dict, view: dict) -> str:
                              if isinstance(blocker, dict) else str(blocker) for blocker in item["blockers"])
         if not _direct(item):
             problems = "归属未确定：" + str(item.get("reason") or item["binding_status"]) + ("；" + problems if problems else "")
-        if data["analysis_version"] == "0.2":
+        if data["analysis_version"] in {"0.2", "0.3"}:
             target = item.get("target_match", "unknown")
             matching = {"supported": "模型认为符合目标字段", "unsupported": "不符合目标字段", "unknown": "目标字段匹配未确定"}[target]
             labels = "; ".join(f"{label}：{item[key]}" for key, label in
@@ -269,11 +364,11 @@ def _markdown(data: dict, view: dict) -> str:
     lines = ["# 对象与观测分析", "", _NOTICE, "", "运行状态：" + status + " / " + show(data["status"]),
              "目标表主体：" + show(data.get("table_subject")),
              "同名对象按不同ID展示。下面仅展示直接绑定的观测；不沿关系传播数值。", ""]
-    if data["analysis_version"] == "0.2":
+    if data["analysis_version"] in {"0.2", "0.3"}:
         lines += ["目标表仅纳入模型判断归属有支持且字段匹配有支持的观测；仍不是专家确认。其他观测单独保留。", ""]
         observations = data["observations"]
         binding_counts = {status: sum(item["binding_status"] == status for item in observations)
-                          for status in ("supported", "unknown", "pending", "failed")}
+                          for status in ("supported", "unknown", "pending", "failed", "review_required")}
         target_counts = {status: sum(item.get("target_match", "unknown") == status for item in observations)
                          for status in ("supported", "unsupported", "unknown")}
         direct_subjects = {item["subject_id"] for item in observations if _direct(item)}
@@ -286,6 +381,24 @@ def _markdown(data: dict, view: dict) -> str:
                   f"对象共{len(data['objects'])}个；未被归属明确的观测直接引用的对象{unbound_objects}个。"
                   "这些对象可能参与关系或仍待查证，不据此删除或判定错误。",
                   "以上是独立维度的状态计数，不是准确率；运行完成不表示所有归属明确或通过专家确认。", ""]
+        if data["analysis_version"] == "0.3":
+            groups = data["review_groups"]
+            lines += [f"整组隔离待复核：{len(groups)}组、{binding_counts['review_required']}条观测。"
+                      "隔离提议不会填入汇总表或作为后续已登记对象；不代表原文没有报告这些字段。", "",
+                      "## 整组隔离待复核", "",
+                      "| 任务 | 隔离观测数 | 涉及字段 | 原回答 | 定位详情 |",
+                      "| --- | --- | --- | --- | --- |"]
+            for group in groups:
+                values = (group["job_id"], len(group["observation_ids"]), ", ".join(group["record_types"]),
+                          "diagnostics/" + group["response_details"] if group.get("response_details") else "review_groups.json 的 response_text",
+                          "diagnostics/" + group["validation_details"] if group.get("validation_details") else "review_groups.json 的 diagnostic")
+                lines.append("| " + " | ".join(show(value) for value in values) + " |")
+            if not groups:
+                lines += ["", "无。"]
+            else:
+                lines += ["", "原回答完整保留；候选位置表示可能的位置，不表示模型同时引用全部位置。"
+                          "普通恢复保留隔离状态，不会自动重答或把提议提升为已应用结果。"]
+            lines.append("")
     for title, collection in (("目标对象", view["objects"]), ("相关对象（不作为目标表行）", view["related_objects"])):
         lines += ["## " + title, ""]
         for row in collection:
@@ -300,7 +413,7 @@ def _markdown(data: dict, view: dict) -> str:
     lines.extend(observation(item) for item in view["unbound_observations"])
     if not view["unbound_observations"]:
         lines += ["", "无。"]
-    if data["analysis_version"] == "0.2":
+    if data["analysis_version"] in {"0.2", "0.3"}:
         lines += ["", "## 已有归属但尚不能填入目标字段的观测", "", *header]
         lines.extend(observation(item) for item in view["unmatched_observations"])
         if not view["unmatched_observations"]:
@@ -311,10 +424,23 @@ def _markdown(data: dict, view: dict) -> str:
         values = (item["source_id"], item["predicate"], item["target_id"],
                   " / ".join(evidence[key]["quote"] for key in item.get("evidence_ids", [])))
         lines.append("| " + " | ".join(show(value) for value in values) + " |")
+    if data["analysis_version"] == "0.3":
+        lines += ["", "## 引文与审阅上下文", "",
+                  "原始引文保持模型选择的范围。上下文由程序从原文补充展示，不参与证据或对象ID，"
+                  "不能用它代替模型原本的依据。位置为原文Unicode偏移；脱敏文本长度可能不同。", ""]
+        for context in data["evidence_contexts"]:
+            visibility = ("整个展示范围曾提供给该查证任务" if context["model_visible"] else
+                          "含程序补充上下文；未确认整个展示范围曾提供给该查证任务")
+            lines += ["- 证据：" + show(context["evidence_id"]) + "；查证步骤：" + show(context["artifact_id"]),
+                      "  - 原始引文：" + show(evidence[context["evidence_id"]]["quote"]),
+                      "  - 展示上下文：" + show(context["text"]),
+                      f"  - 可见范围：{visibility}；原文位置[{context['start']}, {context['end']})。", ""]
+        if not data["evidence_contexts"]:
+            lines += ["无已应用查证引文的展示上下文；原抽取证据仍在观测记录中。", ""]
     lines += ["", "## 其他待核对材料", "", "原格式隔离记录：" + str(len(data.get("quarantined", []))),
               "完整隔离声明、任务记录及复核项保存在 analysis.json；隔离声明不会填入目标表。",
               "SQLite / JSON 保留原值和引用；CSV 对可能执行公式的文本添加前导单引号，仅改变展示。", ""]
-    if data["analysis_version"] == "0.2":
+    if data["analysis_version"] in {"0.2", "0.3"}:
         lines += ["## 有限查证任务", "", "| 任务 | 状态 | 模型调用 | 停止原因 |", "| --- | --- | --- | --- |"]
         for job in data.get("jobs", []):
             values = (job.get("job_id"), job.get("status"), job.get("attempts", 0),
@@ -333,11 +459,12 @@ def save_analysis(analysis: dict, directory: Path, secrets=()) -> None:
     data = json.loads(_json(analysis))
     _validate(data)
     data = RunTrace(None, secrets=secrets)._mask(data)
-    _validate(data)  # Redaction must not silently collapse identifiers.
+    _validate(data, check_context_text=False)  # Redaction may change lengths, never identifiers or source offsets.
     view = _object_view(data)
     markdown = _markdown(data, view)
     directory = Path(directory)
-    if any((directory / name).exists() or (directory / name).is_symlink() for name in _FILES):
+    filenames = _FILES + (_REVIEW_FILES if data["analysis_version"] == "0.3" else ())
+    if any((directory / name).exists() or (directory / name).is_symlink() for name in filenames):
         raise FileExistsError("Analysis output already exists; choose a new directory.")
     directory.mkdir(parents=True, exist_ok=True)
     for filename, payload in (("analysis.json", data), ("objects.json", view)):
@@ -354,6 +481,13 @@ def save_analysis(analysis: dict, directory: Path, secrets=()) -> None:
     _write_csv(directory / "relations.csv", ("relation_id", "source_id", "target_id", "predicate",
                                             "evidence_ids", "semantic_status"), data["relations"])
     _write_csv(directory / "evidence.csv", ("evidence_id", "quote", "start", "end"), data["evidence"])
+    if data["analysis_version"] == "0.3":
+        for stem in ("review_groups", "evidence_contexts"):
+            with (directory / (stem + ".json")).open("x", encoding="utf-8", newline="") as stream:
+                json.dump(data[stem], stream, ensure_ascii=False, allow_nan=False, indent=2)
+                stream.write("\n")
+        _write_csv(directory / "review_groups.csv", _GROUP_COLUMNS, data["review_groups"])
+        _write_csv(directory / "evidence_contexts.csv", _CONTEXT_COLUMNS, data["evidence_contexts"])
     # Task field names are arbitrary; an extracted field named "name" must
     # neither replace the object label nor produce duplicate CSV columns.
     metadata = {}

@@ -152,6 +152,9 @@ class RunTrace:
             self._manifest["analysis_budget"] = analysis.get("budget", {})
             if analysis["status"] != "complete":
                 status = "analysis_incomplete"
+                from .analysis import is_review_only_partial
+                if format_status == "complete" and is_review_only_partial(analysis):
+                    status = "analysis_review_required"
         self._manifest.update(
             status=status, finished_at=_now(),
             package_version=result_payload.get("package_version"), run=result_payload.get("run"),

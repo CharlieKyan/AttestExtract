@@ -287,3 +287,112 @@ def test_verification_audit_counts_preserve_unknowns_unmatched_and_unbound_objec
     assert len(read_csv(tmp_path / "objects.csv")) == 3
     assert len(read_csv(tmp_path / "object_table.csv")) == 2
     assert analysis == before
+
+
+def review_sample():
+    data = sample()
+    data.update(analysis_version="0.3", status="partial")
+    for item in data["observations"]:
+        item.update(target_match="supported", property_name=None, statistic=None)
+    data["observations"][0].update(binding_status="review_required", subject_id=None,
+        binding_evidence_ids=[], target_match="unknown", reason="Whole group retained for review.")
+    group = {"job_id": "verify-0001", "observation_ids": ["o1"], "record_types": ["porosity"],
+        "response_details": "analysis/responses/verify-0001.step-01.txt",
+        "validation_details": "analysis/validation/verify-0001.step-01.errors.json",
+        "validation_summary": {"code": "quote_ambiguous", "category": "model_response", "ambiguity_count": 1},
+        "response_text": '{"action":"decide","bindings":[]}',
+        "diagnostic": {"code": "quote_ambiguous", "ambiguities": []}}
+    data["review_groups"] = [group]
+    data["jobs"] = [{"job_id": "verify-0001", "status": "review_required", "observation_ids": ["o1"],
+        "attempts": 1, "steps": [group]}, {"job_id": "verify-0002", "status": "completed", "attempts": 1,
+        "observation_ids": ["o2", "o3", "o4"]}]
+    quote = data["evidence"][0]["quote"]
+    prefix = "Original passage. "
+    data["evidence"][0].update(start=len(prefix), end=len(prefix) + len(quote))
+    text = prefix + quote + " Additional context."
+    data["evidence_contexts"] = [{"evidence_id": "e1", "artifact_id": "verify-0002.step-01",
+        "passage_id": "passage-000001", "start": 0, "end": len(text), "text": text, "model_visible": False}]
+    return data
+
+
+def test_isolated_group_and_display_context_stay_separate_in_every_export(tmp_path):
+    data = review_sample()
+    original = deepcopy(data)
+    save_analysis(data, tmp_path)
+    assert data == original
+    assert json.loads((tmp_path / "review_groups.json").read_text(encoding="utf-8")) == data["review_groups"]
+    assert json.loads((tmp_path / "evidence_contexts.json").read_text(encoding="utf-8")) == data["evidence_contexts"]
+    wide = read_csv(tmp_path / "object_table.csv")
+    assert [item["value"] for item in json.loads(wide[0]["porosity"])] == ["15"]
+    held = read_csv(tmp_path / "unbound_observations.csv")
+    assert next(item for item in held if item["observation_id"] == "o1")["binding_status"] == "review_required"
+    assert read_csv(tmp_path / "review_groups.csv")[0]["record_types"] == '["porosity"]'
+    assert read_csv(tmp_path / "evidence.csv")[0]["quote"] == data["evidence"][0]["quote"]
+    with sqlite3.connect(tmp_path / "analysis.sqlite") as db:
+        assert db.execute("SELECT subject_id,binding_status FROM observations WHERE observation_id='o1'").fetchone() == (None, "review_required")
+        assert db.execute("SELECT observation_ids_json FROM review_groups").fetchone() == ('["o1"]',)
+        assert db.execute("SELECT response_text FROM review_groups").fetchone()[0] == data["review_groups"][0]["response_text"]
+        assert db.execute("SELECT evidence_id,artifact_id,model_visible FROM evidence_contexts").fetchone() == ("e1", "verify-0002.step-01", 0)
+        assert db.execute("SELECT quote FROM evidence").fetchone()[0] == data["evidence"][0]["quote"]
+        assert not db.execute("PRAGMA foreign_key_check").fetchall()
+    report = (tmp_path / "analysis.md").read_text(encoding="utf-8")
+    assert "部分完成 / partial" in report and "1组、1条观测" in report
+    assert "原始引文" in report and "展示上下文" in report and "含程序补充上下文" in report
+    assert "不代表原文没有报告" in report and "不会自动重答" in report
+
+
+@pytest.mark.parametrize("damage", ["applied", "missing_group", "wrong_field", "complete", "context_text", "context_duplicate", "context_foreign", "unsafe_path"])
+def test_invalid_isolation_or_display_context_rejected_before_export(tmp_path, damage):
+    data = review_sample()
+    if damage == "applied":
+        data["observations"][0]["subject_id"] = "L1"
+    elif damage == "missing_group":
+        data["review_groups"] = []
+    elif damage == "wrong_field":
+        data["review_groups"][0]["record_types"] = ["permeability"]
+    elif damage == "complete":
+        data["status"] = "complete"
+    elif damage == "context_text":
+        data["evidence_contexts"][0]["text"] = "fabricated"
+    elif damage == "context_duplicate":
+        data["evidence_contexts"].append(deepcopy(data["evidence_contexts"][0]))
+    elif damage == "context_foreign":
+        data["evidence_contexts"][0]["evidence_id"] = "missing"
+    else:
+        data["review_groups"][0]["response_details"] = "../private-file.txt"
+    target = tmp_path / "output"
+    with pytest.raises(ValueError):
+        save_analysis(data, target)
+    assert not target.exists()
+
+
+def test_context_redaction_preserves_original_offsets_and_provenance(tmp_path):
+    data = review_sample()
+    original = deepcopy(data)
+    secret = "Additional context"
+    save_analysis(data, tmp_path, secrets=[secret])
+    contexts = json.loads((tmp_path / "evidence_contexts.json").read_text(encoding="utf-8"))
+    assert secret not in contexts[0]["text"]
+    assert contexts[0]["end"] == original["evidence_contexts"][0]["end"]
+    assert contexts[0]["model_visible"] is False and data == original
+    for path in tmp_path.iterdir():
+        assert secret.encode() not in path.read_bytes()
+
+
+def test_legacy_export_does_not_gain_review_files_or_context_tables(tmp_path):
+    save_analysis(sample(), tmp_path)
+    assert not (tmp_path / "review_groups.json").exists()
+    assert not (tmp_path / "evidence_contexts.csv").exists()
+    with sqlite3.connect(tmp_path / "analysis.sqlite") as db:
+        assert not db.execute("SELECT name FROM sqlite_master WHERE name IN ('evidence_contexts','review_groups')").fetchall()
+
+
+def test_review_without_trace_retains_answer_and_candidate_positions(tmp_path):
+    data = review_sample()
+    group = data["review_groups"][0]
+    group.update(response_details=None, validation_details=None)
+    group["diagnostic"]["ambiguities"] = [{"quote": "repeated phrase", "matches": [{"start": 10}, {"start": 30}]}]
+    save_analysis(data, tmp_path)
+    assert json.loads(read_csv(tmp_path / "review_groups.csv")[0]["diagnostic"]) == group["diagnostic"]
+    report = (tmp_path / "analysis.md").read_text(encoding="utf-8")
+    assert "review\\_groups\\.json 的 response\\_text" in report and group["response_text"] not in report

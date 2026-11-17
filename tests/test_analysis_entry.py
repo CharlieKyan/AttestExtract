@@ -258,3 +258,58 @@ def test_verification_console_does_not_echo_invalid_count_values():
     console.close()
     assert "expected ?, received ?; missing ?" in stream.getvalue()
     assert "PRIVATE" not in stream.getvalue()
+
+
+def review_only_analysis():
+    return {"analysis_version": "0.3", "status": "partial", "source_format_status": "complete",
+            "jobs": [{"job_id": "verify-1", "status": "review_required", "error_code": "quote_ambiguous",
+                      "observation_ids": ["observation-a"]},
+                     {"job_id": "verify-2", "status": "completed", "observation_ids": ["observation-b"]}],
+            "review_groups": [{"job_id": "verify-1", "observation_ids": ["observation-a"]}]}
+
+
+@pytest.mark.parametrize("change", [None, "pending", "limited", "failed", "format", "version", "groups", "foreign", "code"])
+def test_batch_continuation_distinguishes_review_from_unfinished_or_failed_work(change):
+    from attestextract.analysis import is_review_only_partial
+    data = review_only_analysis()
+    if change in {"pending", "limited", "failed"}:
+        data["jobs"][1]["status"] = change
+    elif change == "format":
+        data["source_format_status"] = "partial_format_error"
+    elif change == "version":
+        data["analysis_version"] = "0.2"
+    elif change == "groups":
+        data["review_groups"] = []
+    elif change == "foreign":
+        data["review_groups"][0]["observation_ids"] = ["other-observation"]
+    elif change == "code":
+        data["jobs"][0]["error_code"] = "transport_error"
+    data["review_only"] = True  # A stale or edited flag must not grant continuation.
+    assert is_review_only_partial(data) is (change is None)
+
+
+@pytest.mark.parametrize("format_status,expected_code,manifest_status", [
+    ("complete", 3, "analysis_review_required"),
+    ("partial_format_error", 2, "analysis_incomplete"),
+])
+def test_cli_review_continuation_never_overrides_incomplete_extraction(
+        tmp_path, monkeypatch, capsys, format_status, expected_code, manifest_status):
+    import httpx
+    from attestextract import analysis_export
+    monkeypatch.setattr(httpx.Client, "send", lambda *a, **k: pytest.fail("Unexpected network"))
+    result = extract(TEXT, TASK, backend=Backend())
+    result = result.model_copy(update={"schema_version": "0.6", "format_status": format_status,
+                                       "analysis": review_only_analysis()})
+    monkeypatch.setattr(cli, "extract", lambda *a, **k: result)
+    monkeypatch.setattr(analysis_export, "save_analysis", lambda *a, **k: None)
+    monkeypatch.setenv("ATTESTEXTRACT_API_KEY", "synthetic-check-key")
+    source, task, output = tmp_path / "source.txt", tmp_path / "task.json", tmp_path / "run"
+    source.write_text(TEXT, encoding="utf-8")
+    task.write_text(json.dumps(TASK), encoding="utf-8")
+    code = cli.main(["extract", "--input", str(source), "--task", str(task),
+        "--base-url", "https://synthetic.invalid/v1", "--model", "synthetic-model",
+        "--structured-output", "json_object", "--output-dir", str(output), "--progress", "quiet"])
+    assert code == expected_code
+    manifest = json.loads((output / "diagnostics/manifest.json").read_text(encoding="utf-8"))
+    assert manifest["status"] == manifest_status and manifest["analysis_status"] == "partial"
+    assert ("Exit code 3" in capsys.readouterr().err) is (expected_code == 3)

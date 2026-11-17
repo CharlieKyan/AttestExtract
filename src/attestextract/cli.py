@@ -642,6 +642,12 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
             print("attestextract: " + result.format_status + "; legal records saved; inspect table_results.rejections.", file=sys.stderr)
             return 2
         if result.analysis is not None and result.analysis["status"] != "complete":
+            from .analysis import is_review_only_partial
+            if is_review_only_partial(result.analysis):
+                print("attestextract: analysis partial; all groups processed, with isolated proposals requiring review. "
+                      "Exit code 3 permits explicit batch continuation; it does not mean full acceptance. "
+                      "Inspect analysis/analysis.md and analysis/review_groups.json.", file=sys.stderr)
+                return 3
             print("attestextract: extraction saved; analysis incomplete; inspect analysis/analysis.md and diagnostics/analysis/checkpoint.json.", file=sys.stderr)
             return 130 if any(job.get("error_code") == "interrupted" for job in result.analysis.get("jobs", [])) else 2
         return 0

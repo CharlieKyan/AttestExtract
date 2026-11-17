@@ -111,6 +111,80 @@ def test_fragments_cannot_be_joined_to_invent_a_seen_quote():
         apply_decision(Step.model_validate(decision()), **state)
 
 
+def ambiguous_decision():
+    text = "Sample A has mass 17 g. Sample A was sampled in the east."
+    payload = decision()
+    payload["objects"][0]["mentions"] = [quote("Sample A")]
+    payload["bindings"][0]["evidence"] = [quote(text)]
+    return payload, inputs(text)
+
+
+def test_ambiguous_quote_preserves_alternatives_and_commits_nothing():
+    payload, state = ambiguous_decision()
+    original = deepcopy({key: value for key, value in state.items() if key != "source_index"})
+    contexts = {}
+    with pytest.raises(VerificationValidationError) as caught:
+        apply_decision(Step.model_validate(payload), **state, evidence_contexts=contexts)
+    error = caught.value
+    assert error.code == "quote_ambiguous" and error.summary["ambiguity_count"] == 1
+    ambiguity = error.details["ambiguities"][0]
+    assert ambiguity["path"] == "objects[0].mentions[0]"
+    assert ambiguity["total_match_count"] == ambiguity["visible_match_count"] == 2
+    assert [(m["start"], m["occurrence"]) for m in ambiguity["matches"]] == [(0, 0), (24, 1)]
+    assert all(m["context"]["model_visible"] for m in ambiguity["matches"])
+    assert contexts == {} and {key: value for key, value in state.items() if key != "source_index"} == original
+
+
+@pytest.mark.parametrize("mutation,code", [("missing_quote", "quote_not_found"),
+    ("bad_subject", "invalid_decision"), ("bad_status", "invalid_binding_status"),
+    ("out_of_range", "occurrence_out_of_range"), ("foreign_passage", "unknown_passage")])
+def test_later_hard_error_is_not_hidden_by_earlier_ambiguity(mutation, code):
+    payload, state = ambiguous_decision()
+    binding = payload["bindings"][0]
+    if mutation == "missing_quote":
+        binding["evidence"][0]["quote"] = "The source does not contain this."
+    elif mutation == "bad_subject":
+        binding["subject_id"] = "not-declared"
+    elif mutation == "bad_status":
+        binding["status"] = "unknown"
+    elif mutation == "out_of_range":
+        binding["evidence"][0]["occurrence"] = 2
+    else:
+        binding["evidence"][0]["passage_id"] = "missing"
+    with pytest.raises(VerificationValidationError) as caught:
+        apply_decision(Step.model_validate(payload), **state)
+    assert caught.value.code == code and state["objects"] == state["relations"] == []
+
+
+def test_only_one_visible_occurrence_resolves_without_selecting_unseen_text():
+    payload, state = ambiguous_decision()
+    passage = state["source_index"].get("p1")
+    state["visible_passages"] = [{**passage, "start": 24, "text": passage["text"][24:]}]
+    payload["bindings"][0]["evidence"] = [quote("Sample A was sampled in the east.")]
+    contexts = {}
+    _, _, _, entries = apply_decision(Step.model_validate(payload), **state, evidence_contexts=contexts)
+    mention = next(item for item in entries.values() if item["quote"] == "Sample A")
+    assert mention["start"] == 24
+    assert contexts[mention["evidence_id"]]["model_visible"] is False
+    payload["objects"][0]["mentions"][0]["occurrence"] = 0
+    with pytest.raises(VerificationValidationError) as caught:
+        apply_decision(Step.model_validate(payload), **state)
+    assert caught.value.code == "not_visible"
+
+
+def test_display_context_does_not_change_proof_or_object_identity():
+    payload = Step.model_validate(decision())
+    state = inputs()
+    baseline = apply_decision(payload, **state)
+    contexts = {}
+    enriched = apply_decision(payload, **state, evidence_contexts=contexts)
+    assert enriched == baseline and contexts
+    for key, context in contexts.items():
+        evidence = enriched[-1][key]
+        assert context["text"] == TEXT[context["start"]:context["end"]]
+        assert context["start"] <= evidence["start"] < evidence["end"] <= context["end"]
+
+
 def test_invalid_visible_source_ranges_are_rejected():
     state = inputs()
     state["visible_passages"][0] = {**state["visible_passages"][0], "text": "Changed source"}

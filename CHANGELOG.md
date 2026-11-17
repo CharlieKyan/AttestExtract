@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.0.dev38
+
+- Ask for continuous evidence sufficient to identify the claim, without a minimum quote length. Keep original quotations separate from bounded display context and its verification-step visibility; display context does not affect evidence or object identity.
+- Distinguish missing, ambiguous, unseen and out-of-range evidence. A decision with only unresolved visible matches is retained as a whole review group, never applied or supplied as known objects; later jobs may continue within the existing budget. Hard errors anywhere in the decision still stop execution.
+- Introduce analysis snapshot/checkpoint 0.3 and verification revision v4. Preserve quarantined responses, candidate positions and reservation counts, verify them again on resume, and keep the final run partial. Extraction compatibility and historical archive reading are unchanged.
+- Add CLI exit code 3 only for complete extraction with all analysis jobs processed and solely isolated review groups remaining. Other incomplete states retain their stopping behavior. Report isolated observations and export review groups and display context alongside the existing tables.
+- Validate public Python/CLI entries and installed packages using synthetic HTTP, including mixed hard errors, continuation, unchanged identities and zero-call completed replay. No automatic correction or extra retry is introduced; real-model quality remains a separate acceptance step.
+
 ## 0.1.0.dev37
 
 - Separate each verification job's binding targets from read-only reference observations. Preserve reference identity and source context while making the target list explicit; keep the fixed search/read/decide response schema and strict local coverage checks.

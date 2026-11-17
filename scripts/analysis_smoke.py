@@ -446,6 +446,182 @@ def accept_scope(root, mode, entry):
             "resume_new_calls": 0, "cross_paragraph_evidence": True, "passed": True}
 
 
+AMBIGUITY_CLAIMS = tuple(
+    (f"Specimen A{number:02d} has mass {number} g." +
+     (" Its label is Specimen A01." if number == 1 else ""), f"A{number:02d}", str(number))
+    for number in range(1, 13)
+)
+AMBIGUITY_SOURCE = "\n\n".join(item[0] for item in AMBIGUITY_CLAIMS)
+
+
+class AmbiguityService(Service):
+    """Two independent answer groups; the first has one repeated owner quote."""
+
+    def __init__(self, *, mode, invalid_after_ambiguity=False, lookup_only=False):
+        super().__init__(mode=mode)
+        self.invalid_after_ambiguity = invalid_after_ambiguity
+        self.lookup_only = lookup_only
+
+    def handle(self, request):
+        assert not self.forbidden, "Quarantined and completed groups must resume without generation"
+        assert request.url.host == "synthetic.invalid" and request.method == "POST"
+        assert request.headers["authorization"] == "Bearer synthetic-install-secret"
+        body = json.loads(request.content)
+        self.requests.append(body)
+        assert body["response_format"]["type"] == self.mode
+        payload = json.loads(body["messages"][-1]["content"])
+        if "source" in payload:
+            self.calls.append("extraction")
+            records = []
+            for quote, entity, value in AMBIGUITY_CLAIMS:
+                assert quote in payload["source"]
+                values = {"entity": entity, "value": value, "unit": "g", "conditions": None}
+                records.append({"record_type": "mass", "values": values,
+                                "quotes": {key: quote if val is not None else "" for key, val in values.items()}})
+            response = {"records": records}
+        else:
+            targets = payload["observations"]
+            numbers = tuple(int(item["value"]) for item in targets)
+            assert numbers in ((1, 2, 3, 4, 5, 6), (7, 8, 9, 10, 11, 12))
+            # The rejected first group's proposals must not become context for
+            # the second group, even though they were valid object declarations.
+            assert payload["known_objects"] == []
+            self.calls.append("search" if self.lookup_only else "decide")
+            response = {"action": "search" if self.lookup_only else "decide",
+                "question": "Check the reported owner of each specimen mass.",
+                "query": "Specimen" if self.lookup_only else None, "search_offset": 0,
+                "passage_ids": [], "neighbors": 0, "objects": [], "relations": [], "bindings": []}
+            if not self.lookup_only:
+                passages = payload["initial_context"]["passages"]
+
+                def cite(quote):
+                    passage = next(item for item in passages if quote in item["text"])
+                    return {"passage_id": passage["passage_id"], "quote": quote, "occurrence": None}
+
+                for number, target in zip(numbers, targets):
+                    quote, name, _ = AMBIGUITY_CLAIMS[number - 1]
+                    local_id = f"specimen-{number}"
+                    response["objects"].append({"object_id": local_id, "name": name, "kind": "sample",
+                        "scope": "Synthetic specimen register", "is_table_subject": True,
+                        "mentions": [cite("Specimen A01" if number == 1 else quote)]})
+                    response["bindings"].append({"observation_id": target["observation_id"],
+                        "subject_id": local_id, "status": "supported", "evidence": [cite(quote)],
+                        "reason": "The stated specimen owns this mass.", "target_match": "supported",
+                        "property_name": "mass", "statistic": None})
+                if numbers[0] == 1 and self.invalid_after_ambiguity:
+                    response["bindings"][-1]["subject_id"] = "undeclared-owner"
+        return httpx.Response(200, json={"model": "synthetic-ambiguity-model", "choices": [
+            {"finish_reason": "stop", "message": {"role": "assistant", "content": json.dumps(response)}}],
+            "usage": {"prompt_tokens": 20, "completion_tokens": 10, "total_tokens": 30}})
+
+
+def ambiguity_entry(root, mode, entry, *, service=None, max_calls=2):
+    """Build an ordinary public entry with a synthetic transport only."""
+    root.mkdir()
+    service = service or AmbiguityService(mode=mode)
+    if entry == "python":
+        backend = OpenAICompatibleBackend("https://synthetic.invalid/v1", "synthetic-ambiguity-model",
+            api_key="synthetic-install-secret", structured_output=mode,
+            max_attempts=1, transport=httpx.MockTransport(service.handle))
+
+        def invoke(destination, resume=None):
+            return extract(AMBIGUITY_SOURCE, SCOPE_TASK, backend=backend, output_dir=destination, progress="quiet",
+                execution=ExecutionOptions(adaptive_chunking=False, max_model_calls=1), max_chunk_chars=6000,
+                table_subject="one individual specimen", max_analysis_calls=max_calls, resume_from=resume)
+    else:
+        source, task, config = root / "source.md", root / "task.json", root / "models.toml"
+        source.write_bytes(AMBIGUITY_SOURCE.encode("utf-8"))
+        task.write_text(json.dumps(SCOPE_TASK), encoding="utf-8")
+        config.write_text('[profiles.synthetic]\nbase_url = "https://synthetic.invalid/v1"\n'
+            f'model = "synthetic-ambiguity-model"\nstructured_output = "{mode}"\n'
+            'api_key_env = "ATTESTEXTRACT_TEST_API_KEY"\nmax_attempts = 1\nformat_retries = 0\n', encoding="utf-8")
+        registry = BackendRegistry()
+
+        def factory(*, config, api_key, trace):
+            return OpenAICompatibleBackend(config.base_url, config.model, api_key=api_key, trace=trace,
+                structured_output=config.structured_output, transport=httpx.MockTransport(service.handle))
+
+        registry.register("openai-compatible", factory)
+        arguments = ["extract", "--input", str(source), "--task", str(task), "--config", str(config),
+            "--profile", "synthetic", "--chunking", "fixed", "--max-chunk-chars", "6000",
+            "--max-model-calls", "1", "--max-analysis-calls", str(max_calls),
+            "--table-subject", "one individual specimen", "--progress", "quiet"]
+
+        def invoke(destination, resume=None):
+            extra = ["--resume", str(resume)] if resume else []
+            with patch.dict(os.environ, {"ATTESTEXTRACT_TEST_API_KEY": "synthetic-install-secret"}), redirect_stdout(io.StringIO()):
+                return cli.main([*arguments, *extra, "--output-dir", str(destination)], registry=registry)
+    return service, invoke
+
+
+def accept_ambiguity(root, mode, entry):
+    service, invoke = ambiguity_entry(root, mode, entry)
+    first, replay = root / "first", root / "replay"
+    outcome = invoke(first)
+    if entry == "cli":
+        assert outcome == 3
+    else:
+        assert outcome.analysis["status"] == "partial"
+    analysis = read(first / "analysis/analysis.json")
+    assert analysis["analysis_version"] == "0.3" and analysis["status"] == "partial"
+    assert [job["status"] for job in analysis["jobs"]] == ["review_required", "completed"]
+    assert analysis["budget"]["reserved"] == 2 and service.calls == ["extraction", "decide", "decide"]
+    by_value = {int(item["value"]): item for item in analysis["observations"]}
+    assert set(by_value) == set(range(1, 13))
+    for number, item in by_value.items():
+        assert item["value"] == str(number) and item["unit"] == "g"
+        assert item["binding_status"] == ("review_required" if number <= 6 else "supported")
+        if number <= 6:
+            assert item["subject_id"] is None and item["binding_evidence_ids"] == []
+    assert {item["name"] for item in analysis["objects"]} == {f"A{n:02d}" for n in range(7, 13)}
+    assert analysis["relations"] == []
+    assert len(analysis["review_groups"]) == 1
+    assert set(analysis["review_groups"][0]["observation_ids"]) == {by_value[n]["observation_id"] for n in range(1, 7)}
+    step = analysis["jobs"][0]["steps"][-1]
+    diagnostic = first / "diagnostics" / step["validation_details"]
+    details = read(diagnostic)
+    assert details["code"] == "quote_ambiguous" and details["ambiguity_count"] == 1
+    ambiguous = details["ambiguities"][0]
+    assert ambiguous["total_match_count"] == ambiguous["visible_match_count"] == 2
+    assert ambiguous["quote"] == "Specimen A01"
+    assert len({match["start"] for match in ambiguous["matches"]}) == 2
+    for match in ambiguous["matches"]:
+        assert AMBIGUITY_SOURCE[match["start"]:match["end"]] == "Specimen A01"
+        context = match["context"]
+        assert AMBIGUITY_SOURCE[context["start"]:context["end"]] == context["text"]
+        assert context["model_visible"] is True
+    raw_path = first / "diagnostics/analysis/responses/verify-0001.step-01.txt"
+    raw = read(raw_path)
+    assert len(raw["objects"]) == len(raw["bindings"]) == 6
+    assert raw["objects"][0]["mentions"][0]["quote"] == "Specimen A01"
+    assert raw["objects"][0]["mentions"][0]["occurrence"] is None
+    with (first / "analysis/object_table.csv").open(encoding="utf-8-sig", newline="") as stream:
+        assert len(list(csv.DictReader(stream))) == 6
+    with sqlite3.connect(first / "analysis/analysis.sqlite") as db:
+        assert db.execute("SELECT count(*) FROM objects").fetchone()[0] == 6
+        assert db.execute("SELECT count(*) FROM observations WHERE subject_id IS NULL").fetchone()[0] == 6
+        assert db.execute("PRAGMA foreign_key_check").fetchall() == []
+    old = hashes(first)
+    service.forbidden = True
+    resumed = invoke(replay, first)
+    if entry == "cli":
+        assert resumed == 3
+    else:
+        assert resumed.analysis["status"] == "partial"
+    assert hashes(first) == old and len(service.calls) == 3
+    restored = read(replay / "analysis/analysis.json")
+    assert restored["objects"] == analysis["objects"] and restored["observations"] == analysis["observations"]
+    assert (replay / "diagnostics/analysis/responses/verify-0001.step-01.txt").read_bytes() == raw_path.read_bytes()
+    assert read(replay / "diagnostics" / step["validation_details"]) == read(diagnostic)
+    for artifact in first.rglob("*"):
+        if artifact.is_file():
+            assert b"synthetic-install-secret" not in artifact.read_bytes()
+    return {"passed": True, "observations": 12, "review_groups": 1, "review_observations": 6,
+            "supported_observations": 6, "analysis_calls": 2, "synthetic_http_calls": 3,
+            "resume_new_calls": 0, "analysis_status": "partial", "cli_exit_status": 3 if entry == "cli" else None,
+            "known_objects_unpolluted": True, "original_response_preserved": True}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
@@ -472,12 +648,15 @@ def main():
             modes[mode].update(accept_cli(directory, mode))
             modes[mode]["scope_acceptance"] = {entry: accept_scope(directory / ("scope-" + entry), mode, entry)
                                                 for entry in ("python", "cli")}
+            modes[mode]["ambiguity_acceptance"] = {entry: accept_ambiguity(directory / ("ambiguity-" + entry), mode, entry)
+                                                    for entry in ("python", "cli")}
     assert not network_attempts
     summary = {"passed": True, "package_version": attestextract.__version__,
                "module_path": str(module_path), "installed_package_verified": True,
                "network_attempts": 0, "real_model_calls": 0, "modes": modes,
                "synthetic_http_calls": sum(item["synthetic_http_calls"] + item["cli_synthetic_http_calls"] +
                                            sum(scope["synthetic_http_calls"] for scope in item["scope_acceptance"].values())
+                                           + sum(check["synthetic_http_calls"] for check in item["ambiguity_acceptance"].values())
                                            for item in modes.values()),
                "notice": "Synthetic offline acceptance; not provider or scientific-quality validation."}
     (root / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
