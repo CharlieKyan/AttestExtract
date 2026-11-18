@@ -163,7 +163,12 @@ jobs:
                              check=True, cwd=root, env=env)
               recovery = json.loads((format_output / "summary.json").read_text(encoding="utf-8"))
               assert recovery["passed"] and recovery["real_endpoint_calls"] == 0
-              assert recovery["mock_http_calls"] == 5 and recovery["exhausted"]["resume_new_calls"] == 0
+              assert recovery["mock_http_calls"] == 17 and recovery["exhausted"]["resume_new_calls"] == 0
+              assert set(recovery["legacy_entry_cases"]) == {"python", "cli"}
+              for case in recovery["legacy_entry_cases"].values():
+                  assert case["reused_chunks"] == 3 and case["resume_new_calls"] == 1
+                  assert case["completed_resume_new_calls"] == case["exhausted_resume_new_calls"] == 0
+                  assert case["legacy_feedback_removed_from_prompt"] and case["previous_runs_unchanged"]
               assert Path(recovery["module_path"]).is_relative_to(environment)
               structured_copy = scripts / "structured_output_smoke.py"
               shutil.copyfile(structured_script, structured_copy)

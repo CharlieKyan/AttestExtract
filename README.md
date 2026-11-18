@@ -1,5 +1,10 @@
 # AttestExtract
 
+Dev40 limits format-regeneration feedback to observed syntax facts, including when
+resuming historical checkpoints. It removes speculative shape corrections without
+changing the source, task, first request or default retry allowance. See
+[format feedback and explicit recovery](docs/STRUCTURED_OUTPUT.md).
+
 Dev35 replaces whole-document analysis for new runs with a bounded verification
 loop. With `table_subject` / `--table-subject`, the model can search the local
 source, read selected passages, and decide object ownership and target-field

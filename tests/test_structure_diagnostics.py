@@ -1,10 +1,15 @@
-"""Hand-written invalid structures produce hints, never repaired records or values."""
+"""Hand-written invalid structures produce observations, never repair suggestions.
+
+The former shape hints guessed whether a brace should be removed. In particular,
+a missing record boundary can look like an extra opening brace inside a record;
+the diagnostic now reports the observed position without choosing a repair.
+"""
 
 import json
 
 import pytest
 
-from attestextract.structure_diagnostics import diagnose_structure
+from attestextract.structure_diagnostics import OBSERVED_OBJECT_MESSAGE, diagnose_structure
 
 
 KEYS = {"records", "record_type", "fields", "subject", "parameter", "value", "quote"}
@@ -19,18 +24,43 @@ def diagnose(text, *, allowed_keys=KEYS):
     return diagnose_structure(text, error.value.pos, allowed_keys=allowed_keys)
 
 
-def test_anonymous_field_object_has_value_free_local_shape():
+def test_anonymous_field_object_has_only_value_free_observations():
     hint = diagnose(BROKEN)
     assert hint["code"] == "unexpected_object_in_object"
     assert hint["path"] == "records[0].fields"
     assert hint["actual_token"] == "{"
     assert hint["previous_key"] == "subject" and hint["next_key"] == "parameter"
-    assert hint["wrong_shape"] == '{"subject": <value>, {"parameter": <value>}}'
-    assert hint["correct_shape"] == '{"subject": <value>, "parameter": <value>}'
+    assert set(hint) == {"code", "path", "actual_token", "previous_key", "next_key", "message"}
+    assert hint["message"] == OBSERVED_OBJECT_MESSAGE
     encoded = json.dumps(hint)
     assert "Synthetic sample" not in encoded and "Depth" not in encoded and "reading" not in encoded
     # A diagnostic must leave the original response invalid and unchanged.
     assert diagnose(BROKEN) == hint
+
+
+def test_missing_record_boundary_and_quotes_do_not_imply_a_brace_repair():
+    # Two intended records, a missing closing boundary after the first values
+    # object, and no quotes in either record. The JSON error is not sufficient
+    # to recover the boundary, supply quotes, or declare either record valid.
+    text = ('{"records":[{"record_type":"reading","values":{"entity":"Sample A","value":"12"},'
+            '{"record_type":"reading","values":{"entity":"Sample B","value":"13"}}]}')
+    hint = diagnose(text, allowed_keys=KEYS | {"values", "quotes", "entity"})
+    assert hint == {
+        "code": "unexpected_object_in_object",
+        "path": "records[0]",
+        "actual_token": "{",
+        "previous_key": "values",
+        "next_key": "record_type",
+        "message": OBSERVED_OBJECT_MESSAGE,
+    }
+    assert "a record boundary or repair cannot be inferred" in hint["message"]
+    assert "not necessarily the origin" in hint["message"]
+    encoded = json.dumps(hint)
+    assert "Sample A" not in encoded and "Sample B" not in encoded
+    assert "Keep named properties as siblings" not in encoded
+    # No response repair or invented evidence: the source remains invalid.
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(text)
 
 
 def test_array_siblings_are_not_object_siblings():
@@ -63,7 +93,7 @@ def test_braces_and_keys_inside_strings_are_data(value):
         assert diagnose_structure(text, inside, allowed_keys=KEYS) is None
 
 
-def test_unknown_keys_and_values_are_masked_in_path_and_shapes():
+def test_unknown_keys_and_values_are_masked_in_observations():
     text = '{"PRIVATE_CONTAINER":{"PRIVATE_OLD":"SECRET_VALUE",{"PRIVATE_NEW":"SECOND_SECRET"}}}'
     hint = diagnose(text)
     assert hint["path"] == '["<undeclared>"]'
@@ -80,8 +110,8 @@ def test_unknown_next_key_with_escapes_is_not_echoed():
 def test_first_anonymous_property_has_no_previous_key():
     hint = diagnose('{"fields":{{"parameter":1}}}')
     assert hint["path"] == "fields" and hint["previous_key"] is None
-    assert hint["wrong_shape"] == '{{"parameter": <value>}}'
-    assert hint["correct_shape"] == '{"parameter": <value>}'
+    assert hint["next_key"] == "parameter" and hint["actual_token"] == "{"
+    assert "wrong_shape" not in hint and "correct_shape" not in hint
 
 
 @pytest.mark.parametrize("text", [
@@ -126,7 +156,7 @@ def test_hint_strings_have_bounded_lengths():
     text = '{' + json.dumps(old) + ':null,{' + json.dumps(new) + ':null}}'
     hint = diagnose(text, allowed_keys={old, new})
     assert len(hint["path"]) <= 256
-    assert len(hint["wrong_shape"]) <= 384 and len(hint["correct_shape"]) <= 384
+    assert len(hint["previous_key"]) <= 64 and len(hint["next_key"]) <= 64
     assert len(hint["message"]) <= 256
 
 

@@ -1,5 +1,7 @@
 # AttestExtract
 
+dev40 撤回推测性的 `correct_shape` 改错建议，新诊断及旧检查点恢复均只发送可观察的语法事实。首次请求、原文、任务、默认零次格式重生成及已完成缓存保持兼容。用户可显式开启预算内一次重生成；已耗尽时终端不再推荐无效恢复命令。详见[格式反馈与恢复](docs/STRUCTURED_OUTPUT.md)。
+
 dev32 新增 `annotation.json` / `annotation.md` 简洁视图：同一对象标签下，字段、原值、单位、各自条件及完整引文放在一起。技术追踪另存 `annotation.sources.json`，原详细结果和审阅文件继续保留。共同展示不合并不同观测，也不代表准确性已通过专家确认。
 
 dev31 对齐表格提示词、Schema 与本地关系校验，允许在明确累计预算内对隔离表格各重抽一次；自动输出目录新增 `review.json` 和 `review.md`。审阅行按对象、条件和范围原标签分组展示，不进行事实归并或专家确认。旧结果可用 `attestextract export-review` 离线导出。用法及限制见[专家审阅与定向恢复](docs/EXPERT_REVIEW.md)。

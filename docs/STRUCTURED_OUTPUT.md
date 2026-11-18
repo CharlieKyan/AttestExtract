@@ -1,4 +1,4 @@
-# 结构化输出与格式恢复（dev17）
+# 结构化输出与格式恢复（dev40）
 
 dev15 发布后的真实反馈已显示：发送 `text.format.type=json_schema` 后，服务仍返回了
 非法 JSON。已核查的失败链中，一次重生成也未恢复。因此 dev16 默认不再追加这次调用，
@@ -15,14 +15,16 @@ dev15 增加的诊断针对“对象期待属性名，却遇到匿名对象”�
 
 ## 错误反馈发生了什么变化
 
-例如合成回答的结构是 `{"subject": <value>, {"amount": <value>}}`。
-`<value>` 仅为去值示意，不是可直接提交的 JSON。反馈现在指出：
+例如解析器在 `records[1]` 期待属性名时遇到 `{`，紧接着读到键名
+`record_type`。此前程序生成了“去掉内层括号，把相邻字段放到同一对象”的
+`correct_shape`。但另一种可能是上一条记录尚未关闭，下一条记录已经开始；
+同一语法位置不能确定应该合并字段还是分开记录。dev40 撤回这类推测。
 
-- 位置 `records[0].values`，分类 `unexpected_object_in_object`。
-- 这里需要带引号的属性名，却遇到匿名 `{`；相邻的命名属性应属于同一对象。
-- 正确形状为 `{"subject": <value>, "amount": <value>}`；values/quotes 完整结构仍以任务示例为准。
+- 仅报告发现位置、`unexpected_object_in_object`、遇到的 `{` 及相邻已声明键名。
+- 明确发现位置不一定是错误起点，不能由此推断记录边界或唯一改法。
+- 若显式允许重生成，要求依据原文、任务与输出契约重新生成完整记录，包括必需的引文结构。
 
-提示只包含声明过的键名和固定占位符；未知键替换为 `<undeclared>`，不把模型值或引文
+提示只包含声明过的键名；未知键替换为 `<undeclared>`，不把模型值或引文
 再次塞进系统提示。完整错误回答保留在 `diagnostics/responses/`，不要提交公开仓库。
 `validation/*.errors.json` 保留原有 `invalid_json`、行列和 Unicode offset，并增加
 `errors[0].structure`。终端只增加一行结构位置，不输出原始回答。
@@ -31,8 +33,18 @@ dev15 增加的诊断针对“对象期待属性名，却遇到匿名对象”�
 合法对象数组以及字符串内的括号不会触发。无法确认或超过上限时保留通用解析错误。
 诊断不保证模型下一次一定正确；第二次仍失败就停止，保留已完成块、两次回答和检查点。
 增加总预算或反复恢复不会重置已用的重生成额度。
-缺少具体 `structure` 提示时，重生成仅包含通用解析原因与位置，不再附加没有对应数据的
-`wrong_shape/correct_shape` 占位说明。这是清理无效说明，未证明模型成功率提高。
+新反馈与从旧检查点加载的反馈都在生成请求前经过同一投影，去掉
+`wrong_shape`、`correct_shape` 和旧 message 中的合并指令。旧文件保持原样；
+新的 `prompts/*.format-2.system.txt` 与 `requests/*.format-2.request.json`
+展示本次实际发送内容。没有具体 `structure` 时仅保留通用原因与位置。
+这不修补 JSON，也不保证真实模型成功率提高；语法合法但缺少 `quotes` 仍失败，
+引文无法定位仍进入复核。
+
+固定配置的首次格式失败若尚有重生成额度及总预算，CLI 会展示明确包含
+`--format-retries 1` 的可选恢复命令，提示后续待处理块也可能继续调用。
+已用掉一次重生成时，不再展示原样运行也无法推进的恢复命令。
+默认仍为零次重生成；本次改动不重置调用账本，不改变首次请求、协议或分块。
+首次抽取语义与完成缓存兼容修订号保持不变；变化的重生成请求由新版本元数据及实际请求文件记录。
 
 ## 显式选择 DeepSeek Responses Schema
 
@@ -46,7 +58,7 @@ dev15 增加的诊断针对“对象期待属性名，却遇到匿名对象”�
 | `deepseek:deepseek-flash` | `/chat/completions`；`response_format.type=json_object` | `thinking.type=disabled` |
 | `deepseek-responses:deepseek-flash` | `/responses`；`text.format.type=json_schema` | `reasoning.effort=none` |
 
-两者都读取 `DEEPSEEK_API_KEY`，默认 8192 输出 token、温度 0、60 秒超时、一次 HTTP
+两者都读取 `DEEPSEEK_API_KEY`，默认 8192 输出 token、温度 0、180 秒读取超时、一次 HTTP
 尝试；CLI／Python 默认零次格式重生成，显式设置 1 才允许一次。新通道仅允许官方 HTTPS 根地址或 `/v1`；不支持自定义网关、
 流式、工具和服务端会话。保留证书校验的 TLS 兼容设置由预设处理。
 

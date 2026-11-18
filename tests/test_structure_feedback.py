@@ -9,7 +9,7 @@ from attestextract import ExecutionOptions, extract
 from attestextract.diagnostics import RunTrace
 from attestextract.errors import BackendError, InvalidResponseError
 from attestextract.models import BackendResponse
-from attestextract.pipeline import _parse_response
+from attestextract.pipeline import _parse_response, _regeneration_request
 from attestextract.progress import ConsoleProgress
 
 
@@ -48,7 +48,7 @@ def run(directory, backend, *, budget=3, resume=None, progress=None):
                    backend_identity="synthetic-structure-v1", resume_from=resume)
 
 
-def test_retry_contains_specific_redacted_shape_and_preserves_original_outputs(tmp_path):
+def test_retry_contains_observed_structure_and_preserves_original_outputs(tmp_path):
     backend = Backend(BAD, GOOD)
     stream = io.StringIO()
     progress = ConsoleProgress(stream=stream)
@@ -63,10 +63,12 @@ def test_retry_contains_specific_redacted_shape_and_preserves_original_outputs(t
     hint = diagnostic["structure"]
     assert diagnostic["code"] == "invalid_json"
     assert hint["path"] == "records[0].values"
-    assert hint["wrong_shape"] == '{"subject": <value>, {"amount": <value>}}'
-    assert hint["correct_shape"] == '{"subject": <value>, "amount": <value>}'
+    assert hint["previous_key"] == "subject" and hint["next_key"] == "amount"
+    assert "wrong_shape" not in hint and "correct_shape" not in hint
     system = backend.requests[1].messages[0]["content"]
     assert '"unexpected_object_in_object"' in system and '"records[0].values"' in system
+    assert "wrong_shape" not in system and "correct_shape" not in system and "<value>" not in system
+    assert "does not establish record boundaries or a unique repair" in system
     assert "PRIVATE-SYNTHETIC" not in system
     assert backend.requests[1].messages[1:] == backend.requests[0].messages[1:]
     assert (tmp_path / "run/responses/chunk-0001.txt").read_text(encoding="utf-8") == BAD
@@ -133,3 +135,46 @@ def test_unknown_keys_and_nested_values_are_not_echoed_into_structure_feedback(t
     system = backend.requests[1].messages[0]["content"]
     assert "PRIVATE-KEY" not in system and "PRIVATE-SYNTHETIC" not in system
     assert "<undeclared>" in system
+
+
+def test_legacy_feedback_is_projected_before_request_without_mutating_history(tmp_path):
+    backend = Backend(GOOD)
+    run(tmp_path / "source", backend)
+    request = backend.requests[0]
+    feedback = [{"path": "$", "code": "invalid_json", "expected": "valid JSON",
+                 "line": 1, "column": 140, "reason": "Expecting property name enclosed in double quotes",
+                 "structure": {"code": "unexpected_object_in_object", "path": "records[1]",
+                               "actual_token": "{", "previous_key": "values", "next_key": "record_type",
+                               "wrong_shape": '{"values": <value>, {"record_type": <value>}}',
+                               "correct_shape": '{"values": <value>, "record_type": <value>}',
+                               "message": "Keep named properties as siblings in the same object."}}]
+    before = json.dumps(feedback)
+    regenerated = _regeneration_request(request, feedback)
+    assert json.dumps(feedback) == before
+    system = regenerated.messages[0]["content"]
+    for deleted in ("wrong_shape", "correct_shape", "<value>", "Keep named properties as siblings"):
+        assert deleted not in system
+    assert '"records[1]"' in system and '"column": 140' in system
+    assert regenerated.messages[1:] == request.messages[1:]
+    assert regenerated.output_schema == request.output_schema
+    assert regenerated.generation == request.generation
+    assert regenerated.format_attempt == 2 and request.format_attempt == 1
+
+
+def test_missing_record_closure_does_not_authorize_partial_or_missing_evidence(tmp_path):
+    good_record = json.loads(GOOD)["records"][0]
+    no_quotes = {key: value for key, value in good_record.items() if key != "quotes"}
+    malformed = '{"records":[' + json.dumps(good_record) + ',' + json.dumps(no_quotes)[:-1] + ',' + json.dumps(no_quotes) + ']}'
+    # A syntactically valid second answer still lacks required quote maps.
+    missing_evidence = json.dumps({"records": [good_record, no_quotes, no_quotes]})
+    backend = Backend(malformed, missing_evidence)
+    with pytest.raises(InvalidResponseError) as caught:
+        run(tmp_path / "run", backend)
+    assert caught.value.validation_details["phase"] == "records_contract"
+    assert len(backend.requests) == 2
+    system = backend.requests[1].messages[0]["content"]
+    assert '"records[1]"' in system and '"next_key": "record_type"' in system
+    assert "correct_shape" not in system
+    assert not (tmp_path / "run/result.json").exists()
+    checkpoint = read(tmp_path / "run/execution/checkpoint.json")
+    assert checkpoint["state"]["nodes"]["chunk-0001"]["status"] == "failed"

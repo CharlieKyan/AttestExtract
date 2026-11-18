@@ -61,7 +61,12 @@ def main(argv=None):
             else:
                 feedback = body["messages"][0]["content"]
                 assert '"unexpected_object_in_object"' in feedback
-                assert '"records[0].values"' in feedback and '"correct_shape"' in feedback
+                assert '"records[0].values"' in feedback
+                # dev40 intentionally removes speculative repair shapes, including
+                # from the installed-package acceptance path.
+                assert '"correct_shape"' not in feedback and '"wrong_shape"' not in feedback
+                assert "Keep named properties as siblings" not in feedback
+                assert "does not establish record boundaries or a unique repair" in feedback
                 assert "SYNTHETIC-PRIVATE" not in feedback
                 content = GOOD
             return httpx.Response(200, json={"choices": [{"finish_reason": "stop", "message": {"content": content}}]})

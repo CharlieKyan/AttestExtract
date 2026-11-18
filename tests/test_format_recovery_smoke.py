@@ -14,6 +14,6 @@ def test_installed_format_recovery_runner(tmp_path):
     assert completed.returncode == 0, completed.stdout + completed.stderr
     summary = json.loads((output / "summary.json").read_text(encoding="utf-8"))
     assert summary["passed"] and summary["real_endpoint_calls"] == 0
-    assert summary["mock_http_calls"] == 5
+    assert summary["mock_http_calls"] == 17
     assert summary["recovery"]["candidate_values"] == [11, 22]
     assert summary["exhausted"]["resume_new_calls"] == 0

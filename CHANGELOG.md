@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.0.dev40
+
+- Replace speculative JSON shape corrections with observed parser positions, tokens and declared key names. A missing record closure cannot be diagnosed as a field that belongs in the preceding record.
+- Project both new and historical checkpoint feedback before regeneration. Remove legacy shape illustrations and merge instructions without rewriting original answers, checkpoints or completed caches. First requests, protocols, evidence checks and the default zero format retries remain unchanged.
+- For eligible fixed-configuration failures, show a complete optional recovery command with explicit one-regeneration policy and cumulative budget. Do not suggest an ineffective retry after the allowance is consumed; uncertain state requires inspection.
+- Extend synthetic Python/CLI and installed-wheel acceptance for legacy feedback, three reused chunks, one budgeted regeneration, missing evidence rejection and unchanged history. No real model calls or measured live reliability improvement are claimed.
+
 ## 0.1.0.dev39
 
 - Clarify that ownership status and target-field matching are independent. A supported binding must reference a known or locally declared object and source evidence; the framework assigns stable IDs. Retain legal unknown ownership without changing values or spreading group observations to members.

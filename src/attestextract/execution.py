@@ -39,8 +39,9 @@ class _StructureFeedback(ContractModel):
     actual_token: Literal["{"]
     previous_key: str | None = Field(default=None, max_length=64)
     next_key: str = Field(max_length=64)
-    wrong_shape: str = Field(max_length=384)
-    correct_shape: str = Field(max_length=384)
+    # Legacy checkpoints retain these fields; new diagnostics do not emit them.
+    wrong_shape: str | None = Field(default=None, max_length=384)
+    correct_shape: str | None = Field(default=None, max_length=384)
     message: str = Field(max_length=256)
 
 

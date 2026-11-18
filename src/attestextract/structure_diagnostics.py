@@ -19,6 +19,15 @@ _MAX_TOKENS = 8192
 _SPACE = " \t\r\n"
 _NUMBER = re.compile(r"-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?")
 
+# Shared with regeneration feedback, including feedback read from old checkpoints.
+# The decoder's detection position does not establish the intended record boundary.
+OBSERVED_OBJECT_MESSAGE = (
+    "A quoted property name was expected, but '{' was encountered. "
+    "This is the detection position, not necessarily the origin of the error; "
+    "a record boundary or repair cannot be inferred. "
+    "Regenerate the complete response from the original task and source."
+)
+
 
 @dataclass
 class _Frame:
@@ -62,10 +71,6 @@ def _object_hint(text: str, offset: int, frame: _Frame, allowed_keys: set[str]) 
     if cursor >= len(text) or text[cursor] != ":":
         return None
     next_key = _safe_key(key, allowed_keys)
-    quoted = json.dumps(next_key, ensure_ascii=False)
-    prefix = ""
-    if frame.previous_key is not None:
-        prefix = json.dumps(frame.previous_key, ensure_ascii=False) + ": <value>, "
     path = error_path(frame.path)
     return {
         "code": "unexpected_object_in_object",
@@ -73,13 +78,7 @@ def _object_hint(text: str, offset: int, frame: _Frame, allowed_keys: set[str]) 
         "actual_token": "{",
         "previous_key": frame.previous_key,
         "next_key": next_key,
-        "wrong_shape": "{" + prefix + "{" + quoted + ": <value>}}",
-        "correct_shape": "{" + prefix + quoted + ": <value>}",
-        "message": (
-            "An object expects a quoted property name here, not an anonymous object. "
-            "Keep named properties as siblings in the same object. "
-            "Shapes use placeholders, not extracted values; regenerate from the original source."
-        ),
+        "message": OBSERVED_OBJECT_MESSAGE,
     }
 
 

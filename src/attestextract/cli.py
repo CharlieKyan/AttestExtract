@@ -21,8 +21,8 @@ from .config import resolve_backend_config
 from .d1_examples import d1_example_names, load_d1_example
 from .diagnostics import RunTrace, redact_text
 from .envconfig import load_env_file
-from .errors import AttestExtractError, ConfigurationError
-from .execution import check_resume_paths, digest, prepare_execution
+from .errors import AttestExtractError, ConfigurationError, InvalidResponseError
+from .execution import _read_state, check_resume_paths, digest, prepare_execution
 from .models import ContextOptions, ExecutionOptions, ExtractionResult, TaskSpec
 from .documents import Document
 from .structure import build_structure
@@ -275,12 +275,76 @@ def _resume_command(args: argparse.Namespace, checkpoint: Path) -> str:
     return shlex.join(command)
 
 
-def _show_resume(args: argparse.Namespace, trace: RunTrace | None) -> None:
+def _format_resume_state(checkpoint: Path, exc: InvalidResponseError) -> tuple[str, int | None]:
+    """Read bounded retry metadata for guidance, never authorize or load a run."""
+    try:
+        envelope = json.loads(checkpoint.read_bytes().decode("utf-8"),
+                              object_pairs_hook=_unique_object, parse_constant=_reject_constant)
+        state = _read_state(envelope)
+        if state.checkpoint_version != "3":
+            return "unknown", None
+        # Missing fields must not become an unused allowance through model defaults.
+        raw = envelope["state"]
+        if not {"format_retries", "calls_used", "max_model_calls"}.issubset(raw):
+            return "unknown", None
+        if exc.validation_artifact:
+            key = Path(exc.validation_artifact).name.removesuffix(".errors.json").removesuffix(".format-2")
+        else:
+            failed = [key for key, node in state.nodes.items()
+                      if node.status == "failed" and node.format_failures]
+            if len(failed) != 1:
+                return "unknown", None
+            key = failed[0]
+        node = state.nodes[key]
+        required = {"status", "error_code", "calls", "format_failures", "format_retries_reserved"}
+        if (not required.issubset(raw["nodes"][key]) or node.status != "failed"
+                or node.error_code not in {"invalid_response", "format_retry_exhausted"}
+                or node.children or node.calls < node.format_failures or not node.format_failures
+                or state.calls_used != sum(item.calls for item in state.nodes.values())):
+            return "unknown", None
+        if node.format_retries_reserved:
+            return "spent", None
+        if state.format_retries != 0 or node.format_failures != 1:
+            return "unknown", None
+        if state.calls_used >= state.max_model_calls:
+            return "budget", None
+        return "available", state.max_model_calls
+    except (OSError, ValueError, KeyError, TypeError, RecursionError, ConfigurationError):
+        return "unknown", None
+
+
+def _show_resume(args: argparse.Namespace, trace: RunTrace | None,
+                 exc: Exception | None = None) -> None:
     if trace is None or trace.directory is None:
         return
     checkpoint = trace.directory / "execution/checkpoint.json"
     if checkpoint.is_file():
         print(f"Resume checkpoint: {checkpoint}", file=sys.stderr)
+        if isinstance(exc, InvalidResponseError) and (
+                exc.validation_details is not None or exc.code == "format_retry_exhausted"):
+            status, budget = _format_resume_state(checkpoint, exc)
+            if status == "available":
+                print("Ordinary resume cannot advance this failed chunk with format retries disabled. "
+                      "No additional model call was made.", file=sys.stderr)
+                print("Optional: explicitly allow one format regeneration per chunk, keeping the saved total "
+                      "call budget. This command may make additional model calls and also processes pending chunks; "
+                      "success is not guaranteed:", file=sys.stderr)
+                opted_in = argparse.Namespace(**{**vars(args), "format_retries": 1, "max_model_calls": budget})
+                print(trace._mask_text(_resume_command(opted_in, checkpoint)), file=sys.stderr)
+            elif status == "spent":
+                print("This chunk's single format regeneration has already been reserved. Ordinary resume "
+                      "cannot repair this failure, and increasing the total budget does not reset it. "
+                      "Saved responses and completed chunks are retained; inspect the validation details "
+                      "before choosing a new run.", file=sys.stderr)
+            elif status == "budget":
+                print("Format retries are disabled and the saved total call budget is exhausted. "
+                      "No actionable resume command is offered: inspect the saved failure before explicitly "
+                      "choosing both a retry allowance and a larger cumulative budget.", file=sys.stderr)
+            else:
+                print("Could not verify an unused format regeneration allowance for this failure. "
+                      "Inspect the saved diagnostics; no retry command was inferred from missing or unsupported metadata.",
+                      file=sys.stderr)
+            return
         print("Resume in a new run (may make additional model calls):", file=sys.stderr)
         print(trace._mask_text(_resume_command(args, checkpoint)), file=sys.stderr)
 
@@ -668,7 +732,7 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
         if trace is not None and trace.directory is not None:
             print(f"Run diagnostics: {trace.directory}", file=sys.stderr)
             if (trace.directory / "execution/checkpoint.json").is_file():
-                _show_resume(args, trace)
+                _show_resume(args, trace, exc)
             if getattr(exc, "http_details", None):
                 print(f"HTTP diagnostics: {trace.directory / exc.http_details}", file=sys.stderr)
             artifact = getattr(exc, "validation_artifact", None)
