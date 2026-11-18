@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.0.dev41
+
+- Extend explicit `format_retries=1` to bounded verification: one fresh generation per job for a complete response with JSON syntax or structural-contract errors. It consumes the existing step and cumulative call limits; unknown transport outcomes, truncation, scope and evidence failures do not qualify.
+- Add `--retry-analysis-job` / Python `retry_analysis_jobs` for explicit recovery of an eligible tail failure. Validate all saved work before new calls, reuse completed extraction and analysis, preserve original failures, and never renew a spent regeneration allowance. Ordinary resume does not reopen a failed job.
+- Upgrade verification checkpoint storage to 0.5 while retaining v5 first-request compatibility and analysis result 0.4. Read compatible 0.4 checkpoints, recheck rejected response artifacts, bind their checksums on migration, and record each retry's parent step. Old runs remain unchanged.
+- Keep strict duplicate-key rejection and show declared protocol keys with both occurrence counts/types instead of masking known keys. Regeneration receives bounded diagnostic facts, not speculative JSON repairs. Synthetic Python/CLI, recovery and installed-wheel acceptance remain separate from live quality evaluation.
+
 ## 0.1.0.dev40
 
 - Replace speculative JSON shape corrections with observed parser positions, tokens and declared key names. A missing record closure cannot be diagnosed as a field that belongs in the preceding record.

@@ -253,10 +253,11 @@ upper bound is extraction's limit plus analysis's limit.
 
 Local lookup execution has no generation charge, but the model response asking
 for it does consume a reservation. Each analysis generation has one HTTP attempt
-and finite timeouts. The route is fixed; there is no hidden provider switch,
-format regeneration or automatic resend after an unknown outcome. Incomplete or
-structurally unreadable responses are retained and stop that invocation rather
-than being repaired into accepted decisions. Readable per-proposal validation failures are
+and finite timeouts. The route is fixed; there is no hidden provider switch or
+automatic resend after an unknown outcome. Format regeneration is off by default;
+dev41 permits one explicitly enabled regeneration as described below. Incomplete or
+structurally unreadable responses are retained and stop when no eligible regeneration
+remains. They are never repaired into accepted decisions. Readable per-proposal validation failures are
 instead held with their explicit dependents while independent valid proposals
 are retained. This is controlled partial processing, not error correction.
 
@@ -266,9 +267,55 @@ distinguish missing, duplicate and unexpected IDs, and identify unexpected IDs
 that came from the request's read-only references. The terminal shows bounded
 counts and the diagnostic location, not arbitrary model text or identifier
 content. Response-contract errors and internal source/index/state failures are
-separate categories. Neither triggers an automatic correction or a new request.
+separate categories. Neither triggers automatic correction; only the complete-response
+JSON/structural cases below permit an explicitly enabled new generation.
 The original response is retained, and a rejected decision applies no objects,
 relations or bindings from that response.
+
+### Verification format recovery (dev41)
+
+`format_retries=1` / `--format-retries 1` permits **one regeneration per verification
+job**, using the same source context, targets and response contract plus bounded
+diagnostic facts. It counts against both `analysis_max_steps` and the cumulative
+`max_analysis_calls`. The default stays zero. JSON syntax errors (including duplicate
+object keys) and structural-contract errors qualify only after a complete model
+response. Coverage/scope, action semantics, evidence, internal-state, transport,
+refusal and truncation failures do not qualify. A legal `unknown` decision remains
+legal; the program never manufactures one to replace a bad response.
+
+To reopen an **already failed** job, explicitly select it on resume:
+
+```powershell
+python -m attestextract extract `
+  --input input/paper.md --task task.json --model-id deepseek:deepseek-flash `
+  --resume output/old-run --output-dir output/recovered-run `
+  --table-subject "Individual specimens, distinguished by batch and experiment" `
+  --max-analysis-calls 12 --format-retries 1 --retry-analysis-job verify-0002
+```
+
+Use the original inputs, model, subject and sufficient cumulative budgets. Python
+uses `resume_from=...`, `format_retries=1`, `retry_analysis_jobs=["verify-0002"]`.
+Append `--check` to validate the plan offline without requests. Ordinary resume
+keeps a failed job failed and may process pending jobs; it does not reopen it merely
+because format retries are enabled. Explicit recovery requires a tail failure:
+no later job may have sent a request, because a changed decision could change those
+later requests' known-object context. Exhausted retry/step/call budgets, oversized
+retry feedback and damaged artifacts are refused before sending the retry.
+
+Completed extraction and earlier verification jobs are checked and reused. A retry
+gets a new step number, its own raw response and `retry_of` link; the old answer and
+reservation remain. The bounded diagnostic facts actually sent are frozen in
+`retry_feedback`; later credential redaction of a copied raw answer cannot change
+the identity of an already completed retry request. Raising the total budget cannot renew a used format allowance.
+Failures with unknown delivery outcomes still stop without resending. A successful
+retry undergoes the same reference, scope and evidence checks as the first response.
+
+New verification checkpoints use storage version **0.5**; analysis result snapshots
+remain **0.4**, and the initial-request compatibility revision stays **v5**. Compatible
+0.4 checkpoints are validated and copied to a new run, including strict re-parsing
+of failed-response text and metadata. Their failed-response checksum is first bound
+during migration, not retroactively verified against a checksum that never existed.
+The old directory is unchanged. Do not edit checkpoints or discard failed responses.
 
 The framework explicitly requests one valid JSON object in its verification
 system message. This instruction is present before request hashing and byte

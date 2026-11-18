@@ -685,6 +685,7 @@ def extract(
     analysis_max_steps: int = 4,
     analysis_input_budget: int = 48000,
     analysis_resume_from: str | Path | None = None,
+    retry_analysis_jobs: list[str] | None = None,
 ) -> ExtractionResult:
     """Extract candidates. Matching evidence does not establish factual validity.
 
@@ -703,7 +704,10 @@ def extract(
     calls ``finish`` after saving the result. ``progress`` accepts normal, quiet
     or verbose; output_dir defaults to normal, other calls remain silent.
     ``format_retries=1`` permits one additional generation for a locally invalid
-    response per chunk. It can incur extra model charges and defaults to zero.
+    response per prose chunk and per bounded verification job. Each generation
+    uses its stage's cumulative budget; the default is zero. Previously failed
+    verification jobs require explicit ``retry_analysis_jobs=["verify-0021"]``
+    when resuming, and only eligible tail failures can be selected.
 
     Pass either an existing ``backend`` or ``model="provider:model-id"``. The
     latter resolves service presets and credentials, optionally from an explicit
@@ -746,6 +750,14 @@ def extract(
             raise ConfigurationError("analysis_resume_from requires table_subject.")
         if analysis_resume_from is not None and resume_from is None:
             raise ConfigurationError("analysis_resume_from requires the matching extraction resume_from checkpoint.")
+        if retry_analysis_jobs is not None and (
+                not isinstance(retry_analysis_jobs, list)
+                or any(not isinstance(key, str) or not re.fullmatch(r"verify-[0-9]{4,}", key)
+                       for key in retry_analysis_jobs)
+                or len(set(retry_analysis_jobs)) != len(retry_analysis_jobs)):
+            raise ConfigurationError("retry_analysis_jobs must be a list of distinct verification job IDs.")
+        if retry_analysis_jobs and (resume_from is None or table_subject is None):
+            raise ConfigurationError("retry_analysis_jobs requires matching resume_from and table_subject.")
         if table_mode not in {"auto", "text"}:
             raise ConfigurationError("table_mode must be auto or text.")
         if type(retry_tables) is not bool:
@@ -806,6 +818,7 @@ def extract(
                 max_calls=max_analysis_calls, resume_from=resume_from,
                 analysis_resume_from=analysis_resume_from, backend_identity=backend_identity,
                 max_steps=analysis_max_steps, input_budget=analysis_input_budget,
+                format_retries=format_retries, retry_failed_jobs=retry_analysis_jobs,
             )
         execution_summary = {}
         result = _extract(
@@ -834,6 +847,7 @@ def extract(
                 backend_identity=backend_identity,
                 extraction_reserved=execution_summary.get("calls_reserved"),
                 max_steps=analysis_max_steps, input_budget=analysis_input_budget,
+                format_retries=format_retries, retry_failed_jobs=retry_analysis_jobs,
             )
         if directory is not None:
             from .run_output import save_run_result
@@ -870,15 +884,19 @@ def validate_analysis_request(text: str | Document, task: TaskSpec,
 def check_analysis_resume(text, task, *, backend, generation, table_subject, max_calls,
                           resume_from=None, analysis_resume_from=None,
                           backend_identity=None, extraction_reserved=None,
-                          max_steps=4, input_budget=48000):
+                          max_steps=4, input_budget=48000, format_retries=0, retry_failed_jobs=None):
     """Check the analysis cache alongside an already validated extraction resume."""
     from .analysis import build_analysis
     from .execution import _checkpoint_path
     if resume_from is None:
+        if retry_failed_jobs:
+            raise ConfigurationError("Retrying verification jobs requires an extraction resume checkpoint.")
         return None
     root = _checkpoint_path(resume_from).parent.parent
     prior = Path(analysis_resume_from) if analysis_resume_from is not None else root / "analysis/checkpoint.json"
     if not prior.exists() and analysis_resume_from is None:
+        if retry_failed_jobs:
+            raise ConfigurationError("Retrying verification jobs requires a saved analysis checkpoint.")
         return None
     try:
         payload = _load_json((root / "extraction-result.json").read_text(encoding="utf-8"))
@@ -891,7 +909,8 @@ def check_analysis_resume(text, task, *, backend, generation, table_subject, max
                           generation=generation, max_calls=max_calls, resume_from=prior,
                           backend_identity=backend_identity, check_only=True,
                           extraction_reserved=extraction_reserved,
-                          max_steps=max_steps, input_budget=input_budget)
+                          max_steps=max_steps, input_budget=input_budget,
+                          format_retries=format_retries, retry_failed_jobs=retry_failed_jobs)
 
 
 def _extract(

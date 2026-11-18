@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import getpass
 import json
+import re
 import os
 import sys
 import warnings
@@ -114,7 +115,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     live.add_argument(
         "--format-retries", type=int, choices=(0, 1),
-        help="Regenerate a chunk once after a local output-format failure; adds model calls (default: 0; opt in with 1 in CLI or profile)",
+        help="Allow one format regeneration per prose chunk and verification job within existing budgets (default: 0); old failed analysis jobs also require --retry-analysis-job",
     )
     live.add_argument("--progress", choices=("normal", "quiet", "verbose"), default="normal",
                       help="Terminal detail level (default: normal); raw text stays in diagnostic files")
@@ -142,6 +143,8 @@ def _parser() -> argparse.ArgumentParser:
                       help="Maximum serialized analysis request UTF-8 bytes, not tokens (default: 48000); source is read on demand")
     live.add_argument("--analysis-resume", type=Path,
                       help="Prior analysis checkpoint; normally inferred from --resume; unknown requests are not resent")
+    live.add_argument("--retry-analysis-job", action="append", dest="retry_analysis_jobs",
+                      help="With --resume and --format-retries 1, explicitly regenerate one eligible failed verification job; prior calls remain spent")
     return parser
 
 
@@ -255,6 +258,10 @@ def _resume_command(args: argparse.Namespace, checkpoint: Path) -> str:
     for name, value in vars(args).items():
         if name in omitted or value is None:
             continue
+        if name == "retry_analysis_jobs":
+            for job_id in value:
+                command.extend(["--retry-analysis-job", job_id])
+            continue
         if isinstance(value, bool):
             if value:
                 command.append("--" + name.replace("_", "-"))
@@ -311,6 +318,24 @@ def _format_resume_state(checkpoint: Path, exc: InvalidResponseError) -> tuple[s
         return "available", state.max_model_calls
     except (OSError, ValueError, KeyError, TypeError, RecursionError, ConfigurationError):
         return "unknown", None
+
+
+def _show_analysis_retry(args: argparse.Namespace, trace: RunTrace | None, analysis: dict) -> None:
+    """Offer an explicit choice only for tail failures validated by the executor."""
+    jobs = analysis.get("retryable_jobs", [])
+    if (trace is None or trace.directory is None or not isinstance(jobs, list) or len(jobs) != 1
+            or not isinstance(jobs[0], str) or not re.fullmatch(r"verify-[0-9]{4,}", jobs[0])):
+        return
+    checkpoint = trace.directory / "execution/checkpoint.json"
+    if not checkpoint.is_file():
+        return
+    opted_in = argparse.Namespace(**{**vars(args), "format_retries": 1,
+        "retry_analysis_jobs": jobs, "analysis_resume": trace.directory / "analysis/checkpoint.json",
+        "max_analysis_calls": analysis["budget"]["limit"]})
+    print("Optional explicit verification recovery: one format regeneration for the selected job, "
+          "within the saved cumulative analysis budget. Completed work is reused; pending jobs may also make calls.",
+          file=sys.stderr)
+    print(trace._mask_text(_resume_command(opted_in, checkpoint)), file=sys.stderr)
 
 
 def _show_resume(args: argparse.Namespace, trace: RunTrace | None,
@@ -446,6 +471,12 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
         _check_output_paths(args)
         if args.analysis_resume is not None and (args.resume is None or args.table_subject is None):
             raise ConfigurationError("--analysis-resume requires --resume and --table-subject.")
+        if args.retry_analysis_jobs and (args.resume is None or args.table_subject is None):
+            raise ConfigurationError("--retry-analysis-job requires --resume and --table-subject.")
+        if args.retry_analysis_jobs and (
+                len(set(args.retry_analysis_jobs)) != len(args.retry_analysis_jobs)
+                or any(not re.fullmatch(r"verify-[0-9]{4,}", key) for key in args.retry_analysis_jobs)):
+            raise ConfigurationError("--retry-analysis-job requires distinct verification job IDs.")
         if args.table_subject is not None:
             if (args.output.resolve().parent / "analysis").exists():
                 raise ConfigurationError("Analysis output directory already exists; choose a new --output-dir.")
@@ -649,6 +680,8 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
             if args.table_subject is not None:
                 plan["analysis"] = {"enabled": True, "table_subject": args.table_subject,
                     "max_analysis_calls": args.max_analysis_calls,
+                    "format_retries": config.format_retries,
+                    "retry_jobs": args.retry_analysis_jobs or [],
                     "request_plan": "bounded verification jobs over extracted observations; model may request local source search/read",
                     "max_steps_per_job": args.analysis_max_steps,
                     "request_utf8_byte_limit": args.analysis_input_budget,
@@ -661,6 +694,7 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
                     resume_from=args.resume, analysis_resume_from=args.analysis_resume,
                     backend_identity=backend_identity, extraction_reserved=session.state.calls_used,
                     max_steps=args.analysis_max_steps, input_budget=args.analysis_input_budget,
+                    format_retries=config.format_retries, retry_failed_jobs=args.retry_analysis_jobs,
                 )
                 if analysis_check is not None:
                     plan["analysis"]["resume"] = analysis_check
@@ -673,7 +707,8 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
                          max_chunk_chars=args.max_chunk_chars, context=context, table_mode=args.tables,
                          retry_tables=args.retry_tables, table_subject=args.table_subject,
                          max_analysis_calls=args.max_analysis_calls, analysis_resume_from=args.analysis_resume,
-                         analysis_max_steps=args.analysis_max_steps, analysis_input_budget=args.analysis_input_budget)
+                         analysis_max_steps=args.analysis_max_steps, analysis_input_budget=args.analysis_input_budget,
+                         retry_analysis_jobs=args.retry_analysis_jobs)
         payload = result.model_dump(mode="json")
         if (default_directory is not None
                 and args.report.resolve() == (default_directory / "report.md").resolve()):
@@ -713,6 +748,7 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
                       "Inspect analysis/analysis.md and analysis/review_groups.json.", file=sys.stderr)
                 return 3
             print("attestextract: extraction saved; analysis incomplete; inspect analysis/analysis.md and diagnostics/analysis/checkpoint.json.", file=sys.stderr)
+            _show_analysis_retry(args, trace, result.analysis)
             return 130 if any(job.get("error_code") == "interrupted" for job in result.analysis.get("jobs", [])) else 2
         return 0
     except KeyboardInterrupt as exc:

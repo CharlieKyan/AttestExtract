@@ -62,7 +62,7 @@ jobs:
           provider_sources = {}
           table_names = ("table_route_experiment.py", "table_route_runner.py", "table_results_smoke.py",
                          "table_entry_smoke.py", "simple_task_smoke.py", "user_entry_smoke.py",
-                         "table_window_smoke.py", "analysis_smoke.py")
+                         "table_window_smoke.py", "analysis_smoke.py", "verification_recovery_smoke.py")
           table_sources = {}
           tls_sources = {}
           with tarfile.open(source_archive) as archive:
@@ -300,6 +300,14 @@ jobs:
               assert windows["child_scoped_annotation_ids_unique"] and windows["cli_offline_check_exit_status"] == 0
               assert windows["package_version"] == expected_version
               assert Path(windows["module_path"]).is_relative_to(environment)
+              recovery_output = root / "verification-recovery"
+              subprocess.run([str(python), str(scripts / "verification_recovery_smoke.py"),
+                              "--output-dir", str(recovery_output)], check=True, cwd=root, env=env)
+              recovery = json.loads((recovery_output / "summary.json").read_text(encoding="utf-8"))
+              assert recovery["passed"] and recovery["real_model_calls"] == recovery["network_attempts"] == 0
+              assert recovery["mock_http_calls"] == 14
+              assert recovery["package_version"] == expected_version
+              assert Path(recovery["module_path"]).is_relative_to(environment)
               analysis_output = root / "bounded-analysis"
               subprocess.run([str(python), str(scripts / "analysis_smoke.py"),
                               "--output", str(analysis_output)], check=True, cwd=root, env=env)

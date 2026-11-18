@@ -445,6 +445,10 @@ def _markdown(data: dict, view: dict) -> str:
     lines = ["# 对象与观测分析", "", _NOTICE, "", "运行状态：" + status + " / " + show(data["status"]),
              "目标表主体：" + show(data.get("table_subject")),
              "同名对象按不同ID展示。下面仅展示直接绑定的观测；不沿关系传播数值。", ""]
+    if "format_retries" in data:
+        lines += [f"查证格式重生成：每组最多{show(data['format_retries'])}次，"
+                  f"已预留{show(data.get('format_retries_reserved', 0))}次；包含在模型步骤及累计查证预算内。",
+                  "旧失败回答保留，重生成不修改原始观测，也不代表事实已通过人工确认。", ""]
     if data["analysis_version"] in {"0.2", "0.3", "0.4"}:
         lines += ["目标表仅纳入模型判断归属有支持且字段匹配有支持的观测；仍不是专家确认。其他观测单独保留。", ""]
         observations = data["observations"]

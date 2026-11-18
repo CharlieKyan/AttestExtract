@@ -585,7 +585,8 @@ def _build_legacy_analysis(text, result, *, table_subject, backend, generation=N
 
 def build_analysis(text, result, *, table_subject, backend, generation=None, trace=None,
                    max_calls=12, resume_from=None, backend_identity=None, check_only=False,
-                   extraction_reserved=None, max_steps=4, input_budget=48000):
+                   extraction_reserved=None, max_steps=4, input_budget=48000,
+                   format_retries=0, retry_failed_jobs=None):
     """New runs use bounded lookup; existing v0.1 checkpoints keep their contract."""
     options = dict(table_subject=table_subject, backend=backend, generation=generation,
                    trace=trace, max_calls=max_calls, resume_from=resume_from,
@@ -598,8 +599,11 @@ def build_analysis(text, result, *, table_subject, backend, generation=None, tra
         except (KeyError, TypeError, ValueError, OSError):
             raise ConfigurationError("Analysis checkpoint is damaged; no model request was sent.") from None
         if legacy:
+            if retry_failed_jobs:
+                raise ConfigurationError("Legacy whole-document analysis cannot retry bounded verification jobs.")
             if max_steps != 4 or input_budget != 48000:
                 raise ConfigurationError("Legacy analysis recovery cannot change to the bounded lookup policy.")
             return _build_legacy_analysis(text, result, **options)
     from .verification import build_verification
-    return build_verification(text, result, max_steps=max_steps, input_budget=input_budget, **options)
+    return build_verification(text, result, max_steps=max_steps, input_budget=input_budget,
+                              format_retries=format_retries, retry_failed_jobs=retry_failed_jobs, **options)

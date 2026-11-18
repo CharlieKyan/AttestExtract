@@ -1,5 +1,7 @@
 # AttestExtract
 
+Dev41 extends explicit `format_retries=1` to verification jobs within their existing budgets. An old tail format failure can be selected with `--retry-analysis-job verify-0002` (Python: `retry_analysis_jobs=["verify-0002"]`); completed extraction and analysis are reused. Original responses are retained, duplicate keys remain errors, and ordinary resume does not reopen failures. See [verification recovery](docs/analysis-tables.md#verification-format-recovery-dev41).
+
 Dev40 limits format-regeneration feedback to observed syntax facts, including when
 resuming historical checkpoints. It removes speculative shape corrections without
 changing the source, task, first request or default retry allowance. See

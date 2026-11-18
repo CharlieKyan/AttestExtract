@@ -1,5 +1,7 @@
 # AttestExtract
 
+dev41 将显式 `format_retries=1` 接入查证阶段，每个任务最多重生成一次，共享原有步骤及调用预算。旧的尾部格式失败可用 `--retry-analysis-job verify-0002`（Python：`retry_analysis_jobs=["verify-0002"]`）明确恢复，复用已完成抽取和查证；保留原回答、严格拒绝重复键，普通恢复不会重开失败任务。详见[查证格式恢复](docs/analysis-tables.md#verification-format-recovery-dev41)。
+
 dev40 撤回推测性的 `correct_shape` 改错建议，新诊断及旧检查点恢复均只发送可观察的语法事实。首次请求、原文、任务、默认零次格式重生成及已完成缓存保持兼容。用户可显式开启预算内一次重生成；已耗尽时终端不再推荐无效恢复命令。详见[格式反馈与恢复](docs/STRUCTURED_OUTPUT.md)。
 
 dev32 新增 `annotation.json` / `annotation.md` 简洁视图：同一对象标签下，字段、原值、单位、各自条件及完整引文放在一起。技术追踪另存 `annotation.sources.json`，原详细结果和审阅文件继续保留。共同展示不合并不同观测，也不代表准确性已通过专家确认。

@@ -111,10 +111,20 @@ class Step(ContractModel):
         return self
 
 
+def _response_property_names() -> set[str]:
+    """Known protocol names only; never derive diagnostic visibility from a reply."""
+    schema = Step.model_json_schema()
+    names = set(schema.get("properties", {}))
+    for definition in schema.get("$defs", {}).values():
+        names.update(definition.get("properties", {}))
+    return names
+
+
 def parse_step(text: str) -> Step:
     """Parse the exact response; duplicate keys and undeclared fields fail."""
+    known_keys = _response_property_names()
     try:
-        payload = load_json(text)
+        payload = load_json(text, allowed_keys=known_keys)
     except json.JSONDecodeError as exc:
         raise _reject("Verification response is not valid JSON.", code="invalid_analysis_json",
                       phase="json_syntax", line=exc.lineno, column=exc.colno) from None
@@ -133,7 +143,8 @@ def parse_step(text: str) -> Step:
             if isinstance(cause, VerificationValidationError):
                 raise cause from None
         # Do not include raw input values or exception context in diagnostics.
-        errors = [{"path": list(item["loc"]), "code": item["type"]}
+        errors = [{"path": [part if isinstance(part, int) or part in known_keys else "<undeclared>"
+                            for part in item["loc"]], "code": item["type"]}
                   for item in exc.errors(include_input=False, include_context=False, include_url=False)]
         raise _reject("Verification response does not match the action contract.",
                       code="invalid_analysis_contract", phase="response_contract", errors=errors) from None

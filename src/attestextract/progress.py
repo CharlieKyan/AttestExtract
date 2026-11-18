@@ -61,6 +61,12 @@ class ConsoleProgress:
                 self._write(f"Document analysis: separate generation budget {event.get('limit', '?')}; model proposals, no expert acceptance")
                 if event.get("max_steps") is not None:
                     self._write(f"Verification: at most {event['max_steps']} model steps per job; local source search/read as needed")
+                if event.get("format_retries") is not None:
+                    self._write(f"Verification format retries: {event['format_retries']} per job; included in both step and analysis budgets")
+            elif kind == "format_retry":
+                self._waiting_since = None
+                self._write(f"Analysis {event.get('job_id', '?')}: format regeneration requested; "
+                            "additional model call within existing budgets; original response preserved")
             elif kind == "call_reserved":
                 self._waiting_since = time.monotonic()
                 step = f"; step {event['step']}" if event.get("step") is not None else ""
@@ -128,7 +134,11 @@ class ConsoleProgress:
                                         f"({count('reference_count')} from read-only references).")
                         else:
                             self._write("Analysis response did not satisfy the verification contract; no proposals were applied.")
-                        self._write("No automatic retry or response correction was attempted.")
+                        if event.get("format_retries_reserved"):
+                            self._write("This job's single format regeneration allowance is already used; "
+                                        "no further retry or response correction.")
+                        else:
+                            self._write("No automatic retry or response correction was attempted.")
                     elif event.get("error_code") == "json_prompt_required":
                         self._write("Analysis request rejected: JSON Object mode requires an explicit JSON output instruction; "
                                     "the framework request must be corrected. No automatic retry or mode downgrade.")

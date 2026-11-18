@@ -7,7 +7,7 @@ import math
 from collections import Counter
 from typing import Any
 
-from .validation import details, issue
+from .validation import actual_type, details, issue
 
 
 class JSONValidationError(ValueError):
@@ -35,18 +35,27 @@ def load_json(text: str, *, allowed_keys: set[str] | None = None) -> Any:
     def visit(value: Any, path: tuple) -> Any:
         if isinstance(value, _ObjectPairs):
             result = {}
+            first_indices = {}
             occurrences = Counter(key for key, _ in value)
             for member_index, (key, child) in enumerate(value):
                 location = (*path, key if key in visible_keys else "<undeclared>")
                 converted = visit(child, location)
                 if key in result:
+                    # Report shape, not contents, for both conflicting declarations.
+                    extra = {"first_member_index": first_indices[key],
+                             "first_actual_type": actual_type(result[key])}
+                    if isinstance(result[key], list):
+                        extra["first_array_length"] = len(result[key])
+                    if isinstance(converted, list):
+                        extra["array_length"] = len(converted)
                     errors.append(issue(
                         location, "duplicate_key", "unique keys within each JSON object", converted,
                         "The same key occurs more than once in this object; no value was selected.",
-                        member_index=member_index, occurrences=occurrences[key],
+                        member_index=member_index, occurrences=occurrences[key], **extra,
                     ))
                 else:
                     result[key] = converted
+                    first_indices[key] = member_index
             return result
         if isinstance(value, list):
             return [visit(child, (*path, index)) for index, child in enumerate(value)]
