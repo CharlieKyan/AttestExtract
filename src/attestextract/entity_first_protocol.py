@@ -12,7 +12,8 @@ from .models import ContractModel
 
 class Citation(ContractModel):
     window: str
-    quote: str = Field(min_length=1)
+    quote: str | None = Field(default=None, min_length=1,
+        description="Verbatim excerpt. May be omitted for a displayed whole-cell reference or a review region.")
     occurrence: int | None = Field(default=None, ge=0)
 
 
@@ -54,6 +55,8 @@ class Fact(ContractModel):
 class Assignments(ContractModel):
     nominations: list[Entity] = Field(max_length=48)
     facts: list[Fact] = Field(max_length=96)
+    review_regions: list[Citation] = Field(default_factory=list, max_length=24,
+        description="Source regions kept for inspection without enumerating unsupported cell-level facts.")
 
 
 class Confirmation(ContractModel):
@@ -68,13 +71,39 @@ class Confirmations(ContractModel):
     decisions: list[Confirmation] = Field(max_length=48)
 
 
+def primary_window(reference):
+    return reference.partition("@")[0]
+
+
+def attach_table_cells(block, table, source):
+    """Index only physical cells fully visible in this primary window or its cited context."""
+    if table is None or block.get("gap"):
+        return
+    for segment in [block, *block["context"]]:
+        cells = {}
+        for cell in table.cells:
+            start, end = cell.span.start, cell.span.end
+            if not segment["start"] <= start < end <= segment["end"]:
+                continue
+            raw = source[start:end]
+            value = raw.strip()
+            if not value:
+                continue
+            start += len(raw) - len(raw.lstrip())
+            cells[f"r{cell.row}c{cell.column}"] = (start, value, cell.rowspan, cell.colspan)
+        if cells:
+            segment["cells"] = cells
+
+
 def windows(blocks):
     out = {}
     for block in blocks:
         key = block["block_id"]
-        out[key] = (block["start"], block["text"])
-        for i, context in enumerate(block["context"]):
-            out[f"{key}/context/{i}"] = (context["start"], context["text"])
+        segments = [(key, block), *((f"{key}/context/{i}", c) for i, c in enumerate(block["context"]))]
+        for window, segment in segments:
+            out[window] = (segment["start"], segment["text"])
+            for cell, (start, value, _, _) in segment.get("cells", {}).items():
+                out[f"{window}@{cell}"] = (start, value)
     return out
 
 
@@ -82,6 +111,10 @@ def locate(citation, shown):
     if citation is None or citation.window not in shown:
         raise ValueError("citation_window_missing")
     offset, text = shown[citation.window]
+    if citation.quote is None:
+        if "@" not in citation.window or citation.occurrence is not None:
+            raise ValueError("citation_quote_missing")
+        return {"start": offset, "end": offset + len(text), "quote": text}
     pos = text.find(citation.quote)
     if pos < 0 or not citation.quote.strip():
         raise ValueError("citation_not_in_source")
@@ -96,25 +129,74 @@ def locate(citation, shown):
     return {"start": offset + pos, "end": offset + pos + len(citation.quote), "quote": citation.quote}
 
 
+def _unique_fragment(context, literal):
+    """Narrow an already located quote only when its literal fragment is unambiguous."""
+    if not literal.strip():
+        raise ValueError("empty_source_fragment")
+    text = context["quote"]
+    if literal == text:
+        return context
+    position = text.find(literal)
+    if position < 0:
+        raise ValueError("fragment_not_in_citation")
+    if text.find(literal, position + 1) >= 0:
+        raise ValueError("fragment_not_unique")
+    end = position + len(literal)
+    # An ASCII name/word must not be carved out of a longer identifier.
+    if ((position and re.match(r"[A-Za-z_]", literal) and re.match(r"[A-Za-z0-9_]", text[position - 1]))
+            or (end < len(text) and re.search(r"[A-Za-z_]$", literal)
+                and re.match(r"[A-Za-z0-9_]", text[end]))):
+        raise ValueError("partial_identifier")
+    start = context["start"] + position
+    return {"start": start, "end": start + len(literal), "quote": literal}
+
+
+def _name_pattern(name):
+    left = r"(?<![A-Za-z0-9_])" if re.match(r"[A-Za-z0-9_]", name) else ""
+    right = r"(?![A-Za-z0-9_])" if re.search(r"[A-Za-z0-9_]$", name) else ""
+    return re.compile(left + re.escape(name) + right)
+
+
+def _name_span(context, name, window):
+    span = _unique_fragment(context, name)
+    offset, text = window
+    if not _name_pattern(name).match(text, span["start"] - offset):
+        raise ValueError("partial_identifier")
+    return span
+
+
+def mentions_name(span, name, window):
+    offset, text = window
+    index = span["start"] - offset
+    end = span["end"] - offset
+    match = _name_pattern(name).search(text, index, min(len(text), end + 1))
+    return bool(match and match.end() <= end)
+
+
 def entity_record(proposal, shown, block_scope, document, stage):
-    mention = locate(proposal.mention, shown)
+    context = locate(proposal.mention, shown)
+    mention = _name_span(context, proposal.label, shown[proposal.mention.window])
     proof = locate(proposal.qualification, shown)
-    if (proposal.label != mention["quote"] or proposal.label not in proof["quote"]
+    if (not mentions_name(proof, proposal.label, shown[proposal.qualification.window])
             or proposal.scope and proposal.scope not in proof["quote"]):
         raise ValueError("invalid_identity_evidence")
+    if mention != context and not _contained(mention, proof):
+        raise ValueError("recovered_mention_outside_identity_proof")
     aliases = []
     if len(proposal.alias_names) != len(proposal.aliases):
         raise ValueError("missing_alias_evidence")
     for name, citation in zip(proposal.alias_names, proposal.aliases):
         span = locate(citation, shown)
-        if not name.strip() or name == proposal.label or not all(x in span["quote"] for x in [name, proposal.label]):
+        if (not name.strip() or name == proposal.label
+                or not all(mentions_name(span, x, shown[citation.window]) for x in [name, proposal.label])):
             raise ValueError("alias_not_grounded")
         aliases.append({"name": name, "evidence": span})
     key = digest([document, mention["start"], mention["end"], block_scope, proposal.scope])[:24]
     return {"object_id": "entity-" + key, "label": proposal.label, "scope": proposal.scope or block_scope,
             "section": block_scope,
             "qualifier": proposal.scope, "kind": proposal.kind,
-            "evidence": [mention, proof], "aliases": aliases, "stage": stage, "basis": "model_proposed"}
+            "evidence": [mention, proof], "mention_context": context, "aliases": aliases,
+            "stage": stage, "basis": "model_proposed"}
 
 
 def _cell(table, span):
@@ -208,9 +290,7 @@ def _other_owner_in(text, owner_names, choices):
         for name in [candidate["label"], *(a["name"] for a in candidate["aliases"])]:
             if any(name in label for label in owner_names):
                 continue
-            before = r"(?<![a-zA-Z0-9_])" if name[0].isascii() and name[0].isalnum() else ""
-            after = r"(?![a-zA-Z0-9_])" if name[-1].isascii() and name[-1].isalnum() else ""
-            if re.search(before + re.escape(name) + after, text):
+            if _name_pattern(name).search(text):
                 return True
     return False
 
@@ -233,28 +313,149 @@ def _local_assertion(link, owner, prop, value, owner_names, choices):
     return None
 
 
+_REVIEW_LANGUAGE = re.compile(
+    r"\b(?:not|never|neither|hypothetical(?:ly)?|would|might|unmeasured|"
+    r"unsupported|uncertain|rather than|instead of)\b|n['’]t\b|"
+    r"并非|而非|不是|并未|未达到|未观测|未测得|未测量|未报告|未经证实|不能作为|不代表|假设",
+    re.IGNORECASE,
+)
+
+
+def _named_property(definition, prop, fit):
+    """A literal property label, optionally followed by instructions in the task.
+
+    Never match arbitrary substrings of a long definition: they may name exclusions.
+    Distinct local fit evidence may supply a modifier omitted from the property cue.
+    """
+    parts = re.split(r"[:：;；,，。\n]|\.\s|\.$", definition.strip(), maxsplit=1)
+    label = parts[0].strip().casefold()
+    label = re.sub(r"^(?:the|a|an)\s+", "", label)
+    if not label or not prop or not fit:
+        return False
+    if len(parts) == 2 and (tail := parts[1].strip(" .。").casefold()):
+        # A heading can be followed by material constraints. Only ignore a simple
+        # presentation instruction; any other tail needs literal support itself.
+        formatting = re.fullmatch(
+            r"(?:preserve|retain|keep|record|include) (?:the )?(?:(?:reported|original|source) )?"
+            r"(?:units?|wording|precision|evidence|conditions?)", tail)
+        if not formatting and tail not in fit["quote"].casefold():
+            return False
+    if label == prop["quote"].strip().casefold():
+        return True
+    # The property cue, named field and separately supplied fit wording must agree.
+    # Word boundaries avoid matching "load" inside "unload".
+    before = r"(?<![a-z0-9_])" if label[0].isascii() and label[0].isalnum() else ""
+    after = r"(?![a-z0-9_])" if label[-1].isascii() and label[-1].isalnum() else ""
+    return (prop["quote"].strip().casefold() in label
+            and bool(re.search(before + re.escape(label) + after, fit["quote"].casefold())))
+
+
+def _potential_denial(text, definition):
+    # Affirmative/excluded modifier pairs have a narrow, checkable exception.
+    # Else retain the caution: implicit/multilingual semantics require review.
+    def contrast(match):
+        yes, no = match.group(1).casefold(), match.group(2).casefold()
+        words = set(re.findall(r"[a-z]+", definition.casefold()))
+        return yes if yes in words and no not in words else match.group()
+
+    text = re.sub(r"\b([a-z]{3,}),\s*not\s+([a-z]{3,})(?=[.!;]|$)", contrast, text, flags=re.I)
+    return _REVIEW_LANGUAGE.search(text) is not None
+
+
+def _assertion_text(source, block, link):
+    """Include a source qualification that the model may have cropped off its quote."""
+    before = source[block["start"]:link["start"]]
+    after = source[link["end"]:block["end"]]
+    boundary = r"[。！？;；!?\n]|\.\s+"
+    prefix = re.split(boundary, before)[-1]
+    suffix = re.split(boundary, after, maxsplit=1)[0] if not re.search(r"[.!?。！？;；]\s*$", link["quote"]) else ""
+    return prefix + link["quote"] + suffix
+
+
+def retain_owner_reference(obs, fact, nominations):
+    """A declared key still explains a detail even if its proposed identity is held."""
+    proposal = nominations.get(fact.owner)
+    if proposal is not None:
+        obs.update(nomination_key=proposal.key, nomination_label=proposal.label, nomination_status="pending")
+
+
+def _attested_unit(unit, spans, source):
+    """A unit cannot be a prefix, suffix or factor of the source unit."""
+    if not unit:
+        return True
+    alphabet = r"[A-Za-zµμΩ°%‰]"
+    for span in spans:
+        if span is None:
+            continue
+        for match in re.finditer(re.escape(unit), span["quote"]):
+            start = span["start"] + match.start()
+            end = span["start"] + match.end()
+            if start and re.fullmatch(alphabet, source[start-1]):
+                continue
+            if end < len(source) and (re.fullmatch(alphabet, source[end]) or source[end].isnumeric()):
+                continue
+            prefix = source[max(0, start - 80):start].rstrip(" \t")
+            suffix = source[end:].lstrip(" \t")
+            if (suffix.startswith(("/", "·", "⋅", "^", "⁻")) or prefix.endswith(("·", "⋅"))
+                    or re.search(r"[A-Za-zµμΩ°%‰]+\s*/$", prefix)):
+                continue
+            return True
+    return False
+
+
 def fact_record(fact, shown, block, source, document, fields, choices, table):
     if fact.field not in fields:
         raise ValueError("undeclared_field")
-    if fact.value_source.window != block["block_id"] or fact.value_source.quote != fact.value:
+    if primary_window(fact.value_source.window) != block["block_id"]:
         raise ValueError("value_not_locally_attested")
-    value = locate(fact.value_source, shown)
-    prop = locate(fact.property_source, shown)
-    evidence = [value, prop]
+    value_context = locate(fact.value_source, shown)
+    value = _unique_fragment(value_context, fact.value)
+    evidence = [value]
+    if value_context != value:
+        evidence.append(value_context)
+    evidence_issues = []
+
+    def support(citation, role):
+        if citation is None:
+            return None
+        try:
+            span = locate(citation, shown)
+        except ValueError as exc:
+            evidence_issues.append({"role": role, "reason": str(exc)})
+            return None
+        if span not in evidence:
+            evidence.append(span)
+        return span
+
+    prop = support(fact.property_source, "property")
     # Validate numeric boundaries against the source around the quote, including signs.
-    if numeric_tokens(fact.value) == [(0, len(fact.value))]:
+    tokens = numeric_tokens(fact.value)
+    if tokens:
         left = max(block["start"], value["start"] - 64)
         text = source[left:min(block["end"], value["end"] + 64)]
-        if (value["start"] - left, value["end"] - left) not in numeric_tokens(text):
+        offset = value["start"] - left
+        source_tokens = set(numeric_tokens(text))
+        if any((offset + start, offset + end) not in source_tokens for start, end in tokens):
             raise ValueError("numeric_substring")
     obj = choices.get(fact.owner)
-    owner = locate(fact.owner_source, shown) if fact.owner_source else None
-    link = locate(fact.link_source, shown) if fact.link_source else None
-    fit_span = locate(fact.fit_source, shown) if fact.fit_source else None
-    qualifications = [locate(c, shown) for c in fact.qualifier_sources]
-    evidence.extend(e for e in [owner, link, fit_span, *qualifications] if e and e not in evidence)
+    owner = support(fact.owner_source, "owner")
+    link = support(fact.link_source, "link")
+    fit_span = support(fact.fit_source, "fit")
+    qualifications = [span for c in fact.qualifier_sources if (span := support(c, "qualifier"))]
     names = [obj["label"], *(a["name"] for a in obj["aliases"])] if obj else []
-    owner_ok = bool(obj and owner and owner["quote"] in names and link)
+    owner_valid = False
+    if owner and names:
+        candidates = ([owner["quote"]] if owner["quote"] in names
+                      else [name for name in names if _name_pattern(name).search(owner["quote"])])
+        if len(candidates) == 1:
+            try:
+                owner = _name_span(owner, candidates[0], shown[fact.owner_source.window])
+                owner_valid = True
+                if owner not in evidence:
+                    evidence.append(owner)
+            except ValueError as exc:
+                evidence_issues.append({"role": "owner", "reason": str(exc)})
+    owner_ok = bool(obj and prop and owner_valid and link)
     local = link
     if owner_ok:
         if block["kind"] == "table":
@@ -271,8 +472,18 @@ def fact_record(fact, shown, block, source, document, fields, choices, table):
         if obj["section"] != block["scope"] and not (obj.get("qualifier") and obj["qualifier"] in link["quote"]):
             owner_ok = False
     qualifiers_ok = all(not term or any(term in e["quote"] for e in evidence)
-                        for term in (fact.unit, fact.statistic, fact.conditions))
+                        for term in (fact.statistic, fact.conditions))
     if block["kind"] == "table":
+        unit_spans = [prop, fit_span, *qualifications]
+        if table and _cell(table, value_context) == _cell(table, value):
+            unit_spans.append(value_context)
+    else:
+        unit_spans = [local, *qualifications]
+    if not _attested_unit(fact.unit, unit_spans, source):
+        evidence_issues.append({"role": "unit", "reason": "unit_not_locally_attested"})
+    if prop is None:
+        local_fit = False
+    elif block["kind"] == "table":
         local_fit = (owner is not None and fit_span is not None and
                      all(_table_qualifier(table, source, s, owner, value, prop) for s in [fit_span, *qualifications]))
     else:
@@ -280,7 +491,21 @@ def fact_record(fact, shown, block, source, document, fields, choices, table):
         anchor = local or fit_span
         local_fit = bool(anchor and fit_span and _one_statement(anchor)
                          and all(_contained(s, anchor) for s in [prop, value, fit_span, *qualifications]))
-    fit_ok = bool(fact.fit == "supported" and local_fit and qualifiers_ok)
+    fit_ok = bool(fact.fit == "supported" and local_fit and qualifiers_ok and not evidence_issues)
+    # A recovered coordinate supplies no new scientific evidence about the field.
+    # Only a literal task property label attested in the source supplies an independent
+    # deterministic check on this path. Paraphrases remain useful review details.
+    expanded = value != value_context
+    if expanded and fit_ok and not _named_property(fields[fact.field], prop, fit_span):
+        fit_ok = False
+        evidence_issues.append({"role": "fit", "reason": "recovered_value_requires_field_review"})
+    if fact.fit == "supported":
+        statements = [e["quote"] for e in [link, fit_span, value_context] if e]
+        if block["kind"] != "table" and link is not None and block["start"] <= link["start"] < link["end"] <= block["end"]:
+            statements.append(_assertion_text(source, block, link))
+        if any(_potential_denial(text, fields[fact.field]) for text in [fact.reason, *statements]):
+            fit_ok = False
+            evidence_issues.append({"role": "fit", "reason": "assertion_or_rationale_requires_review"})
     # Scope exclusions are explicit protocol outcomes (the same field may apply to a different owner).
     if fact.purpose in {"classification_threshold", "example"} or (
             fact.purpose == "aggregate" and not (obj and obj["kind"] in {"group", "type"})):
@@ -292,11 +517,18 @@ def fact_record(fact, shown, block, source, document, fields, choices, table):
     elif fact.fit == "supported" and not fit_ok:
         reason = "field_or_qualifier_scope_unconfirmed"
     obs_id = "efobs-" + digest([document, fact.field, value["start"], value["end"],
-                                prop["start"], prop["end"]])[:24]
-    return {"observation_id": obs_id, "field": fact.field, "value": fact.value,
+                                prop["start"] if prop else None, prop["end"] if prop else None])[:24]
+    component = None
+    if len(tokens) == 1:
+        start, end = tokens[0]
+        component = {"start": value["start"] + start, "end": value["start"] + end, "quote": fact.value[start:end]}
+    return {"observation_id": obs_id, "field": fact.field, "value": fact.value, "numeric_component": component,
+            "model_claim": fact.model_dump(mode="json"), "raw_owner_ref": fact.owner,
+            "grounding": {"method": "unique_subspan" if expanded else "exact", "context": value_context},
+            "evidence_issues": evidence_issues,
             "entity": owner["quote"] if owner else None, "unit": fact.unit, "statistic": fact.statistic,
             "conditions": fact.conditions, "purpose": fact.purpose, "block_id": block["block_id"],
             "source_kind": block["kind"], "evidence": evidence, "owner_id": obj["object_id"] if assignable else None,
             "value_source": value, "owner_source": owner, "property_source": prop,
-            "qualified": bool(fit_ok and assignable), "field_fit": fact.fit, "property_name": prop["quote"],
+            "qualified": bool(fit_ok and assignable), "field_fit": fact.fit, "property_name": prop["quote"] if prop else None,
             "reason": reason, "model_reason": fact.reason, "owner_supported": assignable, "field_supported": fit_ok}

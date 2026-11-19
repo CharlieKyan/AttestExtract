@@ -6,6 +6,7 @@ import re
 from .contextual_chunking import structured_chunks
 from .models import ContextOptions
 from .structure import build_structure
+from .table_windows import table_split_point
 
 
 # Only the source notation is available to a text backend. Keep captions and
@@ -27,6 +28,31 @@ def _image_parts(source, start, end):
         cursor = right
     if cursor < end:
         yield cursor, end, "text", None
+
+
+def recovery_blocks(source, block, table):
+    """One level of recovery. A child owns its primary span; both can see the original scope."""
+    start, end = block["start"], block["end"]
+    if table:
+        point = table_split_point(table, start, end, prefer_data=True)
+    else:
+        from .chunking import _protected_positions, _sentence_ends
+        body = block["text"]
+        boundaries = _sentence_ends(body, 0, len(body), *_protected_positions(body))
+        points = [start + pos for pos in boundaries if body[pos:].strip()]
+        point = min(points, key=lambda pos: abs(2 * pos - start - end), default=None)
+    ranges = [(start, end)] if point is None else [(start, point), (point, end)]
+    children = []
+    for i, (left, right) in enumerate(ranges, 1):
+        context = list(block["context"])
+        for other_start, other_end in ranges:
+            if other_start != left:
+                context.append({"role": "recovery_context", "start": other_start, "end": other_end,
+                                "text": source[other_start:other_end]})
+        children.append({"block_id": f"{block['block_id']}.r{i}", "kind": block["kind"], "scope": block["scope"],
+                         "start": left, "end": right, "text": source[left:right], "gap": None,
+                         "context": context, "parent": block["block_id"]})
+    return children
 
 
 def source_blocks(source: str, *, max_chars: int = 3600) -> list[dict]:

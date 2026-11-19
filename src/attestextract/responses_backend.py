@@ -263,5 +263,6 @@ class DeepSeekResponsesBackend(OpenAICompatibleBackend):
                 "empty_response": "The Responses output has no nonempty assistant text.",
             }
             raise InvalidResponseError(messages[error], code=error, attempts=attempt,
-                                       status_code=response.status_code, response_metadata=metadata)
+                                       status_code=response.status_code, response_metadata=metadata,
+                                       partial_text=content if error == "truncated_response" else None)
         return BackendResponse(text=content, **metadata)

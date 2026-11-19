@@ -41,6 +41,7 @@ def dataset_view(report, task, info, options):
     identity = options.get("identity_fields") or ([label] if label else [])
     policies = options.get("field_policies", {})
     objects = {obj["object_id"]: obj for obj in report["objects"]}
+    nominations = {(n["block_id"], n["key"]): n for n in report["nominations"]}
     evidence = {}
     observations = []
     for i, fact in enumerate(report["observations"]):
@@ -55,23 +56,36 @@ def dataset_view(report, task, info, options):
             blockers.append("conflicting_subject_label")
         fits = fact["field_supported"] and not blockers
         fit_status = "supported" if fits else "contradicted" if fact["field_fit"] == "unsupported" else "unknown"
+        candidates = []
+        if report["protocol_version"] == "entity-first-v2" and fact.get("nomination_key"):
+            proposal = nominations.get((fact["block_id"], fact["nomination_key"]))
+            if proposal:
+                candidates.append({"id": proposal.get("object_id"), "label": proposal["label"],
+                                   "block_id": fact["block_id"], "key": proposal["key"], "status": proposal["status"]})
         observations.append({**fact, "source_record": f"/candidates/{i}", "direct": decision, "target": decision,
                              "record_group": [fact["block_id"], fact["owner_source"], fact["purpose"]],
                              "fit_blockers": blockers,
                              "fit": {"status": fit_status, "reason": fact["reason"],
                                      "evidence": fact["evidence"], "basis": "model_proposed"},
-                             "related": [], "candidates": [], "eligible": bool(obj and fits and fact["qualified"]),
+                             "related": [], "candidates": candidates, "eligible": bool(obj and fits and fact["qualified"]),
                              "row_ids": []})
         for span in fact["evidence"] + decision["evidence"]:
             evidence[(span["start"], span["end"])] = span
     rows, lineage = _project(fields, observations, identity, info.sha256, policies, label)
+    proposal_index = {}
+    if report["protocol_version"] == "entity-first-v2":
+        regions = []
+        for block in report.get("blocks", []):
+            for window in [block, *block.get("recovery", [])]:
+                regions.extend({"block_id": window["block_id"], **region} for region in window.get("review_regions", []))
+        proposal_index = {"nominations": report["nominations"], "review_regions": regions}
     return {"dataset_version": "1", "subject_strategy": "entity-first", "document_id": info.document_id,
             "source_sha256": info.sha256, "schema": list(fields), "field_definitions": fields,
             "row_subject": report["table_subject"], "identity_fields": list(identity), "subject_label_field": label,
             "field_policies": policies, "row_identity_location": "schema_columns" if identity else "lineage_rows_in_csv_order",
             "rows": rows, "observations": observations, "coverage_gaps": report["issues"],
             "lineage": {"rows": lineage, "objects": report["objects"], "evidence": list(evidence.values()),
-                        "relations": [], "quarantined": []},
+                        "relations": [], "quarantined": [], **proposal_index},
             "budget": {"assembly_calls": 0, "entity_first": report["budget"],
                        "extraction_http_attempts": report["budget"]["http_attempts"]}}
 
@@ -136,8 +150,24 @@ def extract_entities(text, task, *, backend, source_name, table_subject, rescue,
     report["table_subject"] = table_subject
     report["source_sha256"] = info.sha256
     report["dataset_options"] = dataset_options or {}
-    report["snapshot_id"] = digest([task.model_dump(mode="json"), report])
     dataset = dataset_view(report, task, info, dataset_options or {})
+    identities = set(dataset["identity_fields"])
+    if dataset["subject_label_field"]:
+        identities.add(dataset["subject_label_field"])
+    stages = Counter(obj["stage"] for obj in report["objects"])
+    report["summary"] = {
+        "inventory_proposals": sum(c.get("object_proposals", 0) for c in report["calls"]),
+        "inventory_objects": stages["inventory"], "recovered_objects": stages["rescue"],
+        "attribute_dispatches": sum(c["stage"] == "attributes" for c in report["calls"]),
+        "empty_roster_dispatches": sum(c.get("roster_size") == 0 for c in report["calls"]),
+        "detail_observations": len(dataset["observations"]), "main_rows": len(dataset["rows"]),
+        "main_rows_with_attributes": sum(any(v is not None for k, v in row.items() if k not in identities)
+                                         for row in dataset["rows"]),
+        "noncomplete_calls": dict(Counter(c["state"] for c in report["calls"] if c["state"] != "complete")),
+        "source_gaps": dict(Counter(b["gap"] for b in report["blocks"] if b.get("gap"))),
+        "validation_issues": len(report["issues"]),
+    }
+    report["snapshot_id"] = digest([task.model_dump(mode="json"), report])
     reviews = []
     candidates = []
     for item in dataset["observations"]:
@@ -152,17 +182,28 @@ def extract_entities(text, task, *, backend, source_name, table_subject, rescue,
     result = ExtractionResult(task=task, source=info, candidates=candidates, review=reviews,
                               entity_first=report, dataset=dataset,
                               run=RunInfo(backend=backend.name, mode=getattr(backend, "mode", "live"),
-                                          output_protocol="entity-first-v1", chunk_count=len(report["blocks"]),
+                                          output_protocol=report["protocol_version"], chunk_count=len(report["blocks"]),
                                           response_count=budget["response_count"], request_attempts=budget["http_attempts"],
                                           candidate_count=len(candidates), usage=budget["usage"], model=budget.get("model"),
                                           elapsed_seconds=time.perf_counter() - started))
     return result
 
 
+def summary_text(report):
+    if "summary" not in report:
+        return f"Entity-first {report['status']}. Inspect the frozen coverage and calls in entity-first.json."
+    s = report["summary"]
+    return (f"Entity-first {report['status']}. Inventory: {s['inventory_proposals']} proposed, "
+            f"{s['inventory_objects']} admitted, {s['recovered_objects']} recovered later. "
+            f"Empty roster: {s['empty_roster_dispatches']}/{s['attribute_dispatches']} attribute calls. "
+            f"Detail observations: {s['detail_observations']}. Rows with attributes: "
+            f"{s['main_rows_with_attributes']}/{s['main_rows']}. "
+            f"Call issues: {s['noncomplete_calls']}. Source gaps: {s['source_gaps']}. "
+            f"Validation issues: {s['validation_issues']}. See entity-first.json.")
+
+
 def report_heading(report):
-    counts = Counter(obj["stage"] for obj in report["objects"])
-    return (f"# Entity-first extraction\n\nCoverage status: **{report['status']}**. "
-            f"Inventory objects: {counts['inventory']}. Recovered objects: {counts['rescue']}. "
+    return ("# Entity-first extraction\n\n" + summary_text(report) + "\n\n"
             f"Inspect nominations ({len(report['nominations'])}) and block coverage in [entity-first.json](entity-first.json). "
             "Open [dataset rows](dataset/main.csv) and [source observations](dataset/observations.csv). "
             "Source-linked model proposals require scientific review.\n\n")

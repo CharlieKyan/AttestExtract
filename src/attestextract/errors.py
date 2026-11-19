@@ -58,11 +58,14 @@ class InvalidResponseError(BackendError):
         validation_artifact: str | None = None,
         code: str = "invalid_response",
         response_metadata: dict[str, Any] | None = None,
+        partial_text: str | None = None,
     ) -> None:
         super().__init__(message, status_code=status_code, attempts=attempts, code=code)
         self.validation_details = validation_details
         self.validation_artifact = validation_artifact
         self.response_metadata = response_metadata
+        # Never interpolate response content into the displayed exception.
+        self.partial_text = partial_text
 
 
 class TaskValidationError(AttestExtractError):

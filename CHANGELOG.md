@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.0.dev44
+
+- Update the opt-in entity-first protocol to v2. Keep the source claim and scoped nomination visible for review, locate unique verbatim subspans, and evaluate field applicability separately. Existing v1 snapshots still rebuild offline.
+- Accept compact source-cell evidence, identity-only blocks and review regions. Reports show roster admissions, empty-card dispatches, source gaps, and rows containing attributes.
+- Count known output truncations and their usage, continue independent reads, and retry bounded source ranges within the original call budget. Historical and controlled model experiments are evaluated separately.
+
 ## 0.1.0.dev43
 
 - Add the experimental entity-first subject strategy. It builds a document roster before reading source blocks for attributes, with a shared call limit, scoped evidence and a strict-roster comparison mode.

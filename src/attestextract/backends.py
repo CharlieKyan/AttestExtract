@@ -490,17 +490,16 @@ class OpenAICompatibleBackend:
         # subsequently rejects a truncated/refused completion. Never save an
         # HTTP error body or headers here.
         diagnostic_message = choice.get("message")
-        if self._trace is not None and chunk_id is not None and isinstance(diagnostic_message, dict):
-            diagnostic_content = diagnostic_message.get("content")
-            if isinstance(diagnostic_content, str):
-                self._trace.write_text(f"responses/{artifact_stem or chunk_id}.txt", diagnostic_content)
-                compliance = assess_schema_compliance(diagnostic_content, output_schema, self.structured_output)
-                compliance.update(http_attempt=attempt, format_attempt=format_attempt)
-                artifact = f"schema/{artifact_stem or chunk_id}.compliance.json"
-                self._trace.write_json(artifact, compliance)
-                self._trace.describe_artifact(artifact, "observed_schema_compliance")
-                self._trace.event("schema_compliance", "checked", chunk_id=chunk_id,
-                                  format_attempt=format_attempt, status=compliance["status"], artifact=artifact)
+        diagnostic_content = diagnostic_message.get("content") if isinstance(diagnostic_message, dict) else None
+        if self._trace is not None and chunk_id is not None and isinstance(diagnostic_content, str):
+            self._trace.write_text(f"responses/{artifact_stem or chunk_id}.txt", diagnostic_content)
+            compliance = assess_schema_compliance(diagnostic_content, output_schema, self.structured_output)
+            compliance.update(http_attempt=attempt, format_attempt=format_attempt)
+            artifact = f"schema/{artifact_stem or chunk_id}.compliance.json"
+            self._trace.write_json(artifact, compliance)
+            self._trace.describe_artifact(artifact, "observed_schema_compliance")
+            self._trace.event("schema_compliance", "checked", chunk_id=chunk_id,
+                              format_attempt=format_attempt, status=compliance["status"], artifact=artifact)
         usage = payload.get("usage")
         safe_usage = (
             {
@@ -551,6 +550,7 @@ class OpenAICompatibleBackend:
                 ("The model completion was truncated (finish_reason=length); the partial response was retained, not accepted."
                  if code == "truncated_response" else "The model completion was refused or did not finish normally."),
                 attempts=attempt, code=code, status_code=response.status_code, response_metadata=metadata,
+                partial_text=diagnostic_content if code == "truncated_response" and isinstance(diagnostic_content, str) else None,
             )
         message = choice.get("message")
         if not isinstance(message, dict):

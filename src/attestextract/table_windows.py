@@ -74,6 +74,28 @@ def window_owned_refs(table_input: dict) -> set[str] | None:
     return set(expected)
 
 
+def table_split_point(table, start: int, end: int, *, prefer_data=False) -> int | None:
+    """Balance owned physical cells at a row boundary, or a cell seam in a wide row."""
+    owned = [c for c in table.cells if start <= c.span.start < end and c.span.end <= end]
+    cells = [c.span for c in owned]
+    if len(cells) < 2:
+        return None
+    measured = [c.span for c in owned if prefer_data and c.row not in table.header_rows and not c.is_header]
+    weights = measured if len(measured) >= 2 else cells
+
+    def usable(point):
+        if not start < point < end or any(c.start < point < c.end for c in cells):
+            return False
+        count = sum(c.start < point for c in weights)
+        return 0 < count < len(weights)
+
+    points = [row.start for row in table.rows if usable(row.start)]
+    if not points:
+        points = [c.start for c in cells if usable(c.start)]
+    return min(points, key=lambda pos: (abs(2 * sum(c.start < pos for c in weights) - len(weights)), pos),
+               default=None)
+
+
 def split_table_chunk(text: str, parent: DocumentChunk, *, structure=None) -> list[DocumentChunk]:
     """Split physical rows, or cells of one wide row; never split cell text.
 
@@ -91,24 +113,11 @@ def split_table_chunk(text: str, parent: DocumentChunk, *, structure=None) -> li
     if len(body) != 1:
         raise ConfigurationError("Table subdivision requires contiguous source ownership.")
     start, end = body[0].start, body[0].end
-    cells = _owned_cells(table_input["entries"], start, end)
-    if len(cells) < 2:
-        return []
+    _owned_cells(table_input["entries"], start, end)
     table = next(t for t in detected.tables if t.table_id == table_input["table_id"])
-
-    def usable(point):
-        if not start < point < end:
-            return False
-        if any(entry["start"] < point < entry["end"] for entry in cells):
-            return False
-        count = sum(entry["start"] < point for entry in cells)
-        return 0 < count < len(cells)
-
-    row_points = [row.start for row in table.rows if usable(row.start)]
-    points = row_points or [entry["start"] for entry in cells if usable(entry["start"])]
-    if not points:
+    point = table_split_point(table, start, end)
+    if point is None:
         return []
-    point = min(points, key=lambda pos: (abs(2 * sum(c["start"] < pos for c in cells) - len(cells)), pos))
     children = []
     for number, (left, right) in enumerate(((start, point), (point, end)), 1):
         spans = [SourceSpan(start=left, end=right)]

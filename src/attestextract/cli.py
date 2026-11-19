@@ -672,6 +672,7 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
         if trace is not None:
             trace.event("configuration", "backend_validation_started")
         from .entity_first_output import validate_strategy
+        from .entity_first import PROTOCOL as entity_first_protocol
         validate_strategy(args.subject_strategy, not args.no_entity_rescue, subject=args.table_subject, task=task,
                           options=dataset_options, resume=bool(args.resume or args.analysis_resume or args.retry_tables
                                                               or args.retry_analysis_jobs),
@@ -717,7 +718,7 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
                 "model_id": args.model_id,
                 "selection_mode": "automatic" if automatic else "preset" if args.model_id is not None else "profile" if args.profile else "legacy",
                 "structured_output": config.structured_output,
-                "output_protocol": "entity-first-v1" if args.subject_strategy == "entity-first" else "flat-v1",
+                "output_protocol": entity_first_protocol if args.subject_strategy == "entity-first" else "flat-v1",
                 "structured_output_capability": capability,
                 "format_retries": config.format_retries,
                 "generation": config.generation.model_dump(mode="json"),
@@ -725,7 +726,7 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
                 "tls_mode": config.tls_mode,
             })
             trace.event("configuration", "completed", model=config.model,
-                        output_protocol="entity-first-v1" if args.subject_strategy == "entity-first" else "flat-v1",
+                        output_protocol=entity_first_protocol if args.subject_strategy == "entity-first" else "flat-v1",
                         structured_output=config.structured_output,
                         max_output_tokens=config.generation.max_output_tokens,
                         max_attempts=config.max_attempts, format_retries=config.format_retries,
@@ -853,9 +854,12 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
                 print(f"Run diagnostics: {trace.directory}", file=sys.stderr)
                 if result.entity_first is None:
                     print(f"Resume checkpoint: {trace.directory / 'execution/checkpoint.json'}", file=sys.stderr)
-        if result.entity_first is not None and result.entity_first["status"] != "complete":
-            print("attestextract: entity-first incomplete; see entity-first.json for coverage and calls.", file=sys.stderr)
-            return 2
+        if result.entity_first is not None:
+            from .entity_first_output import summary_text
+            if args.progress != "quiet" or result.entity_first["status"] != "complete":
+                print(summary_text(result.entity_first), file=sys.stderr)
+            if result.entity_first["status"] != "complete":
+                return 2
         if result.format_status != "complete":
             print("attestextract: " + result.format_status + "; legal records saved; inspect table_results.rejections.", file=sys.stderr)
             return 2

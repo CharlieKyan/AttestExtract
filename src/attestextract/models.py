@@ -345,7 +345,7 @@ class ChunkProvenance(ContractModel):
 class RunInfo(ContractModel):
     backend: str
     mode: Literal["live", "replay"]
-    output_protocol: Literal["flat-v1", "native-v1", "entity-first-v1"] = "native-v1"
+    output_protocol: Literal["flat-v1", "native-v1", "entity-first-v1", "entity-first-v2"] = "native-v1"
     chunk_count: int
     response_count: int
     candidate_count: int
@@ -418,8 +418,10 @@ class ExtractionResult(ContractModel):
 
     @model_validator(mode="after")
     def _provenance_version(self):
-        if (self.entity_first is not None) != (self.run.output_protocol == "entity-first-v1"):
+        if (self.entity_first is not None) != self.run.output_protocol.startswith("entity-first-"):
             raise ValueError("Entity-first runs require matching protocol and provenance.")
+        if self.entity_first is not None and self.entity_first.get("protocol_version") != self.run.output_protocol:
+            raise ValueError("Entity-first archive protocol differs from run metadata.")
         automatic = bool(self.run.routes or self.run.chunk_provenance or self.run.generation_attempts)
         if self.schema_version not in {"0.5", "0.6"} and automatic:
             raise ValueError("Automatic provenance requires result schema 0.5 or 0.6.")
