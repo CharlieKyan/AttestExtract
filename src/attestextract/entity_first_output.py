@@ -36,6 +36,9 @@ def validate_strategy(strategy, rescue, *, subject, task, options, resume, conte
 
 
 def dataset_view(report, task, info, options):
+    if report["protocol_version"] == "entity-first-v3":
+        from .entity_first_projection import project_two_pass
+        return project_two_pass(report, task, info, options)
     fields = task.input_materials.field_list
     label = options.get("subject_label_field")
     identity = options.get("identity_fields") or ([label] if label else [])
@@ -107,11 +110,13 @@ def project_archive(source, result, options, *, audit_admission=False, run_dir=N
     if len(parsed.candidates) != len(report["observations"]):
         raise ValueError("Entity-first candidate count differs from the frozen report.")
     for candidate, obs in zip(parsed.candidates, report["observations"]):
-        fields = {k: _field(obs[k], obs["evidence"]) for k in ("entity", "value", "unit", "conditions")}
+        fields = _candidate_fields(obs, report["protocol_version"])
         if (candidate.record_type != obs["field"] or candidate.fields != fields
                 or candidate.candidate_id != grounded_candidate_id(parsed.source.sha256, obs["field"], fields)):
             raise ValueError("Entity-first candidate differs from its frozen observation.")
     dataset = dataset_view(report, parsed.task, parsed.source, options)
+    if report["protocol_version"] == "entity-first-v3":
+        return dataset
     if audit_admission or report.get("admission_receipt_version"):
         from .admission import audit_dataset
         report["snapshot_id"] = checksum
@@ -131,6 +136,21 @@ def _field(value, evidence):
         loc = {"start": span["start"], "end": span["end"]}
         ref = EvidenceRef(quote=span["quote"], status="matched", matches=[loc], **loc)
     return FieldValue(value=value, evidence=ref)
+
+
+def _candidate_fields(item, protocol):
+    if protocol != "entity-first-v3":
+        return {k: _field(item[k], item["evidence"]) for k in ("entity", "value", "unit", "conditions")}
+    fields = {k: _field(item[k], item["evidence"]) for k in ("unit", "conditions")}
+    for field, source_key in (("value", "value_source"), ("entity", "owner_source")):
+        span = item[source_key]
+        if span and item[field] is not None:
+            loc = {"start": span["start"], "end": span["end"]}
+            evidence = EvidenceRef(quote=span["quote"], status="matched", matches=[loc], **loc)
+        else:
+            evidence = EvidenceRef(status="missing", quote="")
+        fields[field] = FieldValue(value=item[field], evidence=evidence)
+    return fields
 
 
 def extract_entities(text, task, *, backend, source_name, table_subject, rescue, max_calls, max_chars,
@@ -158,10 +178,7 @@ def extract_entities(text, task, *, backend, source_name, table_subject, rescue,
     report["table_subject"] = table_subject
     report["source_sha256"] = info.sha256
     report["dataset_options"] = dataset_options or {}
-    strict = dataset_view(report, task, info, dataset_options or {})
-    strict["source_name"] = info.name
-    from .admission import audit_dataset
-    dataset = audit_dataset(source, report, strict)
+    dataset = dataset_view(report, task, info, dataset_options or {})
     identities = set(dataset["identity_fields"])
     if dataset["subject_label_field"]:
         identities.add(dataset["subject_label_field"])
@@ -175,7 +192,7 @@ def extract_entities(text, task, *, backend, source_name, table_subject, rescue,
         "main_rows_with_attributes": sum(any(v is not None for k, v in row.items() if k not in identities)
                                          for row in dataset["rows"]),
         "noncomplete_calls": dict(Counter(c["state"] for c in report["calls"] if c["state"] != "complete")),
-        "source_gaps": dict(Counter(b["gap"] for b in report["blocks"] if b.get("gap"))),
+        "source_gaps": dict(Counter(b["attributes"] for b in report["blocks"] if b["attributes"] != "read")),
         "validation_issues": len(report["issues"]),
     }
     report["summary"]["attribute_proposals"] = len(dataset["proposals"])
@@ -183,10 +200,8 @@ def extract_entities(text, task, *, backend, source_name, table_subject, rescue,
     report["snapshot_id"] = digest([task.model_dump(mode="json"), report])
     reviews = []
     candidates = []
-    # Candidates and the legacy checks describe the frozen extraction. The admission
-    # view also includes proposals which did not have a candidate in this snapshot.
-    for item in strict["observations"]:
-        fields = {k: _field(item[k], item["evidence"]) for k in ("entity", "value", "unit", "conditions")}
+    for item in dataset["observations"]:
+        fields = _candidate_fields(item, report["protocol_version"])
         identifier = grounded_candidate_id(info.sha256, item["field"], fields)
         if not item["row_ids"]:
             reviews.append(ReviewItem(candidate_id=identifier, code="entity_first_detail", message=item["reason"]))
@@ -208,6 +223,13 @@ def summary_text(report):
     if "summary" not in report:
         return f"Entity-first {report['status']}. Inspect the frozen coverage and calls in entity-first.json."
     s = report["summary"]
+    if report["protocol_version"] == "entity-first-v3":
+        budget = report["budget"]
+        return (f"Entity-first {report['status']}. Inventory: {s['inventory_objects']} registered; "
+                f"{s['recovered_objects']} added while reading attributes. "
+                f"{s['attribute_proposals']} proposals, {s['main_rows']} rows with attributes. "
+                f"Generation calls by stage: {budget['by_stage']}. Usage: {budget['usage']}. "
+                f"Unread or unavailable source regions: {s['source_gaps']}. See entity-first.json.")
     return (f"Entity-first {report['status']}. Inventory: {s['inventory_proposals']} proposed, "
             f"{s['inventory_objects']} admitted, {s['recovered_objects']} recovered later. "
             f"Empty roster: {s['empty_roster_dispatches']}/{s['attribute_dispatches']} attribute calls. "
@@ -218,9 +240,14 @@ def summary_text(report):
 
 
 def report_heading(report):
+    if report["protocol_version"] == "entity-first-v3":
+        return ("# Entity-first extraction\n\n" + summary_text(report) + "\n\n"
+                "Open the [registered objects](dataset/roster.csv), [dataset rows](dataset/main.csv) "
+                "and [observations with evidence](dataset/annotation.md). "
+                "[All proposals](dataset/proposals.csv) include assignments held for review.\n\n")
     return ("# Entity-first extraction\n\n" + summary_text(report) + "\n\n"
             f"Inspect nominations ({len(report['nominations'])}) and block coverage in [entity-first.json](entity-first.json). "
             "Open [dataset rows](dataset/main.csv) and [source observations](dataset/observations.csv). "
             + ("Compare [all model proposals](dataset/proposals.csv) with their adjudications. "
-               if report.get("admission_receipt_version") else "") +
+                if report.get("admission_receipt_version") else "") +
             "Source-linked model proposals require scientific review.\n\n")

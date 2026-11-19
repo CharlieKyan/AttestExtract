@@ -136,23 +136,81 @@ def _relation_item(source, observation):
     return item, spans
 
 
+def _two_pass_item(source, observation, roster, index):
+    """Prepare a reread from the stored judgement, including the context of an ambiguous local mention."""
+    value = observation.get("value_source")
+    if observation.get("row_ids") or not _valid(source, value):
+        return None
+    if observation["fit"].get("status") == "contradicted" or observation.get("fit_blockers"):
+        return None
+    local = observation.get("local_mention") or observation.get("owner_source")
+    direct = observation["direct"]
+    if not direct.get("id") and _valid(source, local):
+        direct = {**direct, "id": "mention-" + digest(local)[:24], "evidence": [local]}
+    ids = {observation["target"].get("id"), *(c.get("id") for c in observation.get("candidates", []))}
+    local_name = local["quote"] if _valid(source, local) else None
+    candidates = []
+    for key, obj in roster.items():
+        # Later blocks can register an object that was absent from the request.
+        # Include every matching entry and its original alias definition.
+        aliases = [a["evidence"] for a in obj.get("aliases", []) if a["name"] == local_name
+                   and _valid(source, a["evidence"])]
+        if key in ids or obj["label"] == local_name or aliases:
+            candidates.append({"id": key, "label": obj["label"], "scope": obj.get("scope"),
+                               "evidence": [*aliases, *obj["evidence"]]})
+    observation = {**observation, "direct": direct, "candidates": candidates,
+                   "source_evidence": [{"fields": ["value"], "span": {"start": value["start"], "end": value["end"]},
+                                        "quote": value["quote"]}]}
+    prepared = _relation_item(source, observation)
+    if not prepared:
+        return None
+    item, spans = prepared
+    item["target_ids"] = [c["id"] for c in candidates]
+    # Only registered objects can resolve the row target. The local subject can
+    # still be reviewed when there is no plausible row to link it to.
+    if not candidates and "target" in item["axes"]:
+        item["axes"].remove("target")
+    if not item["axes"]:
+        return None
+    for candidate in candidates:
+        item["endpoints"][candidate["id"]]["qualifier"] = roster[candidate["id"]].get("qualifier")
+    spans.extend(s for s in observation.get("evidence", []) if _valid(source, s))
+    # Include the previous and next passage and structural hints (table caption,
+    # header or nearest heading). These may be outside the original dispatch.
+    location = index.nearby([value])["passages"][0]
+    ids = [location["passage_id"], *location["context_passage_ids"][:2]]
+    spans.extend(_slice(source, p["start"], p["end"]) for p in index.read(ids, neighbors=1)["passages"])
+    return item, spans
+
+
 def review_packs(dataset, source):
     groups = defaultdict(list)
+    two_pass = dataset.get("subject_strategy") == "entity-first" and dataset.get("protocol_version") == "entity-first-v3"
+    if two_pass:
+        roster = {o["object_id"]: o for o in dataset["lineage"]["objects"]}
+        index = SourceIndex(source) if source.strip() else None
     for observation in dataset["observations"]:
-        prepared = _relation_item(source, observation)
+        prepared = (_two_pass_item(source, observation, roster, index) if two_pass
+                    else _relation_item(source, observation))
         if prepared:
             item, spans = prepared
             # Share calls across a source block and its competing endpoints; each
             # observation retains its own admissible evidence and decisions.
-            key = (item["value_evidence"][0]["start"] // 800, tuple(sorted(item["endpoints"])))
+            scope = observation["block_id"] if two_pass else item["value_evidence"][0]["start"] // 800
+            key = (scope, tuple(sorted(item["endpoints"])))
             groups[key].append((item, spans))
     task = {"row_subject": dataset.get("row_subject"), "fields": dataset.get("field_definitions", {}),
             "field_policies": dataset.get("field_policies", {})}
     for group in groups.values():
         for index in range(0, len(group), 4):
             block = group[index:index + 4]
-            yield {"kind": "existing_observation", "task": task, "items": [item for item, _ in block],
-                   "windows": _windows(source, [s for _, spans in block for s in spans])}
+            packet = {"kind": "existing_observation", "task": task, "items": [item for item, _ in block],
+                      "windows": _windows(source, [s for _, spans in block for s in spans])}
+            if two_pass:
+                packet["protocol_version"] = "entity-first-v3"
+            yield packet
+    if two_pass:
+        return
     for gap in dataset["coverage_gaps"]:
         if gap.get("kind") != "possible_missing_observation":
             continue

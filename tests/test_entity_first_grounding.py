@@ -167,14 +167,17 @@ def test_failed_nomination_preserves_original_link_and_value_without_publication
             if packet["stage"] == "inventory":
                 result = {"objects": [proposal]}
             else:
-                result = {"nominations": [proposal],
-                          "facts": [assignment(win["text"], win["text"], window=win["id"])]}
+                claim = assignment(win["text"], win["text"], window=win["id"])
+                claim["subject_source"] = claim.pop("owner_source")
+                claim.pop("direct")
+                claim.update(source_subject="U7", target_id=None, nomination_key=claim.pop("owner"))
+                result = {"nominations": [proposal], "facts": [claim]}
             return BackendResponse(text=json.dumps(result))
 
     report = run_entity_first("U7 load 80.", {"x": "load"}, "devices", Model(), max_calls=2)
     item, = report["observations"]
-    assert item["raw_owner_ref"] == item["nomination_key"] == "local"
-    assert item["nomination_label"] == "U7" and item["nomination_status"] == "pending"
+    assert item["model_claim"]["nomination_key"] == "local"
+    assert item["entity"] == "U7"
     assert not item["qualified"] and item["owner_id"] is None
     assert report["nominations"][0]["status"] == "unresolved"
     assert not any(i["reason"] == "unknown_owner_reference" for i in report["issues"])

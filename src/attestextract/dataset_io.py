@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import json
+from collections import Counter
 from pathlib import Path
 from uuid import uuid4
 
@@ -105,6 +106,12 @@ def save_dataset(data: dict, directory: str | Path) -> Path:
         _json_file(stage / "dataset.json", data)
         _json_file(stage / "lineage.json", data["lineage"])
         _csv_file(stage / "main.csv", data["schema"], data["rows"])
+        if data.get("protocol_version") == "entity-first-v3":
+            counts = Counter(r["subject_id"] for r in data["lineage"]["rows"])
+            columns = ["object_id", "label", "qualifier", "aliases", "kind", "stage", "main_rows", "evidence"]
+            roster = [{**{k: obj.get(k) for k in columns}, "main_rows": counts[obj["object_id"]]}
+                      for obj in data["lineage"]["objects"]]
+            _csv_file(stage / "roster.csv", columns, roster)
         # Keep the first columns immediately usable, including when the export is empty.
         columns = ["observation_id", "entity", "direct_subject", "target_subject",
                    "field", "value", "unit", "conditions", "purpose", "source_record"]
@@ -133,7 +140,7 @@ def save_dataset(data: dict, directory: str | Path) -> Path:
         stage.rename(target)
     except BaseException:
         for name in ("dataset.json", "lineage.json", "main.csv", "observations.csv", "proposals.csv",
-                     "annotation.json", "annotation.md", "annotation.sources.json"):
+                     "roster.csv", "annotation.json", "annotation.md", "annotation.sources.json"):
             (stage / name).unlink(missing_ok=True)
         stage.rmdir()
         raise

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.0.dev46
+
+- Simplify the opt-in entity-first workflow to inventory and attribute reading. Show the complete compact roster when it fits. Read zero-hit blocks, register explicit omissions inline, and retain competing identities for review.
+- Record the source subject independently of a selected document ID. A single source-grounded decision supplies the main table, observation details, proposal receipts and annotation. Name-only entries are available in `dataset/roster.csv`.
+- Enable explicitly budgeted follow-up of unresolved v3 assignments with `supplement-dataset`. Read older frozen entity-first runs using their original protocol.
+
 ## 0.1.0.dev45
 
 - Archive completed entity-first attribute assignments before semantic validation and deduplication. Publish a proposal ledger alongside the scientific observation and task-schema tables.

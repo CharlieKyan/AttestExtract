@@ -28,18 +28,15 @@ class TableAnswers:
                     "mention": cell("r1c0"), "qualification": cell("r1c0")}
         if packet["stage"] == "inventory":
             answer = {"objects": []}
-        elif packet["stage"] == "confirm":
-            answer = {"decisions": [{"key": "rack", "status": "new_object", "evidence": cell("r1c0"),
-                                     "reason": "Named rack in the source."}]}
         else:
             answer = {"facts": [], "nominations": [], "review_regions": [cell("r1c1")]}
             if self.case != "empty":
                 answer["nominations"].append(identity)
             if self.case == "mixed":
-                answer["facts"].append({"field": "count", "value": "7", "owner": "rack", "value_source": cell("r1c2"),
-                                        "owner_source": cell("r1c0"), "property_source": cell("r0c2"),
+                answer["facts"].append({"field": "count", "value": "7", "source_subject": "Rack A", "target_id": None, "nomination_key": "rack", "value_source": cell("r1c2"),
+                                        "subject_source": cell("r1c0"), "property_source": cell("r0c2"),
                                         "link_source": cell("r1c0"), "fit_source": cell("r0c2"),
-                                        "direct": True, "fit": "supported", "purpose": "measurement",
+                                        "fit": "supported", "purpose": "measurement",
                                         "reason": "Count reported for this rack."})
             if self.case == "invalid":
                 answer["review_regions"].append({"window": "block-09999"})
@@ -55,7 +52,7 @@ def test_same_local_request_delivers_whichever_outputs_it_contains(case):
                      dataset_options={"subject_label_field": "rack"})
     report = result.entity_first
     block, = report["blocks"]
-    assert backend.stages == (["inventory", "attributes"] if case == "empty" else ["inventory", "attributes", "confirm"])
+    assert backend.stages == ["inventory", "attributes"]
     assert report["status"] == ("partial" if case == "invalid" else "complete")
     left, right = source.index("7"), source.rindex("7")
     assert block["review_regions"] == [{"start": left, "end": left + 1}]

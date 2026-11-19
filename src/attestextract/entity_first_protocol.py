@@ -59,18 +59,6 @@ class Assignments(ContractModel):
         description="Source regions kept for inspection without enumerating unsupported cell-level facts.")
 
 
-class Confirmation(ContractModel):
-    key: str
-    status: Literal["new_object", "existing_object", "not_target", "uncertain"]
-    existing_id: str | None = None
-    evidence: Citation | None = None
-    reason: str = Field(min_length=1, max_length=1500)
-
-
-class Confirmations(ContractModel):
-    decisions: list[Confirmation] = Field(max_length=48)
-
-
 def primary_window(reference):
     return reference.partition("@")[0]
 
@@ -173,14 +161,38 @@ def mentions_name(span, name, window):
     return bool(match and match.end() <= end)
 
 
-def entity_record(proposal, shown, block_scope, document, stage):
+def _identity_role_cell(table, source, proposal, mention, proof):
+    """A separate role header may identify a whole object cell on either axis."""
+    if not table or not all("@" in c.window for c in (proposal.mention, proposal.qualification)):
+        return False
+    role, owner = _cell(table, proof), _cell(table, mention)
+    if not role or not owner or source[role.span.start:role.span.end].strip() != proof["quote"]:
+        return False
+    if source[owner.span.start:owner.span.end].strip() != mention["quote"]:
+        return False
+    for axis, cross, depth, width in (("row", "column", "rowspan", "colspan"),
+                                      ("column", "row", "colspan", "rowspan")):
+        start, end = getattr(role, axis), getattr(owner, axis)
+        if (start + getattr(role, depth) > end or getattr(role, cross) != getattr(owner, cross)
+                or getattr(role, width) != getattr(owner, width) or not (role.is_header or start == 0)):
+            continue
+        # A repeated header starts a new panel, even with all cells serialized as <td>.
+        if not any(start < getattr(c, axis) < end and getattr(c, cross) == getattr(role, cross)
+                   and (c.is_header or source[c.span.start:c.span.end].strip() == proof["quote"])
+                   for c in table.cells):
+            return True
+    return False
+
+
+def entity_record(proposal, shown, block_scope, document, stage, *, table=None, source=""):
     context = locate(proposal.mention, shown)
     mention = _name_span(context, proposal.label, shown[proposal.mention.window])
     proof = locate(proposal.qualification, shown)
-    if (not mentions_name(proof, proposal.label, shown[proposal.qualification.window])
+    role_evidence = _identity_role_cell(table, source, proposal, mention, proof)
+    if ((not role_evidence and not mentions_name(proof, proposal.label, shown[proposal.qualification.window]))
             or proposal.scope and proposal.scope not in proof["quote"]):
         raise ValueError("invalid_identity_evidence")
-    if mention != context and not _contained(mention, proof):
+    if mention != context and not role_evidence and not _contained(mention, proof):
         raise ValueError("recovered_mention_outside_identity_proof")
     aliases = []
     if len(proposal.alias_names) != len(proposal.aliases):
@@ -370,13 +382,6 @@ def _assertion_text(source, block, link):
     prefix = re.split(boundary, before)[-1]
     suffix = re.split(boundary, after, maxsplit=1)[0] if not re.search(r"[.!?。！？;；]\s*$", link["quote"]) else ""
     return prefix + link["quote"] + suffix
-
-
-def retain_owner_reference(obs, fact, nominations):
-    """A declared key still explains a detail even if its proposed identity is held."""
-    proposal = nominations.get(fact.owner)
-    if proposal is not None:
-        obs.update(nomination_key=proposal.key, nomination_label=proposal.label, nomination_status="pending")
 
 
 def _attested_unit(unit, spans, source):

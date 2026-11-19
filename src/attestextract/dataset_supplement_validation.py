@@ -7,6 +7,7 @@ from pydantic import Field
 
 from .dataset import _POLICY_COLUMNS
 from .dataset_supplement_packs import _NUMBER, _valid
+from .entity_first_protocol import _name_pattern
 from .json_validation import load_json
 from .models import ContractModel
 
@@ -65,6 +66,29 @@ def _check_endpoint(endpoint, quotes):
         raise ValueError("endpoint_not_grounded_in_shown_mention")
 
 
+def _check_target_choice(item, answer, endpoint, quotes):
+    """Only v3 packets have a frozen candidate roster distinct from the source mention."""
+    if "target_ids" not in item:
+        return
+    if answer.endpoint_id not in item["target_ids"]:
+        raise ValueError("target_outside_candidate_roster")
+    if len(item["target_ids"]) < 2 or answer.status != "supported":
+        return
+    # A model selecting between homonyms must show what distinguished them at
+    # the observation. Two separately cited inventory entries do not resolve it.
+    scope = answer.applicability.source.quote if answer.applicability else quotes[0]["quote"]
+    choices = [item["endpoints"][key] for key in item["target_ids"]]
+    matches = []
+    for choice in choices:
+        peers = {marker for other in choices if other is not choice
+                 for marker in (other["label"], other.get("qualifier"))}
+        markers = (choice["label"], choice.get("qualifier"))
+        if any(m and m not in peers and _name_pattern(m).search(scope) for m in markers):
+            matches.append(choice)
+    if matches != [endpoint]:
+        raise ValueError("target_scope_still_ambiguous")
+
+
 def _existing(item, answer, quotes, conflicts, verified_direct):
     if answer.axis not in item["axes"]:
         raise ValueError("axis_outside_review_scope")
@@ -84,6 +108,7 @@ def _existing(item, answer, quotes, conflicts, verified_direct):
     if answer.axis == "direct" and answer.predicate != "direct":
         raise ValueError("invalid_direct_predicate")
     if answer.axis == "target":
+        _check_target_choice(item, answer, endpoint, quotes)
         prior = item["prior"]["direct"]
         direct_id = prior["id"] if prior["status"] == "supported" else verified_direct.get(answer.item_id)
         if direct_id is None:
@@ -187,6 +212,10 @@ def validate_response(source, pack, text, conflicts):
         if items:
             endpoint = items[answer.item_id]["endpoints"].get(answer.endpoint_id)
             record["endpoint_label"] = endpoint["label"] if endpoint else None
+            if "target_ids" in items[answer.item_id]:
+                original = items[answer.item_id]
+                record.update(source_subject=original["entity"], observation_field=original["field"],
+                              observation_value=original["value"], candidate_ids=original["target_ids"])
         results.append(record)
     if expected and expected != seen:
         raise ValueError("incomplete_decisions_for_packet")

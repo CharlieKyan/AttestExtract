@@ -109,7 +109,7 @@ def _attested_label(target):
             and any(label in span["quote"] for span in target["evidence"]))
 
 
-def _project(schema, observations, identity_fields, source_hash, policies, label_field):
+def _project(schema, observations, identity_fields, source_hash, policies, label_field, *, require_attribute=False):
     by_subject = _identity_values(observations, identity_fields)
     groups = defaultdict(list)
     for obs in observations:
@@ -124,6 +124,11 @@ def _project(schema, observations, identity_fields, source_hash, policies, label
         # Repeated measures in a block have no documented pairing by list position.
         partitions = [items] if len(set(field_names)) == len(items) else [[item] for item in items]
         for members in partitions:
+            if require_attribute and all(o["field"] in identity_fields or o["field"] == label_field
+                                         or o.get("identity_attribute") for o in members):
+                for obs in members:
+                    obs["projection_reason"] = "identity_only"
+                continue
             row = dict.fromkeys(schema)
             cells = {}
             for obs in members:
@@ -202,6 +207,10 @@ def query_dataset(dataset, subject=None, *, exploratory=False, field=None, purpo
     if association_only and subject is None:
         raise ValueError("An association-only query needs a subject label or ID.")
     found = []
+    names = {}
+    if dataset.get("protocol_version") == "entity-first-v3" and subject is not None:
+        names = {o["object_id"]: {o["label"], *(a["name"] for a in o["aliases"])}
+                 for o in dataset["lineage"]["objects"]}
     for obs in dataset["observations"]:
         if field is not None and obs["field"] != field or purpose is not None and obs["purpose"] != purpose:
             continue
@@ -212,6 +221,9 @@ def query_dataset(dataset, subject=None, *, exploratory=False, field=None, purpo
             endpoints.extend([obs["target"], *obs.get("related", [])])
         labels = {v for endpoint in endpoints if endpoint.get("status") == "supported"
                   for v in (endpoint.get("id"), endpoint.get("label")) if isinstance(v, str)}
+        target = obs["target"]
+        if names and target.get("status") == "supported" and target.get("id") == obs["direct"].get("id"):
+            labels.update(names.get(target["id"], ()))
         if obs["direct"].get("basis") == "explicit_definition" and isinstance(obs["entity"], str):
             labels.add(obs["entity"])
         if exploratory:

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import re
 
-from .contextual_chunking import structured_chunks
+from .contextual_chunking import enrich_chunk, structured_chunks
 from .models import ContextOptions
 from .structure import build_structure
 from .table_windows import table_split_point
@@ -60,10 +60,15 @@ def source_blocks(source: str, *, max_chars: int = 3600) -> list[dict]:
     if not isinstance(source, str) or not source.strip() or type(max_chars) is not int or max_chars < 1:
         raise ValueError("Entity-first requires nonempty source and a positive block size.")
     structure = build_structure(source)
+    # Size the primary paragraphs before adding supporting context. Reserving
+    # space for optional neighbors can cut a short assertion even when no useful
+    # neighbor fits. The dispatcher budgets the actual complete request.
     chunks = structured_chunks(source, structure=structure, max_chars=max_chars, table_rows_per_chunk=10,
-                               context=ContextOptions(mode="neighbors", neighbor_chars=min(240, max_chars // 8)))
+                               context=ContextOptions())
+    context_options = ContextOptions(mode="neighbors", neighbor_chars=min(240, max_chars // 8))
     blocks = []
     for chunk in chunks:
+        chunk = enrich_chunk(source, chunk, structure, context_options)
         for body in chunk.body_segments:
             table = next((t for t in structure.tables if t.span.start < body.end and body.start < t.span.end), None)
             context = [(c.role, c.span) for c in chunk.context_segments]

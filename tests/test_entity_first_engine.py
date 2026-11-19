@@ -33,10 +33,10 @@ def card(w, name="A", scope=None, proof=None):
 
 
 def fact(w, owner, name="A", line="A load 80.", value="80"):
-    return {"field": "load", "owner": owner, "value": value, "value_source": cite(w, value, 0),
-            "property_source": cite(w, "load", 0), "owner_source": cite(w, name, 0),
+    return {"field": "load", "target_id": owner, "value": value, "value_source": cite(w, value, 0),
+            "property_source": cite(w, "load", 0), "source_subject": name, "subject_source": cite(w, name, 0),
             "link_source": cite(w, line), "fit_source": cite(w, line),
-            "purpose": "measurement", "direct": True, "fit": "supported", "reason": "Measured load."}
+            "purpose": "measurement", "fit": "supported", "reason": "Measured load."}
 
 
 def run(source, backend, **options):
@@ -55,7 +55,7 @@ def test_qualifier_cannot_be_borrowed_from_other_assertion():
     report = run("A load 80. B effective load 4.", Backend(reply))
     (result,) = report["observations"]
     assert result["owner_supported"] and not result["qualified"]
-    assert result["reason"] == "field_or_qualifier_scope_unconfirmed"
+    assert result["fit"]["status"] != "supported"
 
 
 def test_nonnumeric_unit_substring_does_not_create_a_second_value():
@@ -67,9 +67,10 @@ def test_nonnumeric_unit_substring_does_not_create_a_second_value():
                 "nominations": []}
 
     report = run("A load 80.", Backend(reply))
-    assert report["observations"] == []
-    assert report["issues"][0]["reason"] == "numeric_substring"
-    assert report["issues"][0]["rejected_fact"]["value"] == "8"
+    item, = report["observations"]
+    assert item["value"] == "8" and not item["qualified"]
+    assert item["value_source"] is None
+    assert report["calls"][1]["fact_decisions"][0]["observation_id"] == item["observation_id"]
 
 
 def test_conflicting_same_source_assignments_do_not_overwrite_the_first():
@@ -102,7 +103,7 @@ def test_competing_clauses_cannot_supply_a_value_to_the_other_named_subject(rost
     assert [(v["value"], v["qualified"]) for v in r["observations"]] == [("60", False), ("80", True)]
 
 
-def test_names_in_different_sections_do_not_cross_bind_or_confirm():
+def test_homonyms_with_distinct_qualifiers_register_in_the_same_attribute_pass():
     text = "# East\n\nEast A load 80.\n\n# West\n\nWest A load 60."
 
     def reply(p):
@@ -110,38 +111,33 @@ def test_names_in_different_sections_do_not_cross_bind_or_confirm():
         if p["stage"] == "inventory":
             return {"objects": [card(w, scope="East", proof="East A load 80.")]}
         eastern_id = next(o["object_id"] for o in p["objects"] if o["scope"] == "East")
-        if p["stage"] == "confirm":
-            return {"decisions": [{"key": "A", "status": "existing_object", "existing_id": eastern_id,
-                                   "evidence": cite(w, "West A load 60."), "reason": "Identical label."}]}
         if "West A" in w["text"]:
             return {"nominations": [card(w, scope="West", proof="West A load 60.")],
-                    "facts": [fact(w, "A", value="60", line="West A load 60.")]}
+                    "facts": [dict(fact(w, None, value="60", line="West A load 60."), nomination_key="A")]}
         return {"facts": [fact(w, eastern_id, line="East A load 80.")], "nominations": []}
 
     r = run(text, Backend(reply), max_chars=32)
-    assert [(v["value"], v["qualified"]) for v in r["observations"]] == [("80", True), ("60", False)]
-    assert r["nominations"][0]["reason"] == "unproven_existing_identity"
-    assert len(r["objects"]) == 1
+    assert [(v["value"], v["qualified"]) for v in r["observations"]] == [("80", True), ("60", True)]
+    assert r["nominations"][0]["status"] == "new_object"
+    assert [o["qualifier"] for o in r["objects"]] == ["East", "West"]
+    assert r["observations"][0]["owner_id"] != r["observations"][1]["owner_id"]
 
 
-def test_late_nomination_revisits_only_previous_local_unassigned_measurement():
+def test_late_nomination_keeps_previous_observation_for_separate_review():
     def reply(p):
         stage = p["stage"]
         w = p["windows"][0]
         if stage == "inventory":
             return {"objects": []}
-        if stage == "confirm":
-            return {"decisions": [{"key": "B", "status": "new_object", "evidence": cite(w, "Unit B"),
-                                   "reason": "Named study unit."}]}
         if "installed" in w["text"]:
             return {"nominations": [card(w, name="B")], "facts": []}
-        owner = p["objects"][0]["object_id"] if stage == "revisit" else None
-        return {"nominations": [], "facts": [fact(w, owner, name="B", value="60", line="B load 60.")]}
+        return {"nominations": [], "facts": [fact(w, None, name="B", value="60", line="B load 60.")]}
 
     b = Backend(reply)
     r = run("B load 60.\n\nUnit B was installed.", b, max_chars=32)
-    assert b.sent == ["inventory", "attributes", "attributes", "confirm", "revisit"]
-    assert len(r["observations"]) == 1 and r["observations"][0]["qualified"]
+    assert b.sent == ["inventory", "attributes", "attributes"]
+    assert r["objects"][0]["label"] == "B"
+    assert r["observations"][0]["entity"] == "B" and not r["observations"][0]["qualified"]
     assert r["observations"][0]["source_record"] == "/candidates/0"
 
 
@@ -245,3 +241,140 @@ def test_request_source_and_responses_are_checked_for_secrets_before_storage():
     r = run("A load 80.", b, secrets=["hidden-key"])
     assert "hidden-key" not in json.dumps(r)
     assert r["blocks"][0]["inventory"] == "credential_in_response"
+
+def test_small_roster_is_visible_in_later_blocks_even_with_zero_literal_hits():
+    text = "# Intake\n\nUnit A is registered.\n\n# Result\n\nNo measurement."
+    shown = []
+    def reply(packet):
+        w = packet["windows"][0]
+        if packet["stage"] == "inventory":
+            return {"objects": [card(w, name="Unit A")]}
+        shown.append([entry["label"] for entry in packet["objects"]])
+        return {"nominations": [], "facts": []}
+    r = run(text, Backend(reply), max_chars=25)
+    assert len(shown) >= 2 and all(labels == ["Unit A"] for labels in shown)
+    assert not r["observations"]
+    assert sum(u["total_tokens"] for u in r["budget"]["usage_by_stage"].values()) == r["budget"]["usage"]["total_tokens"]
+
+
+def test_crowded_roster_does_not_drop_one_competitor_to_fit_the_model():
+    from attestextract.entity_first import _attribute_packet
+
+    class Capacity:
+        def __init__(self, slots):
+            self.slots = slots
+        def messages(self, stage, packet):
+            return packet
+        def fits(self, packet, stage):
+            return len(packet["objects"]) <= self.slots
+
+    def record(oid, label, qualifier, aliases=()):
+        return {"object_id": oid, "qualifier": qualifier, "label": label, "kind": "instance",
+                "section": "other", "aliases": [{"name": name} for name in aliases]}
+
+    roster = {r["object_id"]: r for r in (record("east", "East device", "East", ["Device 2"]),
+                                       record("west", "West device", "West", ["Device 2"]),
+                                       record("unrelated", "Device 99", None))}
+    block = {"kind": "text", "scope": "current", "start": 0, "text": "Device 2 measured 80.",
+             "context": [], "block_id": "current"}
+    both = _attribute_packet(roster, block, Capacity(2), True)
+    assert {v["object_id"] for v in both["objects"]} == {"east", "west"}
+    assert not _attribute_packet(roster, block, Capacity(1), True)["objects"]
+
+
+def test_nomination_reuses_unique_registered_identity_across_sections():
+    text = "# Registration\n\nDevice A is a station.\n\n# Output\n\nDevice A (A17) load 80."
+    def reply(packet):
+        w = packet["windows"][0]
+        if packet["stage"] == "inventory":
+            return {"objects": [card(w, "Device A")]}
+        if "A17" not in w["text"]:
+            return {"nominations": [], "facts": []}
+        proposal = card(w, "Device A", "A17", "Device A (A17) load 80.")
+        return {"nominations": [proposal], "facts": [dict(fact(w, None, name="Device A",
+                line="Device A (A17) load 80."), nomination_key="Device A")]}
+    report = run(text, Backend(reply), max_chars=38)
+    one, = report["objects"]
+    assert report["nominations"][0]["object_id"] == one["object_id"]
+    claim, = report["observations"]
+    assert claim["qualified"] and claim["owner_id"] == one["object_id"]
+
+
+def test_one_cell_claimed_as_two_fields_is_held_once_with_both_proposals():
+    source = "| Asset | Load | Weight |\n|---|---|---|\n| Unit Q | 80 | 17 |"
+    def reply(packet):
+        w = packet["windows"][0]
+        if packet["stage"] == "inventory":
+            return {"objects": [card(w, name="Unit Q")]}
+        base = fact(w, packet["objects"][0]["object_id"], name="Unit Q", line="Unit Q")
+        base.update(property_source=cite(w, "Load"), fit_source=cite(w, "Load"))
+        return {"nominations": [], "facts": [base, {**base, "field": "weight", "property_source": cite(w, "Weight")}]}
+    report = run_entity_first(source, {"load": "Reported load", "weight": "Reported weight"}, "individual assets",
+                              Backend(reply))
+    obs, = report["observations"]
+    assert not obs["qualified"] and obs["reason"] == "conflicting_assignments"
+    first, second = report["calls"][-1]["fact_decisions"]
+    assert first["observation_id"] == second["observation_id"] == obs["observation_id"]
+    assert (first["action"], second["action"]) == ("retained", "conflicting")
+    assert [d["assessment"]["property_source"]["quote"] for d in (first, second)] == ["Load", "Weight"]
+
+
+@pytest.mark.parametrize("stage", ["inventory", "rescue"])
+@pytest.mark.parametrize("transposed", [False, True])
+def test_table_identity_uses_its_separate_role_header_on_either_axis(stage, transposed):
+    rows = [("Specimen", "Load"), ("S7", "80")]
+    if transposed:
+        rows = list(zip(*rows))
+    source = "<table>" + "".join("<tr>" + "".join(f"<td>{v}</td>" for v in row) + "</tr>" for row in rows) + "</table>"
+    def reply(packet):
+        w = packet["windows"][0]
+        def cell(value):
+            ref = next(k for k, v in w["cells"].items() if v == value)
+            return {"window": f"{w['id']}@{ref}"}
+        identity = {"key": "s", "label": "S7", "mention": cell("S7"), "qualification": cell("Specimen")}
+        wrong = {"key": "wrong", "label": "S7", "mention": cell("S7"), "qualification": cell("Load")}
+        if packet["stage"] == "inventory":
+            return {"objects": [identity, wrong] if stage == "inventory" else []}
+        return {"nominations": [identity, wrong] if stage == "rescue" else [], "facts": []}
+    report = run(source, Backend(reply))
+    obj, = report["objects"]
+    assert obj["label"] == "S7" and obj["stage"] == stage
+    assert [s["quote"] for s in obj["evidence"]] == ["S7", "Specimen"]
+    rejected = report["issues"] if stage == "inventory" else [n for n in report["nominations"] if not n["object_id"]]
+    assert [entry["reason"] for entry in rejected] == ["invalid_identity_evidence"]
+
+
+def test_later_registered_homonym_invalidates_only_earlier_unqualified_selection():
+    source = "R1 load 80.\n\nEast R1 load 70.\n\nWest R1 load 60."
+    def reply(packet):
+        w = packet["windows"][0]
+        line = w["text"].strip()
+        if packet["stage"] == "inventory":
+            return {"objects": [card(w, name="R1")]}
+        if line.startswith("R1"):
+            oid = packet["objects"][0]["object_id"]
+            return {"nominations": [], "facts": [fact(w, oid, name="R1", line=line)]}
+        place, value = ("West", "60") if "West" in line else ("East", "70")
+        known = card(w, name="R1", scope=place)
+        claim = dict(fact(w, None, name="R1", line=line, value=value), nomination_key=known["key"])
+        return {"nominations": [known], "facts": [claim]}
+    report = run(source, Backend(reply), max_chars=20)
+    early, east, west = report["observations"]
+    assert (early["direct"]["label"], early["target"]["status"], early["qualified"]) == ("R1", "unknown", False)
+    assert {c["qualifier"] for c in early["candidates"]} == {"East", "West"}
+    assert east["qualified"] and west["qualified"] and east["owner_id"] != west["owner_id"]
+    first = next(c for c in report["calls"] if c["stage"] == "attributes")
+    assert first["fact_decisions"][0]["assessment"]["target"]["status"] == "supported"
+
+
+def test_same_source_identity_with_conflicting_kind_is_not_overwritten():
+    def reply(packet):
+        w = packet["windows"][0]
+        if packet["stage"] == "inventory":
+            identity = card(w, name="Study 7")
+            return {"objects": [{**identity, "kind": "instance"}, {**identity, "kind": "group"}]}
+        return {"nominations": [], "facts": []}
+    report = run("Study 7 was registered.", Backend(reply))
+    obj, = report["objects"]
+    assert obj["kind"] == "instance"
+    assert report["issues"][0]["reason"] == "conflicting_identity_at_same_mention"

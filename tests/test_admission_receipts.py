@@ -1,10 +1,14 @@
 """The received answer is an audit record even when its scientific attribution fails."""
 
 import json
+from hashlib import sha256
+from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 
-from attestextract.admission_receipts import collect_receipts
+from attestextract.admission_receipts import collect_receipts, freeze_assignment
+from attestextract.execution import digest
 from attestextract.entity_first import run_entity_first
 from attestextract.models import BackendResponse
 
@@ -39,8 +43,33 @@ class Recorder:
 
 
 def recorded(backend):
-    return run_entity_first(SOURCE, {"amount": "Item count"}, "units", backend, max_calls=8,
-                            format_retries=int(backend.retry), secrets=["secret-example"])
+    # Build the frozen v2 wire contract without running the retired live workflow.
+    task = {"row_subject": "units", "fields": {"amount": "Item count"}}
+    window = {"id": "block-00001", "scope": "document", "kind": "text",
+              "text": SOURCE, "start": 0, "role": "primary"}
+    block = {"block_id": window["id"], "start": 0, "end": len(SOURCE),
+             "scope": window["scope"], "kind": "text", "reported_facts": 2}
+    report = {"source_sha256": sha256(SOURCE.encode()).hexdigest(), "admission_receipt_version": 1,
+              "admission_run_id": uuid4().hex, "admission_task": task, "table_subject": "units",
+              "blocks": [block], "observations": [], "calls": []}
+    stages = ["inventory", "attributes"] + (["attributes"] if backend.retry else [])
+    for number, stage in enumerate(stages, 1):
+        attempt = 2 if number == 3 else 1
+        stem = f"entity-{stage}-{number:06d}" + (".format-2" if attempt == 2 else "")
+        packet = {"windows": [window], "objects": []}
+        messages = [{"role": "system", "content": "Return JSON."},
+                    {"role": "user", "content": json.dumps({"stage": stage, "task": task, **packet})}]
+        request = SimpleNamespace(messages=messages, artifact_stem=stem, format_attempt=attempt)
+        response = backend.generate(request)
+        complete = response.text != "{"
+        call = {"stage": stage, "artifact_stem": stem, "blocks": [window["id"]], "attempts": 1,
+                "request_id": "", "model": "fixture", "finish_reason": "", "format_attempt": attempt,
+                "usage": {"total_tokens": 2}, "request_digest": digest(messages), "roster_size": 0,
+                "state": "complete" if complete else "invalid_response_contract"}
+        if stage == "attributes" and complete:
+            call["assignment_receipt"] = freeze_assignment(packet, json.loads(response.text))
+        report["calls"].append(call)
+    return report
 
 
 def legacy(run, report, backend, *, responses=False):
@@ -131,7 +160,8 @@ def test_unverified_answers_report_a_gap_not_a_verified_empty_answer(tmp_path, f
 
 
 def test_json_escaped_credential_never_reaches_the_archive():
-    report = recorded(Recorder(escaped_secret=True))
+    report = run_entity_first(SOURCE, {"amount": "Item count"}, "units", Recorder(escaped_secret=True),
+                              max_calls=8, secrets=["secret-example"])
     assert "secret-example" not in json.dumps(report)
-    receipts, coverage = collect_receipts(SOURCE, report)
-    assert not receipts and coverage[0]["reason"] == "credential_in_response"
+    assert report["calls"][-1]["state"] == "credential_in_response"
+    assert "assignment_receipt" not in report["calls"][-1]

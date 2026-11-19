@@ -113,6 +113,9 @@ def admission_annotation(dataset: dict) -> tuple[dict, list[dict]]:
             values.append(item)
         else:
             pointer = f"/review_proposals/{len(held)}"
+            if "source_subject" in p:
+                item.update(source_subject=p["source_subject"], candidate_subjects=[
+                    {k: candidate.get(k) for k in ("id", "label", "qualifier")} for candidate in p["candidate_subjects"]])
             held.append({**item, "suggested_field": field, "candidate_subject": p["candidate_subject"],
                          "candidate_basis": p["candidate_basis"], "direct_status": p["direct"]["status"],
                          "target_status": p["target"]["status"]})
@@ -212,8 +215,15 @@ def render_annotation(data: dict, *, secrets: Iterable[str] = ()) -> str:
                   "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
         for p in data["review_proposals"]:
             fit = {"supported": "口径有据", "contradicted": "不适配", "unknown": "待核"}.get(p["fit"], p["fit"])
-            cells = (p["direct_subject"] or "定位待核", p["candidate_subject"] or "模型未提名",
-                     p["target_subject"] if p["target_status"] == "supported" else "身份待核",
+            direct = p["direct_subject"] or "定位待核"
+            if "source_subject" in p and p["direct_status"] != "supported":
+                direct = (p["direct_subject"] or p["source_subject"] or "") + "（归属待核）"
+            identity = p["target_subject"] if p["target_status"] == "supported" else "身份待核"
+            if p.get("candidate_subjects") and p["target_status"] != "supported":
+                alternatives = [s["label"] + (f"（{s['qualifier']}）" if s.get("qualifier") else "")
+                                for s in p["candidate_subjects"]]
+                identity += " · " + " / ".join(alternatives)
+            cells = (direct, p["candidate_subject"] or "模型未提名", identity,
                      p["source_property"] or "未定位", p["value"], p["unit"] or "", p["conditions"] or "",
                      p["statistic"] or "", p["suggested_field"], fit, p["reason"], p["source"])
             evidence = "<br>".join(_literal(q, secrets) for q in p["evidence"]) or "未定位"

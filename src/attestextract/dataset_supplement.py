@@ -88,8 +88,13 @@ def _reserve(db, job, provider, maximum):
 
 
 def _review(db, reservation, job, pack, backend, source, conflicts, secrets):
+    instructions = _INSTRUCTIONS
+    if pack.get("protocol_version") == "entity-first-v3":
+        instructions += (" The frozen source subject may be a local mention without a roster ID. For a target "
+                         "use one of the listed target_ids. Distinguish homonyms using their names or qualifiers "
+                         "within the measurement's applicability.source. Return unknown if still ambiguous.")
     request = ExtractionRequest(chunk_id=job, messages=[
-        {"role": "system", "content": _INSTRUCTIONS + "\nResponse schema: " + _json(Review.model_json_schema())},
+        {"role": "system", "content": instructions + "\nResponse schema: " + _json(Review.model_json_schema())},
         {"role": "user", "content": _json(pack)}], output_schema=Review.model_json_schema())
     usage, calls = {}, 1
     try:
@@ -106,6 +111,8 @@ def _review(db, reservation, job, pack, backend, source, conflicts, secrets):
             usage = {redact_text(key, secrets): value for key, value in usage.items()}
             if calls != 1:
                 raise ValueError("backend_hidden_retry")
+            if pack.get("protocol_version") == "entity-first-v3" and response.finish_reason == "length":
+                raise ValueError("truncated_review_response")
             detail = validate_response(source, pack, response.text, conflicts)
             serialized = _json(detail)
             if redact_text(serialized, secrets) != serialized:
@@ -134,8 +141,10 @@ def run_supplement(dataset: dict, source: str, *, ledger_path, max_calls: int, b
     material. Injected adapters must issue at most one generation request per invocation.
     An injected adapter can supply its credential strings via secrets for output protection.
     """
-    if dataset.get("subject_strategy") == "entity-first":
-        raise ValueError("Entity-first uses its own bounded nomination review; legacy supplement is unsupported.")
+    entity_first = dataset.get("subject_strategy") == "entity-first"
+    if entity_first and dataset.get("protocol_version") != "entity-first-v3":
+        raise ValueError("Supplemental entity-first review requires a two-pass entity-first-v3 run.")
+    protocol = "entity-first-review-v1" if entity_first else PROTOCOL_VERSION
     if type(max_calls) is not int or max_calls < 0:
         raise ValueError("max_calls must be a nonnegative cumulative integer budget.")
     source_hash = sha256(source.encode("utf-8")).hexdigest()
@@ -160,7 +169,7 @@ def run_supplement(dataset: dict, source: str, *, ledger_path, max_calls: int, b
     document_id = dataset["document_id"]
     with closing(_open_ledger(ledger_path, digest([document_id, source_hash]))) as db:
         for pack in review_packs(dataset, source):
-            job = "supplement-" + digest([PROTOCOL_VERSION, pack, sorted(sorted(c) for c in conflicts)])[:32]
+            job = "supplement-" + digest([protocol, pack, sorted(sorted(c) for c in conflicts)])[:32]
             jobs.append(job)
             serialized = _json(pack)
             if redact_text(serialized, secrets) != serialized:
@@ -192,6 +201,6 @@ def run_supplement(dataset: dict, source: str, *, ledger_path, max_calls: int, b
         if latest.get(job) != "complete":
             pending.append({"job_id": job, "reason": "packet_size_limit" if job in oversized
                             else latest.get(job, "not_dispatched")})
-    return {"protocol_version": PROTOCOL_VERSION, "document_id": document_id, "source_sha256": source_hash,
+    return {"protocol_version": protocol, "document_id": document_id, "source_sha256": source_hash,
             "max_calls": max_calls, "attempts_used": sum(row[6] for row in rows), "usage": dict(usage),
             "decisions": decisions, "failures": failures, "pending": pending}

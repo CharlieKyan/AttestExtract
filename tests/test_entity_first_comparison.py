@@ -35,9 +35,6 @@ class TwoObjectBackend:
             if not self.missing:
                 objects.append(proposal(second, "second"))
             response = {"objects": objects}
-        elif stage == "confirm":
-            response = {"decisions": [{"key": "new", "status": "new_object",
-                                       "evidence": citation(second), "reason": "A named target in this block."}]}
         else:
             ids = {card["label"]: card["object_id"] for card in packet["objects"]}
             nominations = []
@@ -47,11 +44,13 @@ class TwoObjectBackend:
             facts = []
             for label, value in [(first, "80"), (second, "60"), ("Total", "140")]:
                 owner = ids.get(label)
-                facts.append({"field": self.field, "value": value, "owner": owner,
-                              "value_source": citation(value), "owner_source": citation(label),
+                facts.append({"field": self.field, "value": value,
+                              "target_id": owner if owner != "new" else None,
+                              "nomination_key": "new" if owner == "new" else None,
+                              "value_source": citation(value), "source_subject": label, "subject_source": citation(label),
                               "property_source": citation(self.prop), "link_source": citation(label),
                               "fit_source": citation(self.prop), "fit": "supported" if owner else "unknown",
-                              "direct": owner is not None, "purpose": "aggregate" if label == "Total" else "measurement",
+                              "purpose": "aggregate" if label == "Total" else "measurement",
                               "reason": "Local table assignment."})
             response = {"nominations": nominations, "facts": facts}
         return BackendResponse(text=json.dumps(response), model="synthetic", usage={"total_tokens": 10})
@@ -79,5 +78,5 @@ def test_local_source_recovers_omitted_target_and_preserves_group_total(subject,
         assert len(report["observations"]) == 3
         total = next(o for o in report["observations"] if o["value"] == "140")
         assert not total["qualified"] and total["owner_id"] is None
-        assert report["budget"]["calls_used"] == (3 if rescue and missing else 2)
+        assert report["budget"]["calls_used"] == 2
         assert report["budget"]["usage"]["total_tokens"] == 10 * report["budget"]["calls_used"]

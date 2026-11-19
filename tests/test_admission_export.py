@@ -2,52 +2,31 @@ import csv
 import json
 from copy import deepcopy
 
-from attestextract import assemble_from_files, cli, extract
+from pathlib import Path
+
+from attestextract import assemble_from_files, cli
 from attestextract.annotation_view import build_annotation
 from attestextract.execution import digest
-from attestextract.models import BackendResponse
+from attestextract.models import ExtractionResult
+from attestextract.dataset_io import save_dataset
 
 
 SOURCE = "Bench A produced 80 boxes. Both benches together produced 140 boxes."
-TASK = {"prompt_description": "Extract counts for individual benches.",
-        "field_list": {"bench": "Bench name", "count": "Count produced by this individual bench"}}
-
-
-class Answers:
-    name = "synthetic"
-
-    def generate(self, request):
-        packet = json.loads(request.messages[-1]["content"])
-        window = packet["windows"][0]["id"]
-
-        def cite(quote):
-            return {"window": window, "quote": quote}
-
-        sentence = SOURCE.split(".")[0]
-        if packet["stage"] == "inventory":
-            answer = {"objects": [{"key": "a", "label": "Bench A", "mention": cite("Bench A"),
-                                   "qualification": cite(sentence)}]}
-        else:
-            owner, = packet["objects"]
-            positive = {"owner": owner["object_id"], "field": "count", "value": "80", "unit": "boxes",
-                        "value_source": cite("80"), "owner_source": cite("Bench A"), "property_source": cite("produced"),
-                        "link_source": cite(sentence), "fit_source": cite(sentence), "fit": "supported",
-                        "purpose": "measurement", "direct": True, "reason": "Count in the first sentence."}
-            positive["property_source"].update(occurrence=0)
-            total = dict(positive, owner=None, value="140", value_source=cite("140"), fit="unsupported",
-                         direct=False, purpose="aggregate", reason="Both benches combined.")
-            rejected = dict(positive, value="17", value_source=cite("17"))
-            answer = {"facts": [positive, positive, total, rejected], "nominations": []}
-        return BackendResponse(text=json.dumps(answer), usage={"total_tokens": 10})
+ARCHIVE = Path(__file__).parent / "fixtures/entity_first_v2/export.json"
 
 
 def run(tmp_path):
+    """Read a synthetic result originally produced by the released v2 writer."""
     path = tmp_path / "source.md"
     path.write_bytes(SOURCE.encode())
     run_dir = tmp_path / "run"
-    result = extract(SOURCE, **TASK, backend=Answers(), subject_strategy="entity-first",
-                     table_subject="individual benches", dataset_options={"subject_label_field": "bench"},
-                     output_dir=run_dir)
+    run_dir.mkdir()
+    payload = ARCHIVE.read_bytes()
+    (run_dir / "result.json").write_bytes(payload)
+    result = ExtractionResult.model_validate_json(payload)
+    result.dataset = assemble_from_files(path, run_dir)
+    assert digest(result.dataset) == result.entity_first["admission_dataset_digest"]
+    save_dataset(result.dataset, run_dir / "dataset")
     return result, path, run_dir
 
 

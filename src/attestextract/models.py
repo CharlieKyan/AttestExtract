@@ -345,7 +345,7 @@ class ChunkProvenance(ContractModel):
 class RunInfo(ContractModel):
     backend: str
     mode: Literal["live", "replay"]
-    output_protocol: Literal["flat-v1", "native-v1", "entity-first-v1", "entity-first-v2"] = "native-v1"
+    output_protocol: Literal["flat-v1", "native-v1", "entity-first-v1", "entity-first-v2", "entity-first-v3"] = "native-v1"
     chunk_count: int
     response_count: int
     candidate_count: int

@@ -1,63 +1,61 @@
 # 实体优先抽取
 
-当主表一行代表一种明确的对象时，可选择实验模式 `entity-first`。例如车间日报列出 A 线 80 箱、B 线 60 箱和两线合计 140 箱。框架先建生产线名册，再在同一处原文比较局部对象。若名册漏掉 B 线，可以保留 B 的提名和 60 箱的原文；通过独立确认后写入 B 行。合计数可留在观测明细。
+主表一行代表一个明确对象时，可以选用实验策略 `entity-first`。例如日报说“A 线早班产出 80 箱，B 线早班产出 60 箱，两线合计 140 箱”。第一遍登记文章提到的生产线。第二遍填属性，即使 B 漏登了，只要本次原文清楚、符合任务且身份没有冲突，也可当场补登 B 并把 60 填给它。140 在明细中按组合保存一次。只有名字的 C 留在名册。
 
-## 命令行
+## 开始使用
 
-使用现有 `prompt_description` 和 `field_list` 任务。下面的 `task.json` 和 `dataset-options.json` 分别是一个可用的合成任务和身份列配置。
+准备原文 `log.md` 和现有格式的任务 `task.json`。
 
 ```json
 {"prompt_description":"Extract the count produced by each named line.","field_list":{"line":"Production line name","count":"Number of boxes produced by this individual line"}}
 ```
+
+如需把可读的名册名称填到指定身份列，另存 `dataset-options.json`。
 
 ```json
 {"subject_label_field":"line"}
 ```
 
 ```sh
-attestextract extract --input log.md --task task.json --model-id deepseek:deepseek-flash --env-file .env --table-subject "individual named production lines" --dataset-config dataset-options.json --subject-strategy entity-first --max-model-calls 24 --output-dir output/lines-01
+attestextract extract --input log.md --task task.json --table-subject "individual named production lines" --dataset-config dataset-options.json --subject-strategy entity-first --model-id deepseek:deepseek-flash --env-file .env --max-model-calls 24 --output-dir output/lines-01
 ```
 
-添加 `--check` 可在本地查看源块数和调用上限。正式运行读取原始 UTF-8 文本，输出目录使用新路径。比较严格名单时添加 `--no-entity-rescue`，使用相同预算和另一输出目录。省略策略参数时沿用观测优先。Python 的 `extract` 支持 `subject_strategy="entity-first"`、`entity_rescue=False` 和原有的 `table_subject`、`dataset_options`。
+加 `--check` 可做离线预检。正常抽取请选择新的输出目录。省略 `--subject-strategy` 时使用观测优先。Python 的 `extract` 支持相同的 `subject_strategy`、`table_subject`、`dataset_options`，预算由 `ExecutionOptions(max_model_calls=...)` 指定。
 
-## 调用和证据
+## 两遍怎样读
 
-每个文档共享生成预算，优先使用 `--max-model-calls`，其次使用显式 `--max-analysis-calls`，两者都未设置时按可读块数给出预算。名单阶段可以合并局部原文。属性阶段独立遍历可读块，一个块可提供多个对象的属性。提名在本块集中确认；有已恢复对象、原值和待解归属时，最多一轮局部回查。格式重试也使用同一预算。严格模式仍然读取零命中块。Python 可以通过 `ExecutionOptions(max_model_calls=...)` 显式设置上限。
+1. **登记对象。** 每张卡保存篇内 ID、原文名称、身份依据、明确的别名和适用的限定信息。模型根据任务的行粒度提名对象。跨章节复用一张卡需要有相符的原文身份。相同短名存在多个厂区、批次或情景时，可分别登记。
+2. **填写属性。** 每个可读原文块都进入队列。请求放得下时提供完整紧凑名册；大名册按名称、别名和局部语境选卡，可能竞争的同名卡成组展示。一次可以给多个对象填属性，也可只报告对象、交回空结果或标记待查区域。每条提议分别给出原文直接主体、原值、字段依据和可为空的所选 ID。已有卡可直接接收有据且口径相符的值。新增对象经同块证据和篇内身份核对后即可收值。留有歧义的属性进入明细。
 
-关系与字段口径由模型提出。程序核对证据的原文位置、局部端点、数值及表格位置等约束。返回的对象名、属性名或值即使同时出现在引文里，语义仍可能有误，需根据任务评价。涉及多个同名对象时保留区分语境；定性值与数值均可抽取。未能解析的网格或图片、未读块、失败调用、引文问题和未确认提名保存在报告中。文本分块覆盖与实体召回率分别评价。
+表格支持原始行列坐标，行首、列头、统计子标题及值格可分别引用。组合和分类用途需要按用户字段定义解释。图像或网格损坏会限制可读范围。局部证据检查也可能漏掉隐含矛盾，科研正确性仍须按任务验收。
 
-选预算时先看 `--check` 的 `readable_blocks`。当前实现每个可读块各需一次属性请求；建名册、确认新对象和可选格式重试也占用上限。例如有 58 个可读块时，48 次调用不足以读完属性。`--check` 显示的是运行计划，实际使用量以 `entity-first.json` 的 `budget` 为准。
+两个阶段共用一个生成预算。一篇长文通常有多次名册和属性请求。局部响应被截断时，程序保留用量，先继续其他独立块，再在剩余预算内尝试补全失败区域。鉴权或送达状态未知的失败会单独记录。`--no-entity-rescue` 可用于严格名单对照。它关闭第二遍补登，零命中块仍会读取。
 
-## 阅读和复现
+## 查看结果
 
-dev44 生成 `entity-first-v2` 档案。假设原文为“B 线完成 60 箱”，程序可以在已定位的原句内截取唯一的“B 线”和“60”，同时保存较长引文、原始提名和模型给出的口径。定性短语也可以这样定位。数值边界、身份范围、属性归属和字段定义分别检查。提名待核或字段含义有冲突时，可以按候选名称探索明细。主表还要求对象与字段适用性得到支持。语言上的隐含条件和矛盾仍可能需要专业复核。
+| 文件 | 可以查到什么 |
+| --- | --- |
+| `dataset/main.csv` | 用户 schema 的正式行，每行至少一项已接收的非身份属性。条件或统计口径不同可以分行。 |
+| `dataset/roster.csv` | 所有已登记对象、别名、范围、登记来源、出处以及各自的正式行数。首次在属性阶段登记的卡标记为 `rescue`。 |
+| `dataset/annotation.md` | 可读的正式记录和待核提议，包括直接主体、候选身份、字段、原值及引文。 |
+| `dataset/observations.csv`、`dataset/proposals.csv` | 一条科学观测及其各次模型提议。按 `observation_id` 计数，按 `proposal_id` 追踪回答。 |
+| `dataset/lineage.json` | 对象、行、单元格和原文位置。schema 没有身份列时，可按此文件的行序查询主体。 |
+| `entity-first.json`、`report.md` | 每个块的读取状态、补登情况、实际调用阶段和用量。模型读完一个块而未报告属性，与该块未派发或回答不完整分别记录。 |
 
-表格窗口提供从零开始的原始行列编号。例如 `{"window":"block-00001@r2c1"}` 表示该窗口所展示的第 3 行、第 2 列的格。主体、值、属性和单位都能引用可见格。一个块可同时返回对象提名、属性与少量需要查看的原文区域。`blocks[].attribute_outcome=no_target_facts_reported` 表示这次完整回答未报告目标属性，`review_regions` 给出保留范围。未派发、失败和不可读的块分别保留处理状态。
+正常完成返回 0。返回 2 请查看报告中哪些原文块或协议回答未完成。单条属性待核可以出现在已完成的运行中。行数反映可用观测和条件分组，评价时同时核对对象、属性、值、口径、出处和错挂。
 
-返回 `finish_reason=length` 时，调用账本保留原回答的位置或脱敏文本、用量和实际结束原因。属性阶段先读其余独立块，然后在剩余预算内对失败块补读一轮。可拆的表块分配互不重叠的值格范围，共同表头和相邻主体格仍可作证据。如果无法确定分界，可重读整个失败块。截断文本不产生正式事实。全局连接或鉴权错误会停止派发。整个过程使用本次运行的累计预算；再次启动新的在线抽取会开启另一次计费运行。
-
-- `report.md` 给出运行状态和数量。`entity-first.json` 保存首轮对象、后补对象、提名判定、每块各阶段状态，以及共享预算与用量。`result.json` 内含冻结快照。
-- `summary` 列出首轮提议数、准入对象数、使用空名单的属性请求数、实际带属性的主表行数。检查 `calls`、`blocks[].recovery`、`issues` 可区分格式、截断、证据或输入问题。明细保留模型原始主张及证据位置，`lineage.json` 保留提名与待核区域的索引。旧 v1 档案仍可从原始快照重建。
-- `dataset/main.csv` 保持任务字段顺序，`subject_label_field` 指定可读的对象名列。`dataset/observations.csv` 保存原值、主体、条件、统计口径、判定及证据。`dataset/lineage.json` 可逐格回溯。如果完整 schema 没有身份或统计量列，分发时请同时提供明细和溯源。
-- `attestextract assemble-dataset --input log.md --run-dir output/lines-01 --output-dir output/rebuilt-01` 可从实体优先快照离线重建。读取带分析文件的历史观测优先运行沿用原入口。
-- 退出码 0 表示此次流程完成。退出码 2 表示覆盖或判定链有未完成工作，应查看每块状态和已有结果；配置错误返回 1。本实验使用固定的单次尝试后端，不支持旧分析检查点的恢复或旧版补查协议。重新启动一次在线抽取会创建一个新的计费运行。
-
-## 离线审计每条属性提议
-
-dev45 的实体优先抽取会将已完成的属性回答和局部回查回答记录在快照里。打开 `dataset/proposals.csv` 可以逐条核对直接对象、原文属性、原值、单位、条件、统计口径、模型提名的对象和建议字段。运行目录里已有 dev44 的原始请求和回答时，使用原输入文件和一个新的输出目录。
+## 离线重建和按需补读
 
 ```sh
-attestextract assemble-dataset --audit-admission --input log.md --run-dir output/lines-01 --output-dir output/lines-audit
+attestextract assemble-dataset --input log.md --run-dir output/lines-01 --output-dir output/rebuilt-01
 ```
 
-这个命令完全离线，直接在 `output/lines-audit` 下生成文件。dev44 的原始诊断应与 `result.json` 保存在同一运行目录。省略选项可以重建这批旧候选的原严格结果。dev45 快照内置提议，常规重建会生成提议级视图。
+dev46 的快照标记 `entity-first-v3`。重建核对原文、任务、候选及快照，用抽取时保存的同一判断生成各视图。旧 v1/v2 快照继续按其版本重建。dev44 的逐提议审计可添加 `--audit-admission`，需要原始请求和回答诊断；dev45 的提议已内嵌在快照中。
 
-- `proposals.csv` 中每条提议有独立的 `proposal_id`。例如“B 线早班产出 60 箱”可以显示原句中的“B 线早班”和 60，即使早班的名册 ID 仍待核。可先看 `direct_subject` 与 `candidate_subject`，再看 `direct`、`target` 和 `fit` 三项判定的状态、理由和证据。只有模型建议字段、缺少可定位的原文属性表述时，`source_property` 留空。
-- `prior_disposition` 和 `prior_reason` 记录旧规则的处理。`disposition` 给出本次去向。`in_main` 能追到正式行，`located_detail` 能追到已定位的观测，`proposal_only` 仅保有模型提议，`superseded` 标识已有记录证明被后续回查替换的原提议。多次提到同一处测量时，按 `observation_id` 查看科学观测，`proposal_id` 用于统计模型回答。
-- `main.csv` 保持任务 schema。`observations.csv` 和 `lineage.json` 保存观测及证据。`annotation.md` 和 `annotation.json` 分列正式结果与待核提议。两条生产线的合计观察可按成员检索，组合值在明细中保留一次。
-- `dataset.json` 中的 `admission.coverage` 区分已完整回答且属性数为零的调用与历史回答缺失、截断或不匹配的调用。后者会标明调用和原因，审计命令返回 2。原来的主表在 `admission.strict_rows` 中可查。缺少对应回答的旧观测留在明细中供复核，去向为 `missing_proposal_receipt`，审计后的主表只接收已核对来源的属性。
-- 未派发的块可在原运行 `entity-first.json` 的 `blocks` 中查看。输入与冻结快照不一致时命令报错。原文里有事实而模型从未提出时，复核者需要对照原文另作漏抽标注。
+若明确希望模型补看有来源的疑难项，另行启动：
 
-## 怎样作比较
+```sh
+attestextract supplement-dataset --input log.md --run-dir output/lines-01 --ledger output/lines-review.sqlite --max-calls 3 --model-id deepseek:deepseek-flash --env-file .env
+```
 
-使用相同的原文、字段、模型和总预算。对照观测优先时，将其抽取和查证两项预算合计；实体优先计入名册、属性、遗漏确认和局部回查。在源码范围明确且人工逐项核对的段落或表块计算对象和属性召回，分别统计错误建行、错挂、遗漏对象连带损失的属性、调用和 token。固定模型回答并故意从首轮清单删去一个对象，只能验证恢复机制；自然遗漏率和线上质量需要独立的模型运行与评审。
+用同一账本继续时累计计费尝试。结果按模型判断单列，保留原抽取快照供对照。普通两遍抽取结束后由用户决定是否启动补读；完全漏提的事实需要另行读原文评测。

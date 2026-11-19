@@ -41,3 +41,11 @@ def test_malformed_grid_is_reported_at_its_original_location():
 def test_empty_source_is_not_reported_as_covered(source):
     with pytest.raises(ValueError):
         source_blocks(source)
+
+
+def test_each_paragraph_that_fits_stays_with_its_number_and_unit():
+    lines = ["Specimen A has mass 40 g.", "Specimen A has temperature 20 K."]
+    source = "\n\n".join(lines)
+    blocks = source_blocks(source, max_chars=max(map(len, lines)))
+    assert [b["text"].strip() for b in blocks] == lines
+    assert "".join(b["text"] for b in blocks) == source
