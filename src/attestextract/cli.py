@@ -62,6 +62,8 @@ def _parser() -> argparse.ArgumentParser:
     assemble = commands.add_parser("assemble-dataset", help="Build a dataset offline from a frozen run")
     assemble.add_argument("--input", required=True, type=Path, help="Original UTF-8 text or Markdown")
     assemble.add_argument("--run-dir", required=True, type=Path, help="Run containing result.json and analysis/analysis.json")
+    assemble.add_argument("--audit-admission", action="store_true",
+                          help="Reassess frozen entity-first proposals from the original responses offline")
     assemble.add_argument("--output-dir", required=True, type=Path, help="New directory for the dataset")
     assemble.add_argument("--result", type=Path, help="Override the result.json path")
     assemble.add_argument("--analysis", type=Path, help="Override the analysis.json path")
@@ -182,6 +184,16 @@ def _export_review(args: argparse.Namespace) -> int:
         payload = json.loads(source.read_bytes().decode("utf-8-sig"),
                              object_pairs_hook=_unique_object, parse_constant=_reject_constant)
         result = ExtractionResult.model_validate(payload)
+        if result.entity_first and result.entity_first.get("admission_dataset_digest"):
+            from .dataset_io import _read_json_object
+            from .execution import digest
+            paired = source.parent / "dataset" / "dataset.json"
+            if not paired.is_file():
+                raise ConfigurationError("Review export needs dataset/dataset.json from this entity-first run.")
+            data = _read_json_object(paired)
+            if digest(data) != result.entity_first["admission_dataset_digest"]:
+                raise ValueError("Mismatched entity-first admission dataset.")
+            result.dataset = data
         if result.run.routes:
             from .automatic_provenance import validate_automatic_provenance
             validate_automatic_provenance(result)
@@ -488,8 +500,14 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
             from .dataset_io import assemble_from_files, load_dataset_options
             options = load_dataset_options(args.dataset_config)
             dataset = assemble_from_files(args.input, args.run_dir, result_path=args.result,
-                analysis_path=args.analysis, output_dir=args.output_dir, raw_only=args.raw_only, **options)
+                analysis_path=args.analysis, output_dir=args.output_dir, raw_only=args.raw_only,
+                audit_admission=args.audit_admission, **options)
             print(f"Wrote {len(dataset['rows'])} rows and {len(dataset['observations'])} observations to {args.output_dir}")
+            if "admission" in dataset:
+                gaps = sum(c["status"] == "gap" for c in dataset["admission"]["coverage"])
+                print(f"Audited {len(dataset['proposals'])} proposals; {gaps} call gaps. See proposals.csv and dataset.json.")
+                if gaps:
+                    return 2
             return 0
         if args.command == "supplement-dataset":
             return _supplement_dataset(args, registry)

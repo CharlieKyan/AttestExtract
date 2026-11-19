@@ -3,7 +3,9 @@
 from collections import Counter, defaultdict
 from hashlib import sha256
 import json
+from uuid import uuid4
 
+from .admission_receipts import freeze_assignment
 from .diagnostics import redact_text
 from .entity_first_blocks import recovery_blocks, source_blocks
 from .entity_first_protocol import (Assignments, Confirmations, Inventory, attach_table_cells, entity_record,
@@ -113,6 +115,7 @@ class _Calls:
         self.http_attempts = self.response_count = 0
         self.fatal = False
         self.model = None
+        self.has_assignment_receipt = False
 
     def messages(self, stage, packet):
         # Repeat the contract in content for providers with JSON-object-only support.
@@ -206,7 +209,13 @@ class _Calls:
                 record["state"] = "credential_in_response"
                 return None, record["state"]
             try:
-                result = schema.model_validate(load_json(response.text))
+                answer = load_json(response.text)
+                # JSON escapes can encode a credential absent from the raw response string.
+                canonical = _json(answer)
+                if redact_text(canonical, self.secrets) != canonical:
+                    record["state"] = "credential_in_response"
+                    return None, record["state"]
+                result = schema.model_validate(answer)
             except (ValueError, RecursionError):
                 record["state"] = "invalid_response_contract"
                 if step < self.retries:
@@ -217,6 +226,9 @@ class _Calls:
             record["state"] = "complete"
             if stage == "inventory":
                 record["object_proposals"] = len(result.objects)
+            elif stage in ("attributes", "revisit"):
+                record["assignment_receipt"] = freeze_assignment(packet, answer)
+                self.has_assignment_receipt = True
             return result, None
 
     def summary(self):
@@ -263,6 +275,8 @@ def _same_observation(existing, new, issues):
         existing.update(qualified=False, owner_supported=False, owner_id=None, reason="conflicting_assignments")
         issues.append({"block": existing["block_id"], "reason": "conflicting_assignments",
                        "observation_id": existing["observation_id"], "competing_claim": new["model_claim"]})
+        return "conflicting"
+    return "coalesced"
 
 
 def run_entity_first(source, fields, table_subject, backend, *, max_calls=None, rescue=True, max_chars=3600,
@@ -464,23 +478,39 @@ def run_entity_first(source, fields, table_subject, backend, *, max_calls=None, 
             continue
         table = next((t for t in tables if t.span.start <= b["start"] < t.span.end), None)
         seen = set()
+        decisions = []
+        calls.calls[-1]["revisit_decisions"] = decisions
         if result.nominations:
             issues.append({"block": bid, "reason": "revisit_cannot_nominate"})
-        for fact in result.facts:
+        for index, fact in enumerate(result.facts):
+            decision = {"fact_index": index, "observation_id": None}
+            decisions.append(decision)
             try:
-                if fact.owner not in choices and fact.owner is not None:
-                    raise ValueError("revisit_owner_not_shown")
                 obs = fact_record(fact, windows([b]), b, source, document, fields, relevant, table)
                 oid = obs["observation_id"]
+                if oid in pending:
+                    decision["observation_id"] = oid
+                if fact.owner not in choices and fact.owner is not None:
+                    raise ValueError("revisit_owner_not_shown")
                 if oid not in pending or obs["owner_id"] not in recovered_ids:
                     raise ValueError("revisit_outside_scope")
+                if not obs["qualified"]:
+                    raise ValueError("revisit_field_unconfirmed")
+                original = pending[oid]
+                if any(original[k] != obs[k] for k in ("value", "unit", "statistic", "conditions", "purpose")):
+                    raise ValueError("revisit_changes_measurement")
                 if oid in seen:
-                    _same_observation(observations[oid], obs, issues)
+                    action = _same_observation(observations[oid], obs, issues)
+                    decision.update(action=action, reason="conflicting_assignments" if action == "conflicting"
+                                    else "same_observation")
                 else:
+                    decision.update(action="replaced", reason="revisit_verified_owner", previous_observation=original)
                     observations[oid] = obs
                 seen.add(oid)
             except ValueError as exc:
-                issues.append({"block": bid, "stage": "revisit", "reason": str(exc)})
+                decision.update(action="rejected", reason=str(exc))
+                issues.append({"block": bid, "stage": "revisit", "reason": str(exc), "fact_index": index,
+                               "observation_id": decision["observation_id"], "rejected_fact": fact.model_dump()})
     for b in readable:
         parent = coverage[b["block_id"]]
         if parent.get("recovery") and all(child["attributes"] == "read" for child in parent["recovery"]):
@@ -495,6 +525,8 @@ def run_entity_first(source, fields, table_subject, backend, *, max_calls=None, 
     for index, obs in enumerate(observations.values()):
         obs["source_record"] = f"/candidates/{index}"
     return {"protocol_version": PROTOCOL, "source_sha256": document, "strategy": "entity-first", "rescue": rescue,
+            "admission_receipt_version": 1, "admission_run_id": uuid4().hex,
+            "admission_task": task if calls.has_assignment_receipt else None,
             "table_subject": table_subject,
             "status": "partial" if incomplete else "complete", "objects": list(objects.values()),
             "observations": list(observations.values()), "blocks": [coverage[b["block_id"]] for b in blocks], "issues": issues,

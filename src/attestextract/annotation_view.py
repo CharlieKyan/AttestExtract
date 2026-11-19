@@ -86,7 +86,52 @@ def _provenance(item: dict, pointer: str, review_row: str | None) -> dict:
             "evidence": deepcopy(item["evidence"])}
 
 
+def admission_annotation(dataset: dict) -> tuple[dict, list[dict]]:
+    """Keep unconfirmed field mappings out of the named fields of confirmed rows."""
+    groups, records, held, sources = {}, [], [], []
+    observation_pointers = {}
+    for index, p in enumerate(dataset["proposals"]):
+        field = p["suggested_field"]
+        evidence = [s["quote"] for s in p["evidence"]]
+        item = {"value": p["value"], "unit": p["unit"], "conditions": p["conditions"],
+                "statistic": p["statistic"], "source_property": p["source_property"],
+                "evidence": list(dict.fromkeys(evidence)), "proposal_id": p["proposal_id"],
+                "source": "表格 " + (p["table_id"] or p["block_id"]) if p["source_kind"] == "table" else "正文",
+                "direct_subject": p["direct_subject"], "target_subject": p["target"].get("label"),
+                "fit": p["fit"]["status"], "disposition": p["disposition"], "reason": p["reason"]}
+        if p["row_ids"] and p["observation_id"] in observation_pointers:
+            pointer = observation_pointers[p["observation_id"]]
+        elif p["row_ids"]:
+            group = p["target"]["id"]
+            if group not in groups:
+                groups[group] = len(records)
+                records.append({"entity": p["target"]["label"], "subject_id": group, "fields": {}})
+            i = groups[group]
+            values = records[i]["fields"].setdefault(field, [])
+            pointer = f"/records/{i}/fields/{_pointer_part(field)}/{len(values)}"
+            observation_pointers[p["observation_id"]] = pointer
+            values.append(item)
+        else:
+            pointer = f"/review_proposals/{len(held)}"
+            held.append({**item, "suggested_field": field, "candidate_subject": p["candidate_subject"],
+                         "candidate_basis": p["candidate_basis"], "direct_status": p["direct"]["status"],
+                         "target_status": p["target"]["status"]})
+        sources.append({"annotation_pointer": pointer, "source_record": f"/proposals/{index}",
+                        "proposal_id": p["proposal_id"], "observation_id": p["observation_id"],
+                        "source_kind": p["source_kind"], "evidence": p["evidence"]})
+    fallback = [{"observation_id": o["observation_id"], "source_record": o["source_record"],
+                 "field": o["field"], "value": o["value"], "row_ids": o["row_ids"]}
+                for o in dataset["observations"] if not o["proposal_ids"]]
+    return {"document": dataset.get("source_name") or dataset["document_id"], "verification": _VERIFICATION, "records": records,
+            "review_proposals": held, "quarantined": [],
+            "frozen_without_proposal_receipt": fallback,
+            "missing_fields": [f for f in dataset["schema"] if not any(not is_missing(r[f]) for r in dataset["rows"])],
+            "call_gaps": [c for c in dataset["admission"]["coverage"] if c["status"] == "gap"]}, sources
+
+
 def _build(result: ExtractionResult) -> tuple[dict, list[dict]]:
+    if result.dataset is not None and "admission" in result.dataset:
+        return admission_annotation(result.dataset)
     review = build_expert_review(result)
     simple = result.task.input_materials is not None
     records, groups, sources = [], {}, []
@@ -129,6 +174,8 @@ def _table_row(field: object, item: dict, secrets: Iterable[str], *, rejected: b
         return _literal(value, secrets) if value is not None else "未报告"
 
     conditions = literal(item["conditions"])
+    if item.get("statistic"):
+        conditions += "<br>统计口径：" + literal(item["statistic"])
     if "scope" in item:
         conditions += "<br>范围：" + literal(_scope_text(item["scope"]))
     evidence = "<br>".join(literal(quote) for quote in item["evidence"]) or "无可展示的引文"
@@ -158,7 +205,24 @@ def render_annotation(data: dict, *, secrets: Iterable[str] = ()) -> str:
             lines.extend(_table_row(field, item, secrets) for item in items)
         lines.append("")
     if not data["records"]:
-        lines += ["没有保留的观测；不能据此认定原文没有可抽取信息。", ""]
+        lines += ["本视图中没有正式字段记录。原文可能仍有相关观测。", ""]
+    if "review_proposals" in data:
+        lines += ["## 待核与字段不适配的提议", "",
+                  "| 原文直接对象 | 模型提名 | 篇内主体 | 原文属性 | 原值 | 单位 | 条件 | 统计口径 | 建议字段 | 字段判断 | 原因 | 出处 | 原文依据 |",
+                  "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
+        for p in data["review_proposals"]:
+            fit = {"supported": "口径有据", "contradicted": "不适配", "unknown": "待核"}.get(p["fit"], p["fit"])
+            cells = (p["direct_subject"] or "定位待核", p["candidate_subject"] or "模型未提名",
+                     p["target_subject"] if p["target_status"] == "supported" else "身份待核",
+                     p["source_property"] or "未定位", p["value"], p["unit"] or "", p["conditions"] or "",
+                     p["statistic"] or "", p["suggested_field"], fit, p["reason"], p["source"])
+            evidence = "<br>".join(_literal(q, secrets) for q in p["evidence"]) or "未定位"
+            lines.append("| " + " | ".join([*(_literal(v, secrets) for v in cells), evidence]) + " |")
+        lines += ["", f"缺少可审计完整回答的调用数为 {len(data['call_gaps'])}。详见 dataset.json。", ""]
+        fallback = data["frozen_without_proposal_receipt"]
+        if fallback:
+            lines += [f"另有 {len(fallback)} 条冻结观测缺少可对照的提议。其原值和主表去向已列入 "
+                      "annotation.json 的 frozen_without_proposal_receipt。", ""]
     lines += ["## 没有保留有值结果的字段", "",
               _literal("、".join(data["missing_fields"]), secrets) if data["missing_fields"] else "无。", "",
               "这不是原文未报告的结论，请结合原文检查遗漏。", ""]
@@ -177,7 +241,9 @@ def save_annotation(result: ExtractionResult, directory: Path, *, secrets: Itera
     """Add three view files to a validated directory without altering the original result."""
     secrets = tuple(secrets)
     data, entries = _build(result)
-    provenance = {"source_result": source_result, "entries": entries}
+    provenance = {"source_result": str(Path(source_result).parent / "dataset" / "dataset.json")
+                  if "review_proposals" in data else source_result,
+                  "entries": entries}
     trace = RunTrace(None, secrets=secrets)
     rendered = render_annotation(data, secrets=secrets)
     for name, payload in (("annotation.json", data), ("annotation.sources.json", provenance)):

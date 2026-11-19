@@ -45,7 +45,8 @@ def check_dataset_request(task, options) -> None:
 
 
 def assemble_from_files(source_path: str | Path, run_dir: str | Path, *, output_dir=None,
-                        result_path=None, analysis_path=None, raw_only: bool = False, **options) -> dict:
+                        result_path=None, analysis_path=None, raw_only: bool = False,
+                        audit_admission: bool = False, **options) -> dict:
     """Rebuild a dataset from one source and its frozen run without loading credentials."""
     from .dataset import assemble_dataset
 
@@ -58,10 +59,16 @@ def assemble_from_files(source_path: str | Path, run_dir: str | Path, *, output_
     analysis = None
     if result.get("entity_first") is not None and (analysis_path is not None or raw_only):
         raise ValueError("A frozen entity-first run contains its own bindings; omit analysis_path and raw_only.")
-    if not raw_only and result.get("entity_first") is None:
-        analysis = _read_json_object(Path(analysis_path) if analysis_path is not None
-                                     else run_dir / "analysis" / "analysis.json")
-    data = assemble_dataset(source, result, analysis, **options)
+    if audit_admission and result.get("entity_first") is None:
+        raise ValueError("Admission auditing requires an entity-first run.")
+    if result.get("entity_first") is not None:
+        from .entity_first_output import project_archive
+        data = project_archive(source, result, options, audit_admission=audit_admission, run_dir=run_dir)
+    else:
+        if not raw_only:
+            analysis = _read_json_object(Path(analysis_path) if analysis_path is not None
+                                         else run_dir / "analysis" / "analysis.json")
+        data = assemble_dataset(source, result, analysis, **options)
     if output_dir is not None:
         save_dataset(data, output_dir)
     return data
@@ -111,9 +118,22 @@ def save_dataset(data: dict, directory: str | Path) -> Path:
                 if key not in columns:
                     columns.append(key)
         _csv_file(stage / "observations.csv", columns, details)
+        if "proposals" in data:
+            from .annotation_view import admission_annotation, render_annotation
+            proposals = data["proposals"]
+            columns = ["direct_subject", "source_property", "value", "unit", "conditions", "statistic",
+                       "candidate_subject", "suggested_field", "disposition", "reason", "source_kind", "block_id"]
+            if proposals:
+                columns.extend(k for k in proposals[0] if k not in columns)
+            _csv_file(stage / "proposals.csv", columns, proposals)
+            annotation, sources = admission_annotation(data)
+            _json_file(stage / "annotation.json", annotation)
+            _json_file(stage / "annotation.sources.json", {"source_result": "dataset.json", "entries": sources})
+            (stage / "annotation.md").write_text(render_annotation(annotation), encoding="utf-8")
         stage.rename(target)
     except BaseException:
-        for name in ("dataset.json", "lineage.json", "main.csv", "observations.csv"):
+        for name in ("dataset.json", "lineage.json", "main.csv", "observations.csv", "proposals.csv",
+                     "annotation.json", "annotation.md", "annotation.sources.json"):
             (stage / name).unlink(missing_ok=True)
         stage.rmdir()
         raise

@@ -42,6 +42,22 @@ dev44 生成 `entity-first-v2` 档案。假设原文为“B 线完成 60 箱”�
 - `attestextract assemble-dataset --input log.md --run-dir output/lines-01 --output-dir output/rebuilt-01` 可从实体优先快照离线重建。读取带分析文件的历史观测优先运行沿用原入口。
 - 退出码 0 表示此次流程完成。退出码 2 表示覆盖或判定链有未完成工作，应查看每块状态和已有结果；配置错误返回 1。本实验使用固定的单次尝试后端，不支持旧分析检查点的恢复或旧版补查协议。重新启动一次在线抽取会创建一个新的计费运行。
 
+## 离线审计每条属性提议
+
+dev45 的实体优先抽取会将已完成的属性回答和局部回查回答记录在快照里。打开 `dataset/proposals.csv` 可以逐条核对直接对象、原文属性、原值、单位、条件、统计口径、模型提名的对象和建议字段。运行目录里已有 dev44 的原始请求和回答时，使用原输入文件和一个新的输出目录。
+
+```sh
+attestextract assemble-dataset --audit-admission --input log.md --run-dir output/lines-01 --output-dir output/lines-audit
+```
+
+这个命令完全离线，直接在 `output/lines-audit` 下生成文件。dev44 的原始诊断应与 `result.json` 保存在同一运行目录。省略选项可以重建这批旧候选的原严格结果。dev45 快照内置提议，常规重建会生成提议级视图。
+
+- `proposals.csv` 中每条提议有独立的 `proposal_id`。例如“B 线早班产出 60 箱”可以显示原句中的“B 线早班”和 60，即使早班的名册 ID 仍待核。可先看 `direct_subject` 与 `candidate_subject`，再看 `direct`、`target` 和 `fit` 三项判定的状态、理由和证据。只有模型建议字段、缺少可定位的原文属性表述时，`source_property` 留空。
+- `prior_disposition` 和 `prior_reason` 记录旧规则的处理。`disposition` 给出本次去向。`in_main` 能追到正式行，`located_detail` 能追到已定位的观测，`proposal_only` 仅保有模型提议，`superseded` 标识已有记录证明被后续回查替换的原提议。多次提到同一处测量时，按 `observation_id` 查看科学观测，`proposal_id` 用于统计模型回答。
+- `main.csv` 保持任务 schema。`observations.csv` 和 `lineage.json` 保存观测及证据。`annotation.md` 和 `annotation.json` 分列正式结果与待核提议。两条生产线的合计观察可按成员检索，组合值在明细中保留一次。
+- `dataset.json` 中的 `admission.coverage` 区分已完整回答且属性数为零的调用与历史回答缺失、截断或不匹配的调用。后者会标明调用和原因，审计命令返回 2。原来的主表在 `admission.strict_rows` 中可查。缺少对应回答的旧观测留在明细中供复核，去向为 `missing_proposal_receipt`，审计后的主表只接收已核对来源的属性。
+- 未派发的块可在原运行 `entity-first.json` 的 `blocks` 中查看。输入与冻结快照不一致时命令报错。原文里有事实而模型从未提出时，复核者需要对照原文另作漏抽标注。
+
 ## 怎样作比较
 
 使用相同的原文、字段、模型和总预算。对照观测优先时，将其抽取和查证两项预算合计；实体优先计入名册、属性、遗漏确认和局部回查。在源码范围明确且人工逐项核对的段落或表块计算对象和属性召回，分别统计错误建行、错挂、遗漏对象连带损失的属性、调用和 token。固定模型回答并故意从首轮清单删去一个对象，只能验证恢复机制；自然遗漏率和线上质量需要独立的模型运行与评审。

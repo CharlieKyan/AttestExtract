@@ -217,6 +217,7 @@ def query_dataset(dataset, subject=None, *, exploratory=False, field=None, purpo
         if exploratory:
             for candidate in obs.get("candidates", []):
                 labels.update(v for v in (candidate.get("id"), candidate.get("label")) if isinstance(v, str))
+            labels.update(obs.get("members", []))
             if isinstance(obs["entity"], str):
                 labels.add(obs["entity"])
         if subject is None or subject in labels:

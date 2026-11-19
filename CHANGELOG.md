@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.0.dev45
+
+- Archive completed entity-first attribute assignments before semantic validation and deduplication. Publish a proposal ledger alongside the scientific observation and task-schema tables.
+- Reassess local prose evidence and scoped table headers offline. Keep direct subject, target identity and field suitability separately inspectable in proposals and human annotations.
+- Add `assemble-dataset --audit-admission` for frozen entity-first runs with original request/answer diagnostics. Report missing or failed calls and preserve the historical row comparison.
+
 ## 0.1.0.dev44
 
 - Update the opt-in entity-first protocol to v2. Keep the source claim and scoped nomination visible for review, locate unique verbatim subspans, and evaluate field applicability separately. Existing v1 snapshots still rebuild offline.

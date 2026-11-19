@@ -90,7 +90,7 @@ def dataset_view(report, task, info, options):
                        "extraction_http_attempts": report["budget"]["http_attempts"]}}
 
 
-def project_archive(source, result, options):
+def project_archive(source, result, options, *, audit_admission=False, run_dir=None):
     from .dataset_io import check_dataset_request
     parsed = ExtractionResult.model_validate(result)
     report = dict(parsed.entity_first)
@@ -99,7 +99,8 @@ def project_archive(source, result, options):
             or report["source_sha256"] != parsed.source.sha256 or len(source) != parsed.source.character_count
             or checksum != digest([parsed.task.model_dump(mode="json"), report])):
         raise ValueError("Entity-first source, task or frozen report differs from its archived snapshot.")
-    options = {**report["dataset_options"], **options}
+    original_options = report["dataset_options"]
+    options = {**original_options, **options}
     check_dataset_request(parsed.task, options)
     if options.get("row_subject", report["table_subject"]) != report["table_subject"]:
         raise ValueError("Entity-first frozen bindings require the original row_subject.")
@@ -110,7 +111,14 @@ def project_archive(source, result, options):
         if (candidate.record_type != obs["field"] or candidate.fields != fields
                 or candidate.candidate_id != grounded_candidate_id(parsed.source.sha256, obs["field"], fields)):
             raise ValueError("Entity-first candidate differs from its frozen observation.")
-    return dataset_view(report, parsed.task, parsed.source, options)
+    dataset = dataset_view(report, parsed.task, parsed.source, options)
+    if audit_admission or report.get("admission_receipt_version"):
+        from .admission import audit_dataset
+        report["snapshot_id"] = checksum
+        dataset["source_name"] = parsed.source.name
+        baseline = dataset_view(report, parsed.task, parsed.source, original_options) if options != original_options else dataset
+        return audit_dataset(source, report, dataset, run_dir, frozen_view=baseline)
+    return dataset
 
 
 def _field(value, evidence):
@@ -150,7 +158,10 @@ def extract_entities(text, task, *, backend, source_name, table_subject, rescue,
     report["table_subject"] = table_subject
     report["source_sha256"] = info.sha256
     report["dataset_options"] = dataset_options or {}
-    dataset = dataset_view(report, task, info, dataset_options or {})
+    strict = dataset_view(report, task, info, dataset_options or {})
+    strict["source_name"] = info.name
+    from .admission import audit_dataset
+    dataset = audit_dataset(source, report, strict)
     identities = set(dataset["identity_fields"])
     if dataset["subject_label_field"]:
         identities.add(dataset["subject_label_field"])
@@ -167,10 +178,14 @@ def extract_entities(text, task, *, backend, source_name, table_subject, rescue,
         "source_gaps": dict(Counter(b["gap"] for b in report["blocks"] if b.get("gap"))),
         "validation_issues": len(report["issues"]),
     }
+    report["summary"]["attribute_proposals"] = len(dataset["proposals"])
+    report["admission_dataset_digest"] = digest(dataset)
     report["snapshot_id"] = digest([task.model_dump(mode="json"), report])
     reviews = []
     candidates = []
-    for item in dataset["observations"]:
+    # Candidates and the legacy checks describe the frozen extraction. The admission
+    # view also includes proposals which did not have a candidate in this snapshot.
+    for item in strict["observations"]:
         fields = {k: _field(item[k], item["evidence"]) for k in ("entity", "value", "unit", "conditions")}
         identifier = grounded_candidate_id(info.sha256, item["field"], fields)
         if not item["row_ids"]:
@@ -206,4 +221,6 @@ def report_heading(report):
     return ("# Entity-first extraction\n\n" + summary_text(report) + "\n\n"
             f"Inspect nominations ({len(report['nominations'])}) and block coverage in [entity-first.json](entity-first.json). "
             "Open [dataset rows](dataset/main.csv) and [source observations](dataset/observations.csv). "
+            + ("Compare [all model proposals](dataset/proposals.csv) with their adjudications. "
+               if report.get("admission_receipt_version") else "") +
             "Source-linked model proposals require scientific review.\n\n")
