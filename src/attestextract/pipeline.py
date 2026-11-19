@@ -686,6 +686,7 @@ def extract(
     analysis_input_budget: int = 48000,
     analysis_resume_from: str | Path | None = None,
     retry_analysis_jobs: list[str] | None = None,
+    dataset_options: dict | None = None,
 ) -> ExtractionResult:
     """Extract candidates. Matching evidence does not establish factual validity.
 
@@ -730,6 +731,10 @@ def extract(
     ``result.analysis`` and saved analysis tables are model proposals, not expert
     acceptance. Simple tasks are required. Original extraction JSON and checkpoint
     formats are unchanged; historical analysis checkpoints keep their old policy.
+    The resulting frozen observations are also assembled offline in
+    ``result.dataset``. ``dataset_options`` may specify identity_fields, subject_label_field,
+    row_subject and field_policies. An output directory includes both CSV views
+    and their JSON provenance under ``dataset/``.
     """
     if resume_from is not None and trace is not None and trace.directory is not None:
         check_resume_paths(resume_from, [trace.directory])
@@ -743,6 +748,8 @@ def extract(
             raise ConfigurationError("progress must be normal, quiet or verbose.")
         task = resolve_task(task, prompt_description=prompt_description,
                             field_list=field_list, examples=examples)
+        from .dataset_io import check_dataset_request
+        check_dataset_request(task, dataset_options)
         if table_subject is not None:
             validate_analysis_request(text, task, table_subject, max_analysis_calls,
                                       max_steps=analysis_max_steps, input_budget=analysis_input_budget)
@@ -849,6 +856,12 @@ def extract(
                 max_steps=analysis_max_steps, input_budget=analysis_input_budget,
                 format_retries=format_retries, retry_failed_jobs=retry_analysis_jobs,
             )
+        have_observations = result.analysis is not None and "observations" in result.analysis
+        if have_observations or dataset_options is not None:
+            from .dataset import assemble_dataset
+            source = text.text if isinstance(text, Document) else text
+            result.dataset = assemble_dataset(source, result.model_dump(mode="json"),
+                                              result.analysis, **(dataset_options or {}))
         if directory is not None:
             from .run_output import save_run_result
 

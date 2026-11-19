@@ -59,4 +59,7 @@ def save_run_result(result: ExtractionResult, directory: Path, trace: RunTrace) 
     if result.analysis is not None:
         from .analysis_export import save_analysis
         save_analysis(result.analysis, directory / "analysis", secrets=trace._secrets)
+    if result.dataset is not None:
+        from .dataset_io import save_dataset
+        save_dataset(trace._mask(result.dataset), directory / "dataset")
     trace.finish(payload, analysis=result.analysis)

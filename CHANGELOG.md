@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.0.dev42
+
+- Assemble frozen observations into schema-ordered rows, searchable details and source lineage. Resolve scoped names, local table roles and supported associations offline. Review unresolved claims and coverage gaps with a separately budgeted, resumable supplement.
+
 ## 0.1.0.dev41
 
 - Extend explicit `format_retries=1` to bounded verification: one fresh generation per job for a complete response with JSON syntax or structural-contract errors. It consumes the existing step and cumulative call limits; unknown transport outcomes, truncation, scope and evidence failures do not qualify.

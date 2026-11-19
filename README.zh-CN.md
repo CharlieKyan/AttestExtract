@@ -1,5 +1,7 @@
 # AttestExtract
 
+dev42 增加离线主体恢复和科研数据组表。`assemble-dataset` 读取冻结运行，生成完整字段主表、观测明细和逐格溯源。复杂关系可用独立预算补查。[组表与查询指南](docs/dataset-assembly.md)。
+
 dev41 将显式 `format_retries=1` 接入查证阶段，每个任务最多重生成一次，共享原有步骤及调用预算。旧的尾部格式失败可用 `--retry-analysis-job verify-0002`（Python：`retry_analysis_jobs=["verify-0002"]`）明确恢复，复用已完成抽取和查证；保留原回答、严格拒绝重复键，普通恢复不会重开失败任务。详见[查证格式恢复](docs/analysis-tables.md#verification-format-recovery-dev41)。
 
 dev40 撤回推测性的 `correct_shape` 改错建议，新诊断及旧检查点恢复均只发送可观察的语法事实。首次请求、原文、任务、默认零次格式重生成及已完成缓存保持兼容。用户可显式开启预算内一次重生成；已耗尽时终端不再推荐无效恢复命令。详见[格式反馈与恢复](docs/STRUCTURED_OUTPUT.md)。

@@ -59,6 +59,25 @@ def _parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("models", help="List built-in model selectors without network access or credentials")
 
+    assemble = commands.add_parser("assemble-dataset", help="Build a dataset offline from a frozen run")
+    assemble.add_argument("--input", required=True, type=Path, help="Original UTF-8 text or Markdown")
+    assemble.add_argument("--run-dir", required=True, type=Path, help="Run containing result.json and analysis/analysis.json")
+    assemble.add_argument("--output-dir", required=True, type=Path, help="New directory for the dataset")
+    assemble.add_argument("--result", type=Path, help="Override the result.json path")
+    assemble.add_argument("--analysis", type=Path, help="Override the analysis.json path")
+    assemble.add_argument("--raw-only", action="store_true", help="Explicitly assemble from raw candidates without analysis")
+    assemble.add_argument("--dataset-config", type=Path, help="JSON with row subject, identity options and field policies")
+
+    supplement = commands.add_parser("supplement-dataset", help="Check unresolved evidence with an explicit cumulative model budget")
+    supplement.add_argument("--input", required=True, type=Path)
+    supplement.add_argument("--run-dir", required=True, type=Path)
+    supplement.add_argument("--dataset-config", type=Path)
+    supplement.add_argument("--raw-only", action="store_true", help="Review a dataset built without a saved analysis")
+    supplement.add_argument("--ledger", required=True, type=Path, help="Dedicated .sqlite ledger for this review")
+    supplement.add_argument("--max-calls", type=int, required=True, help="Cumulative generation limit, including previous attempts")
+    supplement.add_argument("--model-id", help="Built-in provider:model preset; required with a positive budget")
+    supplement.add_argument("--env-file", type=Path, help="Explicit credentials file")
+
     review = commands.add_parser("export-review", help="Export compact expert review rows from an existing result; no model calls")
     review.add_argument("--input", type=Path, required=True, help="Saved result.json or its run directory")
     review.add_argument("--output-dir", type=Path, help="New empty directory outside the original run; default: a new sibling")
@@ -135,6 +154,8 @@ def _parser() -> argparse.ArgumentParser:
     live.add_argument("--resume", type=Path, help="Previous run directory, diagnostics directory or execution/checkpoint.json; saves a new run")
     live.add_argument("--retry-tables", action="store_true", help="With --resume, explicitly retry quarantined table responses once within the cumulative budget; never retry unknown outcomes")
     live.add_argument("--table-subject", help="Enable extra document-level identity/binding analysis; describe what one output table row represents")
+    live.add_argument("--dataset-config", type=Path,
+                      help="JSON for offline assembly of a simple task; adds no model calls")
     live.add_argument("--max-analysis-calls", type=int, default=12,
                       help="Separate cumulative analysis generation budget (default: 12), in addition to extraction's --max-model-calls")
     live.add_argument("--analysis-max-steps", type=int, default=4,
@@ -233,7 +254,7 @@ def _check_output_paths(args: argparse.Namespace, *, require_parents: bool = Tru
         protected.add(args.env_file.resolve())
     if args.config is not None:
         protected.add(args.config.resolve())
-    for name in ("mineru_content_list", "structure_hints"):
+    for name in ("mineru_content_list", "structure_hints", "dataset_config"):
         path = getattr(args, name, None)
         if path is not None:
             protected.add(path.resolve())
@@ -418,12 +439,57 @@ def _offline_decisions(args: argparse.Namespace) -> int:
     return code
 
 
+def _supplement_dataset(args: argparse.Namespace, registry: BackendRegistry | None) -> int:
+    from .dataset_io import assemble_from_files, load_dataset_options
+    from .dataset_supplement import run_supplement
+
+    if args.max_calls < 0:
+        raise ConfigurationError("--max-calls must be nonnegative.")
+    if args.max_calls and not args.model_id:
+        raise ConfigurationError("A positive --max-calls budget requires --model-id.")
+    ledger = args.ledger.resolve()
+    protected = [args.input, args.run_dir / "result.json", args.run_dir / "analysis/analysis.json",
+                 args.env_file, args.dataset_config]
+    if ledger.suffix.lower() != ".sqlite" or ledger in [path.resolve() for path in protected if path is not None]:
+        raise ConfigurationError("Use a separate .sqlite path for the supplement ledger.")
+    data = assemble_from_files(args.input, args.run_dir, raw_only=args.raw_only, **load_dataset_options(args.dataset_config))
+    source = args.input.read_bytes().decode("utf-8")
+    backend = None
+    secrets = []
+    if args.max_calls:
+        environment = load_env_file(args.env_file) if args.env_file else os.environ
+        config = resolve_model_config(args.model_id, environment=environment, overrides={"max_attempts": 1})
+        key = resolve_model_credentials(config, environment)
+        secrets = [key] if key else []
+        backend = (registry if registry is not None else default_registry()).create(
+            config.adapter, config=config, api_key=key)
+    import sqlite3
+    try:
+        report = run_supplement(data, source, ledger_path=ledger, max_calls=args.max_calls,
+                                backend=backend, secrets=secrets)
+    except sqlite3.Error as exc:
+        raise ConfigurationError("Could not access the supplement ledger.") from exc
+    print(redact_text(json.dumps(report, ensure_ascii=False, indent=2, allow_nan=False), secrets))
+    unresolved_failures = {entry["job_id"] for entry in report["failures"]} & {
+        entry["job_id"] for entry in report["pending"]}
+    return 2 if unresolved_failures else 0
+
+
 def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = None) -> int:
     args = _parser().parse_args(argv)
     api_key = None
     trace = None
     progress = None
     try:
+        if args.command == "assemble-dataset":
+            from .dataset_io import assemble_from_files, load_dataset_options
+            options = load_dataset_options(args.dataset_config)
+            dataset = assemble_from_files(args.input, args.run_dir, result_path=args.result,
+                analysis_path=args.analysis, output_dir=args.output_dir, raw_only=args.raw_only, **options)
+            print(f"Wrote {len(dataset['rows'])} rows and {len(dataset['observations'])} observations to {args.output_dir}")
+            return 0
+        if args.command == "supplement-dataset":
+            return _supplement_dataset(args, registry)
         if args.command == "export-review":
             return _export_review(args)
         if args.command in {"prepare-decisions", "check-decisions"}:
@@ -482,6 +548,12 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
                 raise ConfigurationError("Analysis output directory already exists; choose a new --output-dir.")
             if args.max_attempts not in (None, 1):
                 raise ConfigurationError("Document analysis requires --max-attempts 1.")
+        if args.table_subject is not None or args.dataset_config is not None:
+            bundle = args.output.resolve().parent / "dataset"
+            reserved = (args.report, args.output, args.log_dir)
+            if (bundle.exists() or bundle.is_symlink()
+                    or any(path and path.resolve().is_relative_to(bundle) for path in reserved)):
+                raise ConfigurationError("Dataset output needs a new, separate dataset/ directory.")
         if args.max_chunk_chars < 1:
             raise ConfigurationError("--max-chunk-chars must be positive.")
         if args.resume is not None and args.log_dir is None:
@@ -494,6 +566,9 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
         trace.event("configuration", "started")
         trace.event("configuration", "task_validation_started")
         task = load_task(args.task)
+        from .dataset_io import load_dataset_options, check_dataset_request
+        dataset_options = load_dataset_options(args.dataset_config) if args.dataset_config else None
+        check_dataset_request(task, dataset_options)
         trace.write_json("task.json", task.model_dump(mode="json"))
         environment = load_env_file(args.env_file) if args.env_file else os.environ
         overrides = {name: getattr(args, name) for name in (
@@ -698,6 +773,9 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
                 )
                 if analysis_check is not None:
                     plan["analysis"]["resume"] = analysis_check
+            if args.table_subject is not None or dataset_options is not None:
+                plan["dataset"] = {"output": str(args.output.resolve().parent / "dataset"),
+                                   "additional_model_calls": 0}
             trace.checked(plan)
             print(json.dumps(plan, ensure_ascii=False, indent=2))
             return 0
@@ -708,7 +786,7 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
                          retry_tables=args.retry_tables, table_subject=args.table_subject,
                          max_analysis_calls=args.max_analysis_calls, analysis_resume_from=args.analysis_resume,
                          analysis_max_steps=args.analysis_max_steps, analysis_input_budget=args.analysis_input_budget,
-                         retry_analysis_jobs=args.retry_analysis_jobs)
+                         retry_analysis_jobs=args.retry_analysis_jobs, dataset_options=dataset_options)
         payload = result.model_dump(mode="json")
         if (default_directory is not None
                 and args.report.resolve() == (default_directory / "report.md").resolve()):
@@ -731,6 +809,9 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
             if result.analysis is not None:
                 from .analysis_export import save_analysis
                 save_analysis(result.analysis, args.output.resolve().parent / "analysis", secrets=trace._secrets)
+            if result.dataset is not None:
+                from .dataset_io import save_dataset
+                save_dataset(trace._mask(result.dataset), args.output.resolve().parent / "dataset")
             if trace is not None:
                 trace.finish(payload, analysis=result.analysis)
         if trace is not None:

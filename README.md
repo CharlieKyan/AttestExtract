@@ -1,6 +1,6 @@
 # AttestExtract
 
-Dev41 extends explicit `format_retries=1` to verification jobs within their existing budgets. An old tail format failure can be selected with `--retry-analysis-job verify-0002` (Python: `retry_analysis_jobs=["verify-0002"]`); completed extraction and analysis are reused. Original responses are retained, duplicate keys remain errors, and ordinary resume does not reopen failures. See [verification recovery](docs/analysis-tables.md#verification-format-recovery-dev41).
+Dev42 builds full-schema datasets from frozen observations and source evidence. It preserves the directly described object, the requested row subject, and the evidence for each field in separately queryable detail. Historical runs can be assembled offline. See the [dataset assembly guide](docs/dataset-assembly.md) and [verification recovery](docs/analysis-tables.md#verification-format-recovery-dev41).
 
 Dev40 limits format-regeneration feedback to observed syntax facts, including when
 resuming historical checkpoints. It removes speculative shape corrections without
@@ -91,7 +91,7 @@ identities. See [D4 evidence and context](docs/D4_EVIDENCE.md) and the
 
 Schema-driven extraction from text and tables, with source-linked evidence and pluggable decision backends.
 
-**Early prototype · `0.1.0.dev33` · Python 3.11+**
+**Development release · `0.1.0.dev42` · Python 3.11+**
 
 dev18 adds offline `prepare-decisions` / `check-decisions`: validated successful-run materials cover every candidate and empty chunk; simulated suggestions are checked and recorded without applying them. Equal values with uncertain identity, conditions or evidence now produce insufficient-context associations. That release used flat-v1 / result schema 0.3; dev19 uses schema 0.4. No Jev inference or extra model calls are introduced. See [offline decision materials](docs/DECISION_MATERIALS.md).
 

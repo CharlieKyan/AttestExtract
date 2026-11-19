@@ -403,6 +403,7 @@ class ExtractionResult(ContractModel):
     # Independent, versioned analysis product. The original extraction archive
     # remains byte-contract compatible; saved analysis lives in analysis.json.
     analysis: dict[str, Any] | None = Field(default=None, exclude=True)
+    dataset: dict[str, Any] | None = Field(default=None, exclude=True)
 
     @model_serializer(mode="wrap")
     def _serialize_result(self, handler):
