@@ -78,6 +78,14 @@ def _parser() -> argparse.ArgumentParser:
     supplement.add_argument("--model-id", help="Built-in provider:model preset; required with a positive budget")
     supplement.add_argument("--env-file", type=Path, help="Explicit credentials file")
 
+    jev = commands.add_parser("review-dataset", help="Score every pending observation using local Intern-Decision-4B and write a new final table")
+    jev.add_argument("--input", required=True, type=Path, help="Original UTF-8 source")
+    jev.add_argument("--dataset", required=True, type=Path, help="Frozen dataset.json or its directory")
+    jev.add_argument("--checkpoint", type=Path, help="Trusted local model directory with inference.py (or ATTESTEXTRACT_JEV_CHECKPOINT)")
+    jev.add_argument("--output-dir", required=True, type=Path, help="Fresh final dataset directory outside the baseline")
+    jev.add_argument("--ledger", type=Path, help="Reusable local .sqlite ledger; defaults to a sibling of the output")
+    jev.add_argument("--device", choices=("cpu", "cuda"), default="cuda")
+
     review = commands.add_parser("export-review", help="Export compact expert review rows from an existing result; no model calls")
     review.add_argument("--input", type=Path, required=True, help="Saved result.json or its run directory")
     review.add_argument("--output-dir", type=Path, help="New empty directory outside the original run; default: a new sibling")
@@ -498,6 +506,25 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
             return 0
         if args.command == "supplement-dataset":
             return _supplement_dataset(args, registry)
+        if args.command == "review-dataset":
+            import sqlite3
+            from .jev_backend import LocalJev
+            from .jev_review import review_dataset
+            checkpoint = args.checkpoint or os.environ.get("ATTESTEXTRACT_JEV_CHECKPOINT")
+            if not checkpoint:
+                raise ConfigurationError("Specify --checkpoint or ATTESTEXTRACT_JEV_CHECKPOINT.")
+            def notify(done, total, state):
+                if done in (1, total) or done % 10 == 0 or state == "error":
+                    print(f"Jev {done}/{total} | {state}", flush=True)
+            try:
+                output, report = review_dataset(args.input, args.dataset, args.output_dir,
+                                                LocalJev(checkpoint, device=args.device),
+                                                ledger_path=args.ledger, progress=notify)
+            except (sqlite3.Error, RuntimeError) as exc:
+                raise ConfigurationError(f"Local Jev review stopped; completed ledger entries can be reused: {exc}") from exc
+            print(f"Wrote {output} | rows {report['baseline_rows']} -> {report['final_rows']} | scored {report['scored']}/{report['queued']} | "
+                  f"cached {report['cached']} | errors {report['errors']}")
+            return 2 if report["errors"] else 0
         if args.command == "export-review":
             return _export_review(args)
         if args.command in {"prepare-decisions", "check-decisions"}:

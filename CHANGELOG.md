@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.0.dev49
+
+- Review every pending dev48 observation with a local Intern-Decision-4B checkpoint. Save the resulting dataset separately, with grounded choices, per-observation receipts and a resumable local ledger.
+
 ## 0.1.0.dev48
 
 - On the observation-first branch, preserve locally supported names and competing row subjects. Export confirmed and provisional rows with a final CSV status column and separate strict-query semantics.

@@ -1,5 +1,7 @@
 # AttestExtract
 
+已有观测优先数据集时，可用本地 Intern-Decision-4B 逐条复核待定行和仅存于明细的观测，生成独立最终表。命令和回退方法见[本地 Jev 复核](docs/dataset-assembly.md#本地-jev-复核)。
+
 dev48 在观测优先分支增加带状态的主表。有原文依据的候选主体或字段限定尚待确认时，可在 CSV 末列查看原因。明确表头下的漏项可在原抽取预算内定向补读。严格查询按观测自身的确认状态筛选。[组表与查询指南](docs/dataset-assembly.md)
 
 dev41 将显式 `format_retries=1` 接入查证阶段，每个任务最多重生成一次，共享原有步骤及调用预算。旧的尾部格式失败可用 `--retry-analysis-job verify-0002`（Python：`retry_analysis_jobs=["verify-0002"]`）明确恢复，复用已完成抽取和查证；保留原回答、严格拒绝重复键，普通恢复不会重开失败任务。详见[查证格式恢复](docs/analysis-tables.md#verification-format-recovery-dev41)。

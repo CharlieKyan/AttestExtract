@@ -1,5 +1,7 @@
 # AttestExtract
 
+For a frozen observation-first dataset, run `attestextract review-dataset --input source.md --dataset run/dataset --checkpoint /path/to/Intern-Decision-4B --output-dir final` in the checkpoint's inference environment. This scores pending observations locally, exports a separate table and preserves the baseline.
+
 Dev48 extends observation-first extraction. The main CSV ends with a filterable record status. Source-backed alternatives and missing property qualifications can appear as provisional rows. Strict queries select confirmed observations. During extraction, missing values under an explicitly matching table header can trigger one targeted reread within the extraction budget. See the [dataset assembly guide](docs/dataset-assembly.md).
 
 Dev40 limits format-regeneration feedback to observed syntax facts, including when

@@ -71,6 +71,22 @@ leads = query_dataset(dataset, "R", exploratory=True)
 
 ## 可选的语义补查
 
+### 本地 Jev 复核
+
+dev49 提供独立的封闭选择复核入口。先用普通用户命令抽取并保留 dev48 的数据集。在支持权重自带 `inference.py` 的 Python、PyTorch 与 Transformers 环境中安装 dev49，并显式指定可信的本地 Intern-Decision-4B 目录。每个问题使用研究任务、原观测、原文和候选项；模型可选择一个主体、保留待核或排除。主表中的确认行作为基线保留。完整性按源观测 ID 核对，涵盖原有待定行和仅存明细的观测。漏抽线索和没有形成观测的隔离响应仍在原始文件中。
+
+选中主体时，再让同一模型单独阅读字段定义、候选原值、单位和原文，判断原值能否回答该字段；第二次问题不显示第一次选择。只有两项均支持才送入组表，实际入表还要核对同源重复、身份与条件。两次选择及分数可分别查看。原本仅缺字段限定的待定行继续显示原值和待定原因，拒绝将其确认为目标字段会另加说明。
+
+```sh
+attestextract review-dataset --input source.md --dataset run/dataset --checkpoint /path/to/Intern-Decision-4B --output-dir final
+```
+
+打开 `final/main.csv` 查看最终表，在 `final/observations.csv` 或 `final/dataset.json` 中按观测 ID 对照原文、模型选择和交付状态。完整答复、候选集和分数保存在 `dataset.json` 的 `jev_review.items` 中。分数表示模型在本次候选集中的偏好；科研准确率需要与原文、标注独立核对。运行默认使用 CUDA，可传 `--device cpu`。开发所用模型的权重、推理脚本和依赖信息可查阅[模型发布页](https://huggingface.co/internlm/Intern-Decision-4B)。
+
+中断后重复命令，默认从输出目录旁的同名 `.sqlite` 文件复用已完成的选择。发生逐项验证错误时，程序将可用结果保存到独立的 `.partial-*` 目录，返回状态码 2。要对照两个完整结果，另选输出目录并通过 `--ledger` 指向同一账本。需要回退时直接打开先前的 `run/dataset/main.csv`；代码基线保留在固定标签 `v0.1.0.dev48`。
+
+### 语言模型语义补查
+
 先用零预算查看尚待处理的工作。此命令可在无凭据环境中运行，结果以 JSON 写到标准输出。每篇文档选一个单独的 SQLite 文件。
 
 ```sh
