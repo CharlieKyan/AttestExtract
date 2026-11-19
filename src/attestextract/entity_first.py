@@ -4,6 +4,7 @@ from collections import Counter, defaultdict
 from copy import deepcopy
 from hashlib import sha256
 import json
+from time import monotonic
 from uuid import uuid4
 
 from .admission_receipts import freeze_assignment
@@ -98,8 +99,14 @@ def _review_regions(result, block, shown, issues):
     return regions
 
 
+def _work_item(blocks, index, total, recovery):
+    kinds = {block["kind"] for block in blocks}
+    return {"index": index, "total": total, "recovery": recovery, "block_count": len(blocks),
+            "block_id": blocks[0]["block_id"], "kind": kinds.pop() if len(kinds) == 1 else "mixed"}
+
+
 class _Calls:
-    def __init__(self, backend, task, limit, input_budget, generation, retries, secrets):
+    def __init__(self, backend, task, limit, input_budget, generation, retries, secrets, on_progress=None):
         self.backend, self.task, self.limit = backend, task, limit
         self.input_budget, self.generation, self.retries = input_budget, generation, retries
         self.secrets = (*secrets, getattr(backend, "_api_key", None))
@@ -108,6 +115,16 @@ class _Calls:
         self.fatal = False
         self.model = None
         self.has_assignment_receipt = False
+        self.on_progress = on_progress
+
+    def progress(self, stage, event, **details):
+        if self.on_progress is not None:
+            self.on_progress("entity_first", event, phase=stage, used=len(self.calls), limit=self.limit, **details)
+
+    def finished(self, stage, item, started, status, **details):
+        usage = {k: self.usage[k] for k in ("prompt_tokens", "completion_tokens", "total_tokens") if k in self.usage}
+        self.progress(stage, "block_finished", **item, status=status, elapsed_seconds=monotonic() - started,
+                      usage=usage, **details)
 
     def messages(self, stage, packet):
         # Repeat the contract in content for providers with JSON-object-only support.
@@ -121,7 +138,7 @@ class _Calls:
                    "generation": self.generation.model_dump(exclude_none=True)}
         return len(_json(request).encode("utf-8")) <= self.input_budget
 
-    def ask(self, stage, blocks, packet, ceiling):
+    def ask(self, stage, blocks, packet, ceiling, item):
         if self.fatal:
             return None, "backend_dispatch_halted"
         schema = _SCHEMAS[stage]
@@ -144,6 +161,7 @@ class _Calls:
                                         format_attempt=step + 1)
             record["artifact_stem"] = request.artifact_stem
             response_error = None
+            self.progress(stage, "call_started", **item, format_attempt=step + 1)
             try:
                 raw = self.backend.generate(request)
             except Exception as exc:
@@ -163,6 +181,8 @@ class _Calls:
                     self.fatal = True
                     record["state"] = "backend_failure"
                     return None, record["state"]
+            # Local validation and table grounding can take time after the network read is over.
+            self.progress(stage, "call_returned", **item, format_attempt=step + 1)
             try:
                 response = BackendResponse.model_validate(raw)
             except ValueError:
@@ -358,7 +378,8 @@ def _store_observation(observations, obs):
 
 
 def run_entity_first(source, fields, table_subject, backend, *, max_calls=None, rescue=True, max_chars=3600,
-                     task_description="", examples=None, secrets=(), format_retries=0, generation=None, input_budget=48000):
+                     task_description="", examples=None, secrets=(), format_retries=0, generation=None, input_budget=48000,
+                     on_progress=None):
     """Register named targets and read every primary block for attributes within one shared budget."""
     if not isinstance(table_subject, str) or not table_subject.strip() or not fields:
         raise ValueError("Entity-first needs a row subject and at least one field.")
@@ -381,7 +402,7 @@ def run_entity_first(source, fields, table_subject, backend, *, max_calls=None, 
     if examples:
         task["examples"] = examples
     limit = max_calls if max_calls is not None else 3 * max(1, len(readable))
-    calls = _Calls(backend, task, limit, input_budget, generation or GenerationOptions(), format_retries, secrets)
+    calls = _Calls(backend, task, limit, input_budget, generation or GenerationOptions(), format_retries, secrets, on_progress)
     coverage = {b["block_id"]: {k: b[k] for k in ("block_id", "kind", "start", "end", "scope", "gap")}
                 for b in blocks}
     for b in blocks:
@@ -390,13 +411,18 @@ def run_entity_first(source, fields, table_subject, backend, *, max_calls=None, 
     issues, nominations = [], []
     inventory_cap = limit // 2 if readable else 0
     inventory_jobs = [(batch, False) for batch in _inventory_batches(readable, calls)]
-    for batch, recovering in inventory_jobs:
+    source_counts = {"readable_blocks": len(readable), "unavailable_blocks": len(blocks) - len(readable)}
+    calls.progress("inventory", "phase_started", total=len(inventory_jobs), **source_counts)
+    for index, (batch, recovering) in enumerate(inventory_jobs, 1):
         # Optional inventory rereads must not displace a still-affordable primary attribute pass.
         ceiling = min(inventory_cap, max(0, limit - len(readable))) if recovering else inventory_cap
-        result, error = calls.ask("inventory", batch, {"windows": _window_list(batch)}, ceiling)
+        started = monotonic()
+        item = _work_item(batch, index, len(inventory_jobs), recovering)
+        result, error = calls.ask("inventory", batch, {"windows": _window_list(batch)}, ceiling, item)
         for b in batch:
             coverage[b["block_id"]]["inventory"] = error or "read"
         if error:
+            calls.finished("inventory", item, started, error)
             if error == "truncated_response" and not recovering:
                 for b in batch:
                     coverage[b["block_id"]]["initial_inventory"] = error
@@ -416,11 +442,15 @@ def run_entity_first(source, fields, table_subject, backend, *, max_calls=None, 
                 issues.append({"stage": "inventory", "blocks": [v["block_id"] for v in batch], "reason": str(exc),
                                "held_proposal": proposal.model_dump(mode="json")})
                 continue
+        calls.finished("inventory", item, started, "read", roster_count=len(objects))
 
     # Start with every independent primary block. A known truncation can append
     # a single layer of work at the tail; an ambiguous transport failure cannot.
     attribute_jobs = list(readable)
-    for b in attribute_jobs:
+    calls.progress("attributes", "phase_started", total=len(attribute_jobs), **source_counts)
+    for job_index, b in enumerate(attribute_jobs, 1):
+        started = monotonic()
+        item = _work_item([b], job_index, len(attribute_jobs), "parent" in b)
         bid = b["block_id"]
         table = block_tables.get(bid)
         packet = _attribute_packet(objects, b, calls, rescue)
@@ -428,9 +458,10 @@ def run_entity_first(source, fields, table_subject, backend, *, max_calls=None, 
         omitted = objects.keys() - shown_ids
         if omitted:
             coverage[bid]["omitted_object_ids"] = sorted(omitted)
-        result, error = calls.ask("attributes", [b], packet, limit)
+        result, error = calls.ask("attributes", [b], packet, limit, item)
         coverage[bid].update(attributes=error or "read", roster_hits=len(shown_ids))
         if error:
+            calls.finished("attributes", item, started, error)
             if error == "truncated_response" and "parent" not in b:
                 children = recovery_blocks(source, b, table)
                 coverage[bid].update(initial_attributes=error, recovery=[])
@@ -478,6 +509,9 @@ def run_entity_first(source, fields, table_subject, backend, *, max_calls=None, 
         coverage[bid].update(reported_facts=len(result.facts), reported_nominations=len(result.nominations),
                              proposed_objects=len(nomination_ids), review_regions=_review_regions(result, b, shown, issues),
                              attribute_outcome="facts_reported" if result.facts else "no_target_facts_reported")
+        eligible = sum(observations[d["observation_id"]]["qualified"] for d in decisions)
+        calls.finished("attributes", item, started, "read", proposals=len(decisions), eligible=eligible,
+                       pending=len(decisions) - eligible, roster_count=len(objects))
 
     for b in readable:
         parent = coverage[b["block_id"]]

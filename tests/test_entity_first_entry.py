@@ -86,6 +86,27 @@ def test_check_needs_no_secret_and_prioritizes_explicit_total(tmp_path, monkeypa
     assert (plan["subject_strategy"], plan["max_model_calls"], plan["network_calls"]) == ("entity-first", 4, 0)
 
 
+def test_normal_cli_reports_the_two_passes_and_actual_projected_rows(tmp_path, capsys):
+    registry = BackendRegistry()
+    backend = Backend()
+    registry.register("synthetic", lambda **_: backend)
+    args = arguments(tmp_path, ["--base-url", "http://localhost:1444/v1", "--model", "demo", "--adapter", "synthetic"])
+    mode_index = args.index("--progress")
+    del args[mode_index:mode_index + 2]  # Exercise the default terminal mode.
+    assert cli.main(args, registry=registry) == 0
+    terminal = capsys.readouterr().err
+    assert "1/48" in terminal and "2/48" in terminal
+    assert TEXT not in terminal
+    assert backend.stages == ["inventory", "attributes"]
+    directory = tmp_path / "run"
+    events = [json.loads(line) for line in (directory / "diagnostics/events.jsonl").read_text(encoding="utf-8").splitlines()]
+    summary, = [e for e in events if (e["stage"], e["event"]) == ("entity_first", "projected")]
+    data = json.loads((directory / "dataset/dataset.json").read_bytes())
+    assert len(data["rows"]) == summary["main_rows"] == 1
+    assert (summary["status"], summary["observations"], summary["pending"]) == ("complete", 1, 0)
+    assert (summary["used"], summary["limit"], summary["usage"]) == (2, 48, {"total_tokens": 10})
+
+
 def test_two_pass_files_deliver_only_source_backed_attribute_rows(tmp_path):
     from test_entity_first_engine import Backend as Replies, card, cite, fact
 

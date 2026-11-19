@@ -21,6 +21,7 @@ class ConsoleProgress:
         self.current = 0
         self._last_chunk = None
         self._managed_execution = False
+        self._entity_work: str | None = None
         self._calls_reserved = 0
         self._call_limit = 0
         self._read_timeout: float | None = None
@@ -39,8 +40,74 @@ class ConsoleProgress:
             with self._lock:
                 if self._waiting_since is not None:
                     elapsed = time.monotonic() - self._waiting_since
+                    if self._entity_work and elapsed < self.heartbeat_seconds:
+                        continue
                     limit = f"; read timeout {self._read_timeout:g}s" if self._read_timeout is not None else ""
-                    self._write(f"[{self.current}/{self.total}] waiting for model; {elapsed:.0f}s elapsed{limit}")
+                    prefix = self._entity_work or f"[{self.current}/{self.total}]"
+                    self._write(f"{prefix} waiting for model; {elapsed:.0f}s elapsed{limit}")
+
+    def _start_wait(self) -> None:
+        self._waiting_since = time.monotonic()
+        if self._thread is None:
+            self._thread = threading.Thread(target=self._heartbeat, daemon=True)
+            self._thread.start()
+
+    def _entity_first(self, event: dict[str, Any]) -> None:
+        kind = event["event"]
+        if kind == "call_returned":
+            self._waiting_since = None
+            return
+        budget = f"calls {event['used']}/{event['limit']}"
+        if kind == "phase_started":
+            self._waiting_since = None
+            if event["phase"] == "inventory":
+                self._entity_work = "Inventory"
+                self._write(f"Pass 1/2 | Inventory | {event['readable_blocks']} readable blocks, "
+                            f"{event['unavailable_blocks']} unavailable | initial batches {event['total']} | {budget}")
+            else:
+                self._entity_work = "Attributes"
+                self._write(f"Pass 2/2 | Attributes | {event['total']} primary blocks | {budget}")
+            return
+
+        usage = event.get("usage", {})
+        tokens = ""
+        if "total_tokens" in usage:
+            tokens = f" | reported tokens so far {usage['total_tokens']:,}"
+        elif "prompt_tokens" in usage and "completion_tokens" in usage:
+            tokens = f" | reported tokens so far (in/out) {usage['prompt_tokens']:,}/{usage['completion_tokens']:,}"
+        if kind == "projected":
+            self._waiting_since = None
+            coverage = ""
+            if event["status"] == "partial" and "unread_inventory" in event:
+                coverage = (f" | unread blocks (inventory/attributes) "
+                            f"{event['unread_inventory']}/{event['unread_attributes']} | local issues {event['local_issues']}")
+            self._write(f"Entity-first {event['status']} | {event['elapsed_seconds']:.1f}s total | "
+                        f"{event['roster_count']} objects | {event['proposals']} proposals | "
+                        f"{event['observations']} observations ({event['pending']} detail only) | "
+                        f"main rows {event['main_rows']} | {budget}{tokens}{coverage}")
+            return
+
+        inventory = event["phase"] == "inventory"
+        work = "Inventory batch" if inventory else "Attribute block"
+        position = f"{work} {event['index']}/{event['total']}"
+        if event["recovery"]:
+            position += " (recovery)"
+        self._entity_work = position
+        if kind == "call_started":
+            self._start_wait()
+            area = f"{event['block_count']} blocks" if inventory else event["kind"]
+            attempt = f" | format attempt {event['format_attempt']}" if event["format_attempt"] > 1 else ""
+            self._write(f"{position} | {area} | requesting model{attempt} | {budget}")
+        elif kind == "block_finished":
+            self._waiting_since = None
+            outcome = event["status"]
+            if outcome == "read":
+                if inventory:
+                    outcome = f"read | roster {event['roster_count']}"
+                else:
+                    outcome = (f"read | {event['proposals']} proposals | local checks "
+                               f"{event['eligible']} eligible, {event['pending']} held")
+            self._write(f"{position} | {outcome} | {event['elapsed_seconds']:.1f}s | {budget}{tokens}")
 
     def close(self) -> None:
         self._stop.set()
@@ -56,6 +123,9 @@ class ConsoleProgress:
     def _render(self, event: dict[str, Any]) -> None:
         stage, kind = event["stage"], event["event"]
         prefix = f"[{self.current}/{self.total}]"
+        if stage == "entity_first" and kind in {"phase_started", "call_started", "call_returned", "block_finished", "projected"}:
+            self._entity_first(event)
+            return
         if stage == "analysis":
             if kind == "started":
                 self._write(f"Document analysis: separate generation budget {event.get('limit', '?')}; model proposals, no expert acceptance")
@@ -159,6 +229,7 @@ class ConsoleProgress:
                             f"combined extraction + analysis reservations {event.get('total_reserved')}; inspect analysis/analysis.md")
             return
         if stage == "configuration" and kind == "completed":
+            self._entity_work = None
             self._read_timeout = event.get("read_timeout")
             self._write(f"Model: {event.get('model', '?')} | output: {event.get('structured_output', '?')} | "
                         f"protocol: {event.get('output_protocol', 'flat-v1')} | "
@@ -189,7 +260,10 @@ class ConsoleProgress:
         elif stage == "http" and kind == "transport_failed":
             self._waiting_since = None
             if event.get("request_outcome") == "unknown":
-                self._write(f"{prefix} {event.get('phase') or 'transport'} failure: server processing is unknown; not automatically retried; saved progress can be resumed")
+                if self._entity_work:
+                    self._write(f"{self._entity_work} | transport failure | server outcome unknown")
+                else:
+                    self._write(f"{prefix} {event.get('phase') or 'transport'} failure: server processing is unknown; not automatically retried; saved progress can be resumed")
         elif stage == "document" and kind == "completed":
             self._write(f"Input: {event['character_count']} characters")
         elif stage == "chunking" and kind == "completed":
@@ -242,10 +316,7 @@ class ConsoleProgress:
             if self._last_chunk != event["chunk_id"]:
                 self.current += 1
                 self._last_chunk = event["chunk_id"]
-            self._waiting_since = time.monotonic()
-            if self._thread is None:
-                self._thread = threading.Thread(target=self._heartbeat, daemon=True)
-                self._thread.start()
+            self._start_wait()
             budget = f"; calls {self._calls_reserved}/{self._call_limit}" if self._managed_execution else ""
             self._write(f"[{self.current}/{self.total}] requesting model; format attempt {event['format_attempt']}{budget}")
         elif stage == "model_response" and kind == "completed":
@@ -287,6 +358,10 @@ class ConsoleProgress:
             self._waiting_since = None
             self._write("Extraction saved; all verification groups were processed, but isolated proposals require review. "
                         "Analysis remains partial; inspect analysis/analysis.md and review_groups.json.")
+        elif stage == "complete" and self._entity_work and kind in {"succeeded", "entity_first_incomplete"}:
+            # The projection event already summarized the final table and model-call budget.
+            self._entity_work = None
+            self._waiting_since = None
         elif stage == "complete" and kind == "succeeded":
             run = event.get("run", {})
             elapsed = run.get("elapsed_seconds", 0)

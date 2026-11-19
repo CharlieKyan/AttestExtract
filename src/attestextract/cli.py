@@ -874,7 +874,7 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
                     print(f"Resume checkpoint: {trace.directory / 'execution/checkpoint.json'}", file=sys.stderr)
         if result.entity_first is not None:
             from .entity_first_output import summary_text
-            if args.progress != "quiet" or result.entity_first["status"] != "complete":
+            if args.progress == "verbose" or (args.progress == "quiet" and result.entity_first["status"] != "complete"):
                 print(summary_text(result.entity_first), file=sys.stderr)
             if result.entity_first["status"] != "complete":
                 return 2

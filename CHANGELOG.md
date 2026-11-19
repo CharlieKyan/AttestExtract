@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.0.dev47
+
+- Show live inventory and attribute progress for entity-first extraction in the ordinary CLI. Include block coverage, local checks, elapsed time, model usage, the shared generation budget and the final dataset summary. The v3 extraction protocol and saved scientific results are unchanged.
+
 ## 0.1.0.dev46
 
 - Simplify the opt-in entity-first workflow to inventory and attribute reading. Show the complete compact roster when it fits. Read zero-hit blocks, register explicit omissions inline, and retain competing identities for review.

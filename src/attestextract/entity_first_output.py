@@ -174,7 +174,7 @@ def extract_entities(text, task, *, backend, source_name, table_subject, rescue,
                               max_calls=max_calls, rescue=rescue, max_chars=max_chars, input_budget=input_budget,
                               task_description=task.description, examples=task.input_materials.model_dump(mode="json")["examples"],
                               generation=generation, format_retries=format_retries,
-                              secrets=trace._secrets if trace else ())
+                              secrets=trace._secrets if trace else (), on_progress=trace.event if trace else None)
     report["table_subject"] = table_subject
     report["source_sha256"] = info.sha256
     report["dataset_options"] = dataset_options or {}
@@ -216,6 +216,15 @@ def extract_entities(text, task, *, backend, source_name, table_subject, rescue,
                                           response_count=budget["response_count"], request_attempts=budget["http_attempts"],
                                           candidate_count=len(candidates), usage=budget["usage"], model=budget.get("model"),
                                           elapsed_seconds=time.perf_counter() - started))
+    if trace is not None:
+        trace.event("entity_first", "projected", status=report["status"], main_rows=len(dataset["rows"]),
+                    observations=len(candidates), pending=len(reviews), proposals=len(dataset["proposals"]),
+                    roster_count=len(report["objects"]), used=budget["calls_used"], limit=budget["limit"],
+                    unread_inventory=sum(b["inventory"] != "read" for b in report["blocks"]),
+                    unread_attributes=sum(report["summary"]["source_gaps"].values()), local_issues=len(report["issues"]),
+                    elapsed_seconds=result.run.elapsed_seconds,
+                    usage={k: budget["usage"][k] for k in ("prompt_tokens", "completion_tokens", "total_tokens")
+                           if k in budget["usage"]})
     return result
 
 

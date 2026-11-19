@@ -22,6 +22,12 @@ attestextract extract --input log.md --task task.json --table-subject "individua
 
 加 `--check` 可做离线预检。正常抽取请选择新的输出目录。省略 `--subject-strategy` 时使用观测优先。Python 的 `extract` 支持相同的 `subject_strategy`、`table_subject`、`dataset_options`，预算由 `ExecutionOptions(max_model_calls=...)` 指定。
 
+## 终端进度
+
+dev47 的普通 `extract --subject-strategy entity-first` 会在标准错误流显示两遍阅读的现场进度。名册阶段按批次显示已登记对象数，属性阶段按原文块显示派发、完成或失败。慢请求会提示已等待的时间。单块耗时包括该块的请求和本地处理，`calls 3/24` 表示本篇 24 次共享生成额度已使用 3 次，token 按模型已返回的用量累计。连接探测另计。截断后的有限补读标有 `recovery`，总工作项可随之增加。
+
+例如一行 `2 proposals | local checks 1 eligible, 1 held` 表示读到两条属性提议，其中一条通过了当时的本地检查，一条保留待核。最终去重、身份冲突和字段策略处理完成后，`main rows` 给出实际正式行数。需要查看请求或响应时，可打开本地诊断目录；`--progress verbose` 增加阶段细节，`--progress quiet` 关闭日常进度。
+
 ## 两遍怎样读
 
 1. **登记对象。** 每张卡保存篇内 ID、原文名称、身份依据、明确的别名和适用的限定信息。模型根据任务的行粒度提名对象。跨章节复用一张卡需要有相符的原文身份。相同短名存在多个厂区、批次或情景时，可分别登记。
