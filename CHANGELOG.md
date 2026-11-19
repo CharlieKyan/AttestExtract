@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.0.dev43
+
+- Add the experimental entity-first subject strategy. It builds a document roster before reading source blocks for attributes, with a shared call limit, scoped evidence and a strict-roster comparison mode.
+
 ## 0.1.0.dev42
 
 - Assemble frozen observations into schema-ordered rows, searchable details and source lineage. Resolve scoped names, local table roles and supported associations offline. Review unresolved claims and coverage gaps with a separately budgeted, resumable supplement.

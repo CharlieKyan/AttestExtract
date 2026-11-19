@@ -1,5 +1,7 @@
 # AttestExtract
 
+Dev43 adds opt-in entity-first extraction with source-block coverage and bounded missing-object recovery. [CLI and Python usage](docs/entity-first.md).
+
 Dev42 builds full-schema datasets from frozen observations and source evidence. It preserves the directly described object, the requested row subject, and the evidence for each field in separately queryable detail. Historical runs can be assembled offline. See the [dataset assembly guide](docs/dataset-assembly.md) and [verification recovery](docs/analysis-tables.md#verification-format-recovery-dev41).
 
 Dev40 limits format-regeneration feedback to observed syntax facts, including when
@@ -91,7 +93,7 @@ identities. See [D4 evidence and context](docs/D4_EVIDENCE.md) and the
 
 Schema-driven extraction from text and tables, with source-linked evidence and pluggable decision backends.
 
-**Development release · `0.1.0.dev42` · Python 3.11+**
+**Development release · `0.1.0.dev43` · Python 3.11+**
 
 dev18 adds offline `prepare-decisions` / `check-decisions`: validated successful-run materials cover every candidate and empty chunk; simulated suggestions are checked and recorded without applying them. Equal values with uncertain identity, conditions or evidence now produce insufficient-context associations. That release used flat-v1 / result schema 0.3; dev19 uses schema 0.4. No Jev inference or extra model calls are introduced. See [offline decision materials](docs/DECISION_MATERIALS.md).
 

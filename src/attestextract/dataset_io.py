@@ -56,7 +56,9 @@ def assemble_from_files(source_path: str | Path, run_dir: str | Path, *, output_
     if type(raw_only) is not bool or raw_only and analysis_path is not None:
         raise ValueError("raw_only must be a boolean and cannot select an analysis_path when enabled.")
     analysis = None
-    if not raw_only:
+    if result.get("entity_first") is not None and (analysis_path is not None or raw_only):
+        raise ValueError("A frozen entity-first run contains its own bindings; omit analysis_path and raw_only.")
+    if not raw_only and result.get("entity_first") is None:
         analysis = _read_json_object(Path(analysis_path) if analysis_path is not None
                                      else run_dir / "analysis" / "analysis.json")
     data = assemble_dataset(source, result, analysis, **options)

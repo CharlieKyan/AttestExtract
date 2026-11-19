@@ -134,6 +134,8 @@ def run_supplement(dataset: dict, source: str, *, ledger_path, max_calls: int, b
     material. Injected adapters must issue at most one generation request per invocation.
     An injected adapter can supply its credential strings via secrets for output protection.
     """
+    if dataset.get("subject_strategy") == "entity-first":
+        raise ValueError("Entity-first uses its own bounded nomination review; legacy supplement is unsupported.")
     if type(max_calls) is not int or max_calls < 0:
         raise ValueError("max_calls must be a nonnegative cumulative integer budget.")
     source_hash = sha256(source.encode("utf-8")).hexdigest()

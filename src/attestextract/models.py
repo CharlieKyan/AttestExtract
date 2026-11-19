@@ -345,7 +345,7 @@ class ChunkProvenance(ContractModel):
 class RunInfo(ContractModel):
     backend: str
     mode: Literal["live", "replay"]
-    output_protocol: OutputProtocol = "native-v1"
+    output_protocol: Literal["flat-v1", "native-v1", "entity-first-v1"] = "native-v1"
     chunk_count: int
     response_count: int
     candidate_count: int
@@ -402,12 +402,15 @@ class ExtractionResult(ContractModel):
     format_status: Literal["complete", "partial_format_error", "format_error"] = "complete"
     # Independent, versioned analysis product. The original extraction archive
     # remains byte-contract compatible; saved analysis lives in analysis.json.
+    entity_first: dict[str, Any] | None = None
     analysis: dict[str, Any] | None = Field(default=None, exclude=True)
     dataset: dict[str, Any] | None = Field(default=None, exclude=True)
 
     @model_serializer(mode="wrap")
     def _serialize_result(self, handler):
         result = handler(self)
+        if self.entity_first is None:
+            result.pop("entity_first", None)
         if self.schema_version != "0.6":
             result.pop("table_results", None)
             result.pop("format_status", None)
@@ -415,6 +418,8 @@ class ExtractionResult(ContractModel):
 
     @model_validator(mode="after")
     def _provenance_version(self):
+        if (self.entity_first is not None) != (self.run.output_protocol == "entity-first-v1"):
+            raise ValueError("Entity-first runs require matching protocol and provenance.")
         automatic = bool(self.run.routes or self.run.chunk_provenance or self.run.generation_attempts)
         if self.schema_version not in {"0.5", "0.6"} and automatic:
             raise ValueError("Automatic provenance requires result schema 0.5 or 0.6.")

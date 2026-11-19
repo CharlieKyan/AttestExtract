@@ -156,8 +156,11 @@ def _parser() -> argparse.ArgumentParser:
     live.add_argument("--table-subject", help="Enable extra document-level identity/binding analysis; describe what one output table row represents")
     live.add_argument("--dataset-config", type=Path,
                       help="JSON for offline assembly of a simple task; adds no model calls")
-    live.add_argument("--max-analysis-calls", type=int, default=12,
-                      help="Separate cumulative analysis generation budget (default: 12), in addition to extraction's --max-model-calls")
+    live.add_argument("--subject-strategy", choices=("observation-first", "entity-first"), default="observation-first",
+                      help="Entity-first builds a local roster, scans all readable blocks and recovers grounded omissions.")
+    live.add_argument("--no-entity-rescue", action="store_true", help="Use a strict roster with entity-first.")
+    live.add_argument("--max-analysis-calls", type=int,
+                      help="Separate observation-first analysis cap (default: 12); entity-first uses this as its total cap when --max-model-calls is omitted")
     live.add_argument("--analysis-max-steps", type=int, default=4,
                       help="Maximum model steps per verification job, including search/read decisions (default: 4)")
     live.add_argument("--analysis-input-budget", type=int, default=48000,
@@ -525,6 +528,10 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
             _write(payload, args.output)
             return 0
 
+        if args.subject_strategy == "entity-first" and any((args.output, args.report, args.log_dir)):
+            raise ConfigurationError("Entity-first produces a complete run directory; use --output-dir.")
+        if args.subject_strategy == "observation-first" and args.max_analysis_calls is None:
+            args.max_analysis_calls = 12
         default_directory = _default_outputs(args)
         if args.resume is not None:
             check_resume_paths(args.resume, [path for path in (args.output, args.report, args.log_dir) if path is not None])
@@ -628,7 +635,10 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
                 raise ConfigurationError("--model-id cannot be combined with --config, --profile, --model or --adapter.")
             config = resolve_model_config(args.model_id, environment=environment,
                                           overrides=overrides, region=args.region)
-            api_key = resolve_model_credentials(config, environment)
+            if args.check and args.subject_strategy == "entity-first":
+                api_key = environment.get(config.api_key_env)
+            else:
+                api_key = resolve_model_credentials(config, environment)
         else:
             if args.region is not None:
                 raise ConfigurationError("--region requires --model-id; advanced profiles declare their full endpoint.")
@@ -661,6 +671,29 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
                                       structure=structure)
         if trace is not None:
             trace.event("configuration", "backend_validation_started")
+        from .entity_first_output import validate_strategy
+        validate_strategy(args.subject_strategy, not args.no_entity_rescue, subject=args.table_subject, task=task,
+                          options=dataset_options, resume=bool(args.resume or args.analysis_resume or args.retry_tables
+                                                              or args.retry_analysis_jobs),
+                          context=context, tables=args.tables, analysis_steps=args.analysis_max_steps,
+                          table_rows=12, execution=execution)
+        if args.subject_strategy == "entity-first":
+            if automatic or config.max_attempts != 1 or any(v is not None for v in sidecars.values()):
+                raise ConfigurationError("Entity-first needs a fixed single-attempt backend and original text without sidecars.")
+            if args.check:
+                from .entity_first_blocks import source_blocks
+                from .pipeline import validate_analysis_request
+                validate_analysis_request(text, task, args.table_subject, 12 if args.max_analysis_calls is None else args.max_analysis_calls,
+                                          max_steps=args.analysis_max_steps, input_budget=args.analysis_input_budget)
+                blocks = source_blocks(text, max_chars=args.max_chunk_chars)
+                readable = sum(not b.get("gap") for b in blocks)
+                limit = args.max_model_calls or args.max_analysis_calls or (3 * max(1, readable))
+                plan = {"mode": "local_check", "subject_strategy": args.subject_strategy, "entity_rescue": not args.no_entity_rescue,
+                        "network_calls": 0, "block_count": len(blocks), "readable_blocks": readable,
+                        "max_model_calls": limit, "model": config.model}
+                trace.checked(plan)
+                print(json.dumps(plan, ensure_ascii=False, indent=2))
+                return 0
         backend = automatic_backend or (registry if registry is not None else default_registry()).create(
             config.adapter, config=config, api_key=api_key, trace=trace,
         )
@@ -684,7 +717,7 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
                 "model_id": args.model_id,
                 "selection_mode": "automatic" if automatic else "preset" if args.model_id is not None else "profile" if args.profile else "legacy",
                 "structured_output": config.structured_output,
-                "output_protocol": "flat-v1",
+                "output_protocol": "entity-first-v1" if args.subject_strategy == "entity-first" else "flat-v1",
                 "structured_output_capability": capability,
                 "format_retries": config.format_retries,
                 "generation": config.generation.model_dump(mode="json"),
@@ -692,7 +725,7 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
                 "tls_mode": config.tls_mode,
             })
             trace.event("configuration", "completed", model=config.model,
-                        output_protocol="flat-v1",
+                        output_protocol="entity-first-v1" if args.subject_strategy == "entity-first" else "flat-v1",
                         structured_output=config.structured_output,
                         max_output_tokens=config.generation.max_output_tokens,
                         max_attempts=config.max_attempts, format_retries=config.format_retries,
@@ -786,7 +819,8 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
                          retry_tables=args.retry_tables, table_subject=args.table_subject,
                          max_analysis_calls=args.max_analysis_calls, analysis_resume_from=args.analysis_resume,
                          analysis_max_steps=args.analysis_max_steps, analysis_input_budget=args.analysis_input_budget,
-                         retry_analysis_jobs=args.retry_analysis_jobs, dataset_options=dataset_options)
+                         retry_analysis_jobs=args.retry_analysis_jobs, dataset_options=dataset_options,
+                         subject_strategy=args.subject_strategy, entity_rescue=not args.no_entity_rescue)
         payload = result.model_dump(mode="json")
         if (default_directory is not None
                 and args.report.resolve() == (default_directory / "report.md").resolve()):
@@ -817,7 +851,11 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
         if trace is not None:
             if trace.directory is not None and args.progress != "quiet":
                 print(f"Run diagnostics: {trace.directory}", file=sys.stderr)
-                print(f"Resume checkpoint: {trace.directory / 'execution/checkpoint.json'}", file=sys.stderr)
+                if result.entity_first is None:
+                    print(f"Resume checkpoint: {trace.directory / 'execution/checkpoint.json'}", file=sys.stderr)
+        if result.entity_first is not None and result.entity_first["status"] != "complete":
+            print("attestextract: entity-first incomplete; see entity-first.json for coverage and calls.", file=sys.stderr)
+            return 2
         if result.format_status != "complete":
             print("attestextract: " + result.format_status + "; legal records saved; inspect table_results.rejections.", file=sys.stderr)
             return 2

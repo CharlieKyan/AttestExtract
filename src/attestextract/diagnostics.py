@@ -146,6 +146,8 @@ class RunTrace:
         self.write_json("result.json", result_payload)
         format_status = result_payload.get("format_status", "complete")
         status = format_status if format_status in {"partial_format_error", "format_error"} else "succeeded"
+        if result_payload.get("entity_first") and result_payload["entity_first"]["status"] != "complete":
+            status = "entity_first_incomplete"
         if analysis is not None:
             self._manifest["analysis_status"] = analysis["status"]
             self._manifest["analysis_semantic_status"] = "model_proposed"

@@ -19,7 +19,7 @@ from .automatic import ModelConnection
 from .dataset import assemble_dataset, query_dataset
 from .dataset_io import assemble_from_files, save_dataset
 
-__version__ = "0.1.0.dev42"
+__version__ = "0.1.0.dev43"
 
 __all__ = [
     "__version__", "extract", "load_task", "TaskSpec", "RecordSpec", "FieldSpec",

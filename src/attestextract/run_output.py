@@ -33,6 +33,11 @@ def save_run_result(result: ExtractionResult, directory: Path, trace: RunTrace) 
     payload = result.model_dump(mode="json")
     serialized = json.dumps(trace._mask(payload), ensure_ascii=False, indent=2, allow_nan=False) + "\n"
     report = render_markdown_report(result, secrets=trace._secrets)
+    if result.entity_first is not None:
+        from .entity_first_output import report_heading
+        report = report_heading(result.entity_first) + report
+        with (directory / "entity-first.json").open("x", encoding="utf-8") as stream:
+            json.dump(trace._mask(result.entity_first), stream, ensure_ascii=False, indent=2, allow_nan=False)
     if result.analysis is not None:
         report = ("# Object-linked analysis\n\n"
                   f"Analysis status: {result.analysis['status']}. "

@@ -681,7 +681,9 @@ def extract(
     table_mode: str = "auto",
     retry_tables: bool = False,
     table_subject: str | None = None,
-    max_analysis_calls: int = 12,
+    max_analysis_calls: int | None = None,
+    subject_strategy: str = "observation-first",
+    entity_rescue: bool = True,
     analysis_max_steps: int = 4,
     analysis_input_budget: int = 48000,
     analysis_resume_from: str | Path | None = None,
@@ -689,6 +691,11 @@ def extract(
     dataset_options: dict | None = None,
 ) -> ExtractionResult:
     """Extract candidates. Matching evidence does not establish factual validity.
+
+    Set ``subject_strategy="entity-first"`` with ``table_subject`` for two source
+    passes with a scoped roster. ``entity_rescue=False`` selects a strict roster.
+    The shared call cap uses execution.max_model_calls, then max_analysis_calls,
+    then the entity-first block default, in that order.
 
     Supply either ``task`` or ``prompt_description`` and a complete ``field_list``
     mapping target names to definitions. Optional annotated ``examples`` guide
@@ -750,8 +757,11 @@ def extract(
                             field_list=field_list, examples=examples)
         from .dataset_io import check_dataset_request
         check_dataset_request(task, dataset_options)
+        from .entity_first_output import validate_strategy
+        entity_first = subject_strategy == "entity-first"
+        analysis_limit = 12 if max_analysis_calls is None else max_analysis_calls
         if table_subject is not None:
-            validate_analysis_request(text, task, table_subject, max_analysis_calls,
+            validate_analysis_request(text, task, table_subject, analysis_limit,
                                       max_steps=analysis_max_steps, input_budget=analysis_input_budget)
         elif analysis_resume_from is not None:
             raise ConfigurationError("analysis_resume_from requires table_subject.")
@@ -782,6 +792,12 @@ def extract(
             if not isinstance(execution, ExecutionOptions):
                 raise ConfigurationError("execution must be an ExecutionOptions instance.")
             execution = ExecutionOptions.model_validate(execution.model_dump())
+        validate_strategy(subject_strategy, entity_rescue, subject=table_subject, task=task, options=dataset_options,
+                          resume=bool(resume_from or analysis_resume_from or retry_tables or retry_analysis_jobs),
+                          context=context, tables=table_mode, analysis_steps=analysis_max_steps,
+                          table_rows=table_rows_per_chunk, execution=execution)
+        if entity_first and isinstance(text, Document) and text.structure is not None and context.mode == "none":
+            raise ConfigurationError("Entity-first does not accept external structure hints.")
         if resume_from is not None and output_dir is None and (trace is None or trace.directory is None):
             raise ConfigurationError("Resuming extraction needs a new output_dir or persistent RunTrace directory.")
         if type(format_retries) is not int or format_retries not in (0, 1):
@@ -815,6 +831,20 @@ def extract(
                 generation=options if generation is not None else None,
                 format_retries=format_retries, trace=trace, fallback=fallback,
             )
+        if entity_first:
+            from .entity_first_output import extract_entities
+            total = execution.max_model_calls if execution and execution.max_model_calls is not None else max_analysis_calls
+            result = extract_entities(text, task, backend=backend, source_name=source_name, table_subject=table_subject,
+                                      rescue=entity_rescue, max_calls=total, max_chars=max_chunk_chars,
+                                      input_budget=analysis_input_budget, format_retries=format_retries, generation=options,
+                                      dataset_options=dataset_options, trace=trace)
+            if directory is not None:
+                from .run_output import save_run_result
+                save_run_result(result, directory, trace)
+            elif owns_trace:
+                trace.finish(result.model_dump(mode="json"))
+            return result
+        max_analysis_calls = analysis_limit
         if table_subject is not None:
             routes = [route.backend for route in backend.routes.values()] if isinstance(backend, AutomaticBackend) else [backend]
             if any(getattr(route, "max_attempts", 1) != 1 for route in routes):

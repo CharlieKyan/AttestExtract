@@ -161,6 +161,13 @@ def assemble_dataset(source: str, result: dict, analysis: dict | None = None, *,
     from .dataset_resolution import resolve_observations
     from .dataset_supplement import discover_gaps
 
+    if result.get("entity_first") is not None:
+        if analysis is not None:
+            raise ValueError("Entity-first already records its own bindings; omit the legacy analysis snapshot.")
+        from .entity_first_output import project_archive
+        options = {key: val for key, val in {"identity_fields": identity_fields, "subject_label_field": subject_label_field,
+                                              "row_subject": row_subject, "field_policies": field_policies}.items() if val}
+        return project_archive(source, result, options)
     snapshot, gaps = checked_snapshot(source, result, analysis)
     fields = snapshot["task"]["fields"]
     validate_dataset_options(fields, identity_fields=identity_fields, row_subject=row_subject,
