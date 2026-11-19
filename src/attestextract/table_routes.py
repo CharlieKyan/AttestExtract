@@ -208,6 +208,13 @@ def _build_table_request(task: dict, table_input: dict, *, chunk_id: str,
         instructions += _FORMAT_INSTRUCTIONS
         payload["table_request_revision"] = TABLE_REQUEST_REVISION
         payload["format_example"] = _format_example()
+    if table_input.get("coverage_targets"):
+        instructions += (
+            "\nThis is a single targeted reread. table.coverage_targets maps task record type to "
+            "{value cell reference: header reference}. Return only genuinely supported observations "
+            "of those types anchored at those named value cells. All other cells, including footnotes "
+            "and row or column titles, are shared context. Return an empty records list if unsupported.\n"
+        )
     if spec.input_materials is not None:
         instructions += SIMPLE_OBSERVATION_INSTRUCTIONS
         if spec.input_materials.examples:

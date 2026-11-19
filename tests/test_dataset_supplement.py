@@ -8,6 +8,7 @@ import threading
 import pytest
 
 from attestextract.dataset_supplement import discover_gaps, run_supplement
+from attestextract.dataset_supplement_packs import review_packs
 from attestextract.models import BackendResponse
 
 
@@ -32,6 +33,12 @@ def fixture():
             "row_subject": "batch", "field_definitions": {"mass": "Measured mass"}, "observations": [obs]}
     data["coverage_gaps"] = discover_gaps(SOURCE, {}, data)
     return data
+
+
+def test_contradicted_field_is_archived_without_an_ownership_reread():
+    data = fixture()
+    data["observations"][0]["fit"]["status"] = "contradicted"
+    assert all(p["kind"] != "existing_observation" for p in review_packs(data, SOURCE))
 
 
 def decisions(pack):

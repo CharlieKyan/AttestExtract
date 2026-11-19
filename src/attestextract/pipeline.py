@@ -468,6 +468,8 @@ def _validate_cached_responses(task: TaskSpec, session: ExecutionSession, table_
                     for name in (*record.fields, *record.measurement_groups)}
     protocol = session.state.output_protocol
     for key, response in session.cached.items():
+        if key.endswith(".coverage"):
+            continue  # Validate using the parent's checked response and regenerated target map below.
         if key in (table_inputs or {}):
             from .table_windows import filter_window_records
             checked[key] = filter_window_records(_parse_table_response(response.text), table_inputs[key], task)
@@ -475,6 +477,16 @@ def _validate_cached_responses(task: TaskSpec, session: ExecutionSession, table_
         raw = _parse_response(response.text, output_protocol=protocol, allowed_keys=allowed_keys)
         _check_task_records(raw, task, trace=None, chunk_id=key, output_protocol=protocol)
         checked[key] = raw
+    from .table_coverage import coverage_targets
+    for key, node in session.state.nodes.items():
+        if key.endswith(".coverage"):
+            parent = key.removesuffix(".coverage")
+            table = (table_inputs or {}).get(parent)
+            if not table or parent not in checked or not coverage_targets(task, table, checked[parent]):
+                raise ConfigurationError("Table reread has no verified original gap.")
+            if node.status == "completed":
+                from .table_windows import filter_window_records
+                checked[key] = filter_window_records(_parse_table_response(session.cached[key].text), table, task)
     return checked
 
 
@@ -496,7 +508,8 @@ def _validated_automatic_response(task: TaskSpec, chunk: DocumentChunk,
 
 def _responses_for_chunks(task: TaskSpec, chunks: list[DocumentChunk], backend: ExtractionBackend,
                           trace: RunTrace | None, format_retries: int, generation: GenerationOptions,
-                          session: ExecutionSession | None, table_inputs: dict | None = None):
+                          session: ExecutionSession | None, table_inputs: dict | None = None,
+                          coverage_checks: dict | None = None, resume_analysis: bool = False):
     table_inputs = table_inputs or {}
     if session is None:
         for chunk in chunks:
@@ -561,8 +574,69 @@ def _responses_for_chunks(task: TaskSpec, chunks: list[DocumentChunk], backend: 
                 trace.stage = saved_stage
             raise
         yield chunk, raw, responses
+    if table_inputs and task.input_materials and coverage_checks is not None:
+        yield from _reread_table_gaps(task, session, checked, table_inputs, backend, trace, generation,
+                                      coverage_checks, resume_analysis)
     session.save()
     session.event("finished", **session.summary())
+
+
+def _reread_table_gaps(task, session, checked, table_inputs, backend, trace, generation, checks, resume_analysis):
+    from .table_coverage import coverage_targets, filter_reread, remaining_targets
+    from .table_windows import filter_window_records
+
+    for parent in session.leaves():
+        table = table_inputs.get(parent)
+        if not table or session.retry_tables:
+            continue
+        first = checked.get(parent)
+        if first is None:
+            first = filter_window_records(_parse_table_response(session.cached[parent].text), table, task)
+        targets = coverage_targets(task, table, first)
+        if not targets:
+            continue
+        check = checks[parent] = {"targets": targets, "remaining": remaining_targets(targets, first)}
+        key = parent + ".coverage"
+        node = session.state.nodes.get(key)
+        if key not in checked and node and node.calls:
+            check["status"] = node.error_code or "interrupted"
+            session.finish_interrupted_coverage(key, check["status"])
+            continue
+        if key not in checked and session.state.calls_used >= session.state.max_model_calls:
+            check["status"] = "budget_exhausted"
+            continue
+        if key not in checked and resume_analysis:
+            # Saved verification jobs identify observations by the frozen extraction.
+            # Preserve their ledger and the previously reported gap on analysis resume.
+            check["status"] = "retained_for_verification_resume"
+            continue
+        chunk = session.coverage_job(parent)
+        local = table_inputs[key] = {**table, "coverage_targets": targets}
+        if trace:
+            trace.write_json(f"tables/{key}/input.json", local)
+        if key in checked:
+            parsed, responses = checked[key], [session.cached[key]]
+            session.reused += 1
+        else:
+            session.event("table_coverage_reread", chunk_id=key, target_fields=list(targets))
+            adapter, ledger, options = backend, session, generation
+            if isinstance(backend, AutomaticBackend):
+                route = session.route_for(key)
+                adapter, ledger, options = route.backend, session.attempt_session(key, route.route_id), route.generation
+            try:
+                parsed, responses = _validated_response(task, chunk, adapter, trace, 0, options, ledger, table_input=local)
+            except BackendError as exc:
+                session.finish_interrupted_coverage(key, exc.code)
+                if not isinstance(exc, InvalidResponseError):
+                    raise
+                check["status"] = exc.code
+                continue
+        parsed, repeats = filter_reread(parsed, targets, first, table)
+        check["ignored_repeats"] = repeats
+        check["ignored_repeat_count"] = len(repeats)
+        check.update(remaining=remaining_targets(targets, parsed), reread_chunk=key)
+        check["status"] = "unresolved" if check["remaining"] else "reported"
+        yield chunk, parsed, responses
 
 
 def _selected_backend(
@@ -815,18 +889,19 @@ def extract(
                 generation=options if generation is not None else None,
                 format_retries=format_retries, trace=trace, fallback=fallback,
             )
+        resume_analysis = False
         if table_subject is not None:
             routes = [route.backend for route in backend.routes.values()] if isinstance(backend, AutomaticBackend) else [backend]
             if any(getattr(route, "max_attempts", 1) != 1 for route in routes):
                 raise ConfigurationError("Document analysis requires max_attempts=1; each request has one budget reservation.")
-            check_analysis_resume(
+            resume_analysis = check_analysis_resume(
                 text.text if isinstance(text, Document) else text, task,
                 backend=backend, generation=options, table_subject=table_subject,
                 max_calls=max_analysis_calls, resume_from=resume_from,
                 analysis_resume_from=analysis_resume_from, backend_identity=backend_identity,
                 max_steps=analysis_max_steps, input_budget=analysis_input_budget,
                 format_retries=format_retries, retry_failed_jobs=retry_analysis_jobs,
-            )
+            ) is not None
         execution_summary = {}
         result = _extract(
             text, task, backend=backend, source_name=source_name,
@@ -834,6 +909,7 @@ def extract(
             trace=trace, format_retries=format_retries, generation=options,
             execution=execution, resume_from=resume_from, backend_identity=backend_identity, context=context,
             table_mode=table_mode, retry_tables=retry_tables, execution_summary=execution_summary,
+            resume_analysis=resume_analysis,
         )
         if table_subject is not None:
             from .analysis import build_analysis
@@ -943,6 +1019,7 @@ def _extract(
     context: ContextOptions | None = None,
     table_mode: str = "auto",
     retry_tables: bool = False,
+    resume_analysis: bool = False,
     execution_summary: dict | None = None,
 ) -> ExtractionResult:
     started = time.perf_counter()
@@ -1042,8 +1119,10 @@ def _extract(
     request_attempts = 0
     usage: dict[str, int] = {}
     model: str | None = None
+    coverage_checks = {}
     for chunk, raw, responses in _responses_for_chunks(spec, chunks, backend, trace, format_retries, generation, session,
-                                                       table_inputs=table_inputs):
+                                                       table_inputs=table_inputs, coverage_checks=coverage_checks,
+                                                       resume_analysis=resume_analysis):
         response_count += len(responses)
         for response in responses:
             request_attempts += response.attempts
@@ -1197,6 +1276,9 @@ def _extract(
             trace.event("chunk", "completed", chunk_id=chunk.chunk_id,
                         candidate_count=len(chunk_candidates), review_count=sum(item.severity == "review" for item in chunk_reviews),
                         info_count=sum(item.severity == "info" for item in chunk_reviews))
+    for table_result in table_results:
+        if table_result.chunk_id in coverage_checks:
+            table_result.evidence["coverage_reread"] = coverage_checks[table_result.chunk_id]
     if trace is not None:
         trace.event("extraction", "completed", candidate_count=len(candidates) + sum(len(t.candidates) for t in table_results),
                     table_count=len(table_results),
@@ -1224,7 +1306,7 @@ def _extract(
         table_results=table_results, format_status=format_status,
         run=RunInfo(
             backend=backend.name, mode=mode, output_protocol=output_protocol,
-            chunk_count=len(session.leaves()) if session else len(chunks), response_count=response_count,
+            chunk_count=(len(session.cached) if session else len(chunks)), response_count=response_count,
             candidate_count=len(candidates) + sum(len(table.candidates) for table in table_results), request_attempts=request_attempts,
             model=None if automatic else model, usage=usage, elapsed_seconds=time.perf_counter() - started,
             **provenance,

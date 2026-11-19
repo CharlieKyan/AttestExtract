@@ -46,7 +46,9 @@ def validate_automatic_provenance(extraction: ExtractionResult, leaves: set[str]
     chunk_calls: dict[str, int] = {}
     for attempt in attempts.values():
         if (attempt.route_id not in run.routes or attempt.status in {"reserved", "responded"}
-                or not any(key == attempt.chunk_id or key.startswith(attempt.chunk_id + ".") for key in leaves)
+                or not (any(key == attempt.chunk_id or key.startswith(attempt.chunk_id + ".") for key in leaves)
+                        or attempt.status == "failed" and attempt.chunk_id.endswith(".coverage")
+                        and attempt.chunk_id.removesuffix(".coverage") in leaves)
                 or any(value < 0 for value in attempt.usage.values())):
             raise ValueError("Automatic attempts must reference known routes and completed run branches")
         chunk_calls[attempt.chunk_id] = chunk_calls.get(attempt.chunk_id, 0) + 1

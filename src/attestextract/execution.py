@@ -26,6 +26,7 @@ from .responses_backend import DeepSeekResponsesBackend as _ResponsesBackend
 # Change this when prompts, planning, parsing, or evidence semantics change.
 # Transport-only releases deliberately retain the dev19 extraction revision.
 ENGINE_REVISION = "dev19-extraction-1"
+SIMPLE_TASK_REVISION = "scoped-observations-1"
 
 
 def digest(value: Any) -> str:
@@ -259,6 +260,15 @@ class ExecutionSession:
                     if response.finish_reason not in (None, "stop"):
                         raise ValueError("incomplete cache")
                     self.cached[key] = response
+                    reread_key = key + ".coverage"
+                    if reread_key in state.nodes:
+                        from .document_routing import is_table_chunk
+                        child = state.nodes[reread_key]
+                        if (not is_table_chunk(chunk) or not self.task or not self.task.input_materials
+                                or child.calls > 1 or child.children or child.format_failures
+                                or child.table_retry_pending or child.table_original_hash):
+                            raise ValueError("invalid table coverage reread")
+                        pending.append((chunk.model_copy(update={"chunk_id": reread_key}), depth))
                 elif node.cache_hash is not None:
                     raise ValueError("unexpected cache")
                 if node.table_original_hash is not None:
@@ -302,6 +312,22 @@ class ExecutionSession:
                 result.append(key)
         return result
 
+    def coverage_job(self, parent):
+        """A reread has independent receipts but consumes the ordinary generation budget."""
+        key = parent + ".coverage"
+        if key not in self.state.nodes:
+            chunk = self.chunks[parent].model_copy(update={"chunk_id": key})
+            self.chunks[key] = chunk
+            self.state.nodes[key] = _Node(segments=chunk.segments, body_segments=chunk.body_segments,
+                                          depth=self.state.nodes[parent].depth)
+            self.save()
+        return self.chunks[key]
+
+    def finish_interrupted_coverage(self, key, code):
+        node = self.state.nodes[key]
+        node.status, node.error_code = "failed", code
+        self.save()
+
     def summary(self) -> dict[str, Any]:
         leaves = [self.state.nodes[key] for key in self.leaves()]
         return {"budget_unit": "backend.generate invocations", "max_model_calls": self.state.max_model_calls,
@@ -321,7 +347,8 @@ class ExecutionSession:
                 "transport_changes": self.state.transport_changes,
                 "migrations": self.state.migrations,
                 "table_retry_chunks": [key for key in self.leaves() if self.state.nodes[key].table_retry_pending],
-                "table_retries_reserved": sum(node.table_retries_reserved for node in leaves)}
+                "table_retries_reserved": sum(node.table_retries_reserved for node in leaves),
+                "coverage_reread_calls": sum(n.calls for k, n in self.state.nodes.items() if k.endswith(".coverage"))}
 
     def table_retry_allowed(self, chunk_id: str) -> bool:
         node = self.state.nodes[chunk_id]
@@ -484,6 +511,8 @@ def prepare_execution(text: str, task: TaskSpec, backend: Any, generation: Gener
                           "max_chars": max_chars, "table_rows_per_chunk": table_rows_per_chunk,
                           "context": (context or ContextOptions()).model_dump(),
                           "structure": structure.model_dump(mode="json") if structure is not None else None}
+    if task.input_materials is not None:
+        identity["simple_task_revision"] = SIMPLE_TASK_REVISION
     if routed is not None:
         identity["table_routing"] = {"mode": "auto", "revision": ROUTING_REVISION}
     transport = {key: getattr(backend, key, None) for key in (

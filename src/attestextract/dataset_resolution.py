@@ -5,6 +5,8 @@ from collections import defaultdict
 import re
 
 from .chunking import _protected_positions, _sentence_ends
+from .dataset_field_fit import checked_field_fit
+from .dataset_identity import competing_targets, record_names, source_bound_name
 from .dataset_resolution_table import TablePaths
 from .execution import digest
 from .normalization import normalized_view
@@ -12,7 +14,7 @@ from .structure import build_structure
 
 
 _UNCERTAIN = re.compile(
-    r"\b(?:not|no|neither|unless|except|if|instead|respectively|former|latter|might|possibly|according to|"
+    r"\b(?:not|no|neither|never|unless|except|if|instead|respectively|former|latter|might|possibly|according to|"
     r"cited|reported by|versus|compared with)\b|并非|不是|不为|未测|未达到|前者|后者|分别|据报道|假设|[?？“”\"]", re.I)
 _PURPOSES = (
     ("classification_threshold", re.compile(r"\b(?:classification thresholds?|cutoffs?|class limits?)\b|分类阈值|分类界限|分类标准", re.I)),
@@ -90,7 +92,11 @@ class _Document:
         self.aliases = self._definitions()
         self.conflicts = {frozenset((e["source_id"], e["target_id"])) for e in analysis.get("relations", [])
                           if e["predicate"] == "different_from"}
+        for edge in analysis.get("relations", []):
+            if edge["predicate"] in {"part_of", "member_of", "sample_of"} and _qualified_relation(self, edge):
+                self.conflicts.add(frozenset((edge["source_id"], edge["target_id"])))
         self.canonical, self.disputed = self._equivalence()
+        self.name_records = record_names(self, _spans)
         self._table_paths(result, TablePaths(source, structure))
 
     def scope(self, position):
@@ -292,6 +298,8 @@ def _subjects(doc, item, spans, path):
     sentences = [doc.sentence(e["start"], e["end"]) for e in spans]
     if any(s and _UNCERTAIN.search(s["quote"]) for s in sentences):
         return _decision(reason="qualified_or_competing_statement", evidence=spans)
+    if name := source_bound_name(doc, item, spans, obj, bindings, _UNCERTAIN):
+        return name
     local = [(name, sent) for sent in sentences if (name := _local_assertion(doc, item, sent))]
     scope = doc.scope(spans[0]["start"])
     if local:
@@ -466,8 +474,9 @@ def _fit(doc, item, direct, spans, path, purpose, same_task):
         alias = str(item.get("value") or "")
         section = doc.scope(spans[0]["start"])
         mappings = doc.aliases.get((section, alias), [])
-        proved = (bool(mappings) and {name for name, _ in mappings} == {direct.get("label")}
-                  and direct.get("status") == "supported")
+        proved = direct.get("status") == "supported" and (
+            alias in direct.get("alias_names", [])
+            or bool(mappings) and {name for name, _ in mappings} == {direct.get("label")})
         if not proved:
             return _decision(reason="identity_value_not_proven_alias", evidence=evidence)
     if direct["reason"] in {"qualified_or_competing_statement", "competing_bound_owner", "conflicting_scoped_definitions"}:
@@ -484,7 +493,8 @@ def _fit(doc, item, direct, spans, path, purpose, same_task):
     if direct["status"] == "supported" and isinstance(definition, str):
         label = definition.strip()
         if (path and any(e["quote"].strip() == label for e in path.get("headers", []))
-                or direct["basis"] in {"explicit_definition", "local_statement"} and label == item.get("property_name")):
+                or direct["basis"] in {"explicit_definition", "local_statement", "source_record_identity"}
+                and label == item.get("property_name")):
             return _decision("supported", key=field, label=label, reason="explicit_task_label",
                              basis="source_field_label", evidence=evidence)
     return _decision(reason="field_definition_unresolved", evidence=evidence)
@@ -501,13 +511,20 @@ def resolve_observations(source: str, result: dict, analysis: dict, *, identity_
         path = doc.paths.get(item["observation_id"])
         if item.get("source_kind") == "table" and path is None:
             path = {"gap": "table_pointer_unavailable"}
-        direct = _subjects(doc, item, spans, path)
+        competing = competing_targets(doc, item, spans, _UNCERTAIN) if same_task and path is None else []
+        direct = (_decision(reason="competing_source_subjects", evidence=competing[0]["evidence"][:1])
+                  if competing else _subjects(doc, item, spans, path))
         same = doc.canonical.get(direct["id"])
         if same and spans and all(doc.scope(e["start"]) == same[2] for e in spans):
             original = direct["id"]
             direct = {**direct, "id": same[0], "label": doc.objects[same[0]]["name"], "original_subject_id": original,
+                      "alias_names": sorted({doc.objects[k]["name"] for k, value in doc.canonical.items()
+                                             if k != same[0] and value[0] == same[0]}),
                       "basis": "explicit_equivalence", "evidence": _unique(direct["evidence"] + same[1])}
         related, candidates, parents = _relations(doc, direct, same_task, {doc.scope(e["start"]) for e in spans})
+        if direct.get("parent"):
+            related.append(direct["parent"])
+        candidates.extend(competing)
         legacy = doc.objects.get(item.get("subject_id"))
         if legacy and legacy["object_id"] != direct["id"]:
             proposed = _decision(key=legacy["object_id"], label=legacy["name"], reason="original_binding",
@@ -543,6 +560,21 @@ def resolve_observations(source: str, result: dict, analysis: dict, *, identity_
             context.extend(e["quote"] for e in spans)
         purpose = next((name for name, pattern in _PURPOSES if any(pattern.search(s) for s in context)), "unspecified")
         fit = _fit(doc, item, direct, spans, path, purpose, same_task)
+        definition = analysis.get("task", {}).get("fields", {}).get(item["record_type"], "")
+        fit_evidence = spans + (path.get("headers", []) + path.get("context", []) if path else [])
+        if path is None:
+            # A value-only citation can omit the predicate and its qualification.
+            # Use its own statement only when this reported value is unambiguous there.
+            value = "" if item.get("value") is None else str(item["value"])
+            for span in spans:
+                sentence = doc.sentence(span["start"], span["end"])
+                if sentence and value and value in span["quote"] and sentence["quote"].count(value) == 1:
+                    fit_evidence.append(sentence)
+        if (competing and fit["reason"] == "field_definition_unresolved"
+                and definition.strip() == item.get("property_name")):
+            fit = _decision("supported", key=item["record_type"], label=definition,
+                            reason="explicit_task_label", basis="source_field_label", evidence=spans)
+        fit = checked_field_fit(definition, item, fit, fit_evidence)
         entry = {"direct": direct, "target": target, "fit": fit, "candidates": candidates, "related": related,
                  "purpose": purpose, "statistic": item.get("statistic")}
         if path:

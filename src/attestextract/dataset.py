@@ -4,6 +4,7 @@ from collections import defaultdict
 from copy import deepcopy
 import re
 
+from .dataset_admission import delivered_context, delivery_status_column, provisional_row
 from .dataset_snapshot import checked_snapshot
 from .evidence import is_missing
 from .execution import digest
@@ -54,6 +55,7 @@ def _has_value_source(item, source):
         if not span:
             continue
         text = source[span["start"]:span["end"]]
+        count = 0
         for match in re.finditer(re.escape(literal), text):
             left, right = span["start"] + match.start(), span["start"] + match.end()
             if numeric:
@@ -61,6 +63,8 @@ def _has_value_source(item, source):
                 if (re.search(r"[A-Za-z_\d.+−-]$|\d,$", before)
                         or re.match(r"\d|[.,]\d|[eE][+−-]?\d", after)):
                     continue
+            count += 1
+        if count == 1:
             return True
     return False
 
@@ -77,17 +81,20 @@ def _observation(item, resolution, evidence, source, policies):
     reasons = []
     if not _has_value_source(item, source):
         reasons.append("missing_value" if is_missing(item["value"]) else "value_without_unique_source")
-    if item["blockers"]:
+    qualifier_review = (detail["fit"]["reason"] == "field_qualifier_unverified"
+                        and all(b.get("code") == "target_field_unknown" for b in item["blockers"]))
+    if item["blockers"] and not qualifier_review:
         reasons.append("original_check_blocked")
     for policy, allowed in policies.get(detail["field"], {}).items():
         if detail.get(_POLICY_COLUMNS[policy]) not in allowed:
             reasons.append(policy)
     detail["fit_blockers"] = reasons
-    if reasons:
+    if reasons and detail["fit"]["status"] != "contradicted":
         prior = detail["fit"]
         detail["fit"] = {**prior, "status": "unknown", "reason": ", ".join(reasons),
                          "prior_decision": prior}
     detail["eligible"] = all(detail[key]["status"] == "supported" for key in ("direct", "target", "fit"))
+    detail["delivery"] = "detail"
     detail["row_ids"] = []
     return detail
 
@@ -109,8 +116,11 @@ def _attested_label(target):
             and any(label in span["quote"] for span in target["evidence"]))
 
 
-def _project(schema, observations, identity_fields, source_hash, policies, label_field):
+def _project(schema, observations, identity_fields, source_hash, policies, label_field, objects):
+    """Project confirmed facts together; keep a provisional assertion at its own grain."""
     by_subject = _identity_values(observations, identity_fields)
+    by_id = {obs["observation_id"]: obs for obs in observations}
+    has_attributes = bool(set(schema).difference(identity_fields))
     groups = defaultdict(list)
     for obs in observations:
         if obs["eligible"] and obs["direct"]["id"] == obs["target"]["id"]:
@@ -124,6 +134,8 @@ def _project(schema, observations, identity_fields, source_hash, policies, label
         # Repeated measures in a block have no documented pairing by list position.
         partitions = [items] if len(set(field_names)) == len(items) else [[item] for item in items]
         for members in partitions:
+            if has_attributes and all(obs["field"] in identity_fields for obs in members):
+                continue
             row = dict.fromkeys(schema)
             cells = {}
             for obs in members:
@@ -145,13 +157,35 @@ def _project(schema, observations, identity_fields, source_hash, policies, label
                 for obs in members:
                     obs["projection_reason"] = "identity_missing_or_conflicting"
                 continue
-            member_ids = [obs["observation_id"] for obs in members]
+            member_ids = list(dict.fromkeys(key for keys in cells.values() for key in keys))
             row_id = "row-" + digest([source_hash, target["id"], member_ids])[:24]
             rows.append(row)
             lineage.append({"row_id": row_id, "subject_id": target["id"], "subject_label": target["label"],
-                            "scope": target.get("scope"), "cells": cells, "observations": member_ids})
-            for obs in members:
+                            "scope": target.get("scope"), "cells": cells, "observations": member_ids,
+                            "delivery": "confirmed", "status": "已确认", "context": delivered_context(members)})
+            for key in member_ids:
+                obs = by_id[key]
+                obs["delivery"] = "confirmed"
                 obs["row_ids"].append(row_id)
+    for obs in observations:
+        if obs["row_ids"]:
+            continue
+        key = (obs["target"]["id"], obs["conditions"], obs.get("statistic"))
+        provisional = provisional_row(obs, schema, identity_fields, label_field, objects, policies,
+                                      by_subject.get(key, {}))
+        if provisional is None:
+            continue
+        row, proof, reasons = provisional
+        oid = obs["observation_id"]
+        row_id = "row-" + digest([source_hash, "provisional", oid])[:24]
+        rows.append(row)
+        lineage.append({**proof, "row_id": row_id})
+        for key in proof["observations"]:
+            if key != oid:
+                by_id[key]["delivery"] = "confirmed"
+                by_id[key]["row_ids"].append(row_id)
+        obs.update(delivery="provisional", delivery_reasons=reasons, delivery_candidates=proof["subject_candidates"])
+        obs["row_ids"].append(row_id)
     return rows, lineage
 
 
@@ -176,9 +210,11 @@ def assemble_dataset(source: str, result: dict, analysis: dict | None = None, *,
     details = [_observation(item, resolutions[item["observation_id"]], evidence, source, field_policies or {})
                for item in snapshot["observations"]]
     source_hash = snapshot["source"]["sha256"]
+    objects = {obj["object_id"]: obj for obj in snapshot["objects"]} if subject == snapshot.get("table_subject") else {}
     rows, lineage_rows = _project(fields, details, identity_fields, source_hash, field_policies or {},
-                                  subject_label_field)
-    return {"dataset_version": "1", "document_id": snapshot["source"].get("document_id") or source_hash,
+                                  subject_label_field, objects)
+    return {"dataset_version": "2", "document_id": snapshot["source"].get("document_id") or source_hash,
+            "status_column": delivery_status_column(fields),
             "source_sha256": source_hash, "schema": list(fields), "field_definitions": fields,
             "row_subject": subject, "identity_fields": list(identity_fields), "field_policies": field_policies or {},
             "subject_label_field": subject_label_field,
@@ -198,13 +234,15 @@ def query_dataset(dataset, subject=None, *, exploratory=False, field=None, purpo
     for obs in dataset["observations"]:
         if field is not None and obs["field"] != field or purpose is not None and obs["purpose"] != purpose:
             continue
-        if not exploratory and not association_only and not obs["row_ids"]:
+        if (not exploratory and not association_only
+                and (not obs["row_ids"] or obs.get("delivery", "confirmed") != "confirmed")):
             continue
         endpoints = [obs["direct"]]
         if exploratory or association_only:
             endpoints.extend([obs["target"], *obs.get("related", [])])
         labels = {v for endpoint in endpoints if endpoint.get("status") == "supported"
-                  for v in (endpoint.get("id"), endpoint.get("label")) if isinstance(v, str)}
+                  for v in (endpoint.get("id"), endpoint.get("label"), *endpoint.get("alias_names", []))
+                  if isinstance(v, str)}
         if obs["direct"].get("basis") == "explicit_definition" and isinstance(obs["entity"], str):
             labels.add(obs["entity"])
         if exploratory:

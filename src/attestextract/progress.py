@@ -238,6 +238,10 @@ class ConsoleProgress:
         elif stage == "execution" and kind in {"unsplittable", "budget_exhausted", "format_retry_exhausted"}:
             self._waiting_since = None
             self._write(f"Execution stopped: {kind}; retain this run and its checkpoint")
+        elif stage == "execution" and kind == "table_coverage_reread":
+            self.total += 1
+            self._write(f"Table coverage reread: {event['chunk_id']}; missing fields "
+                        + ", ".join(event["target_fields"]))
         elif stage == "model_request" and kind == "started":
             if self._last_chunk != event["chunk_id"]:
                 self.current += 1

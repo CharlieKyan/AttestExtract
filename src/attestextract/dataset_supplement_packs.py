@@ -108,6 +108,8 @@ def _windows(source, spans):
 
 
 def _relation_item(source, observation):
+    if observation["fit"].get("status") == "contradicted" or observation.get("target_match") == "unsupported":
+        return None
     axes = [name for name in ("direct", "target", "fit") if observation[name].get("status") == "unknown"]
     if not axes or is_missing(observation["value"]):
         return None

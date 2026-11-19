@@ -172,6 +172,13 @@ class AutomaticExecutionSession(ExecutionSession):
     def attempts_for(self, chunk_id: str):
         return [item for item in self.state.generation_attempts if item.chunk_id == chunk_id]
 
+    def finish_interrupted_coverage(self, key, code):
+        for attempt in self.attempts_for(key):
+            if attempt.status in {"responded", "reserved"}:
+                attempt.status, attempt.error_code = "failed", code
+                attempt.outcome_unknown = not attempt.response_received
+        super().finish_interrupted_coverage(key, code)
+
     def observe(self, response: BackendResponse) -> None:
         self.state.response_count += 1
         self.state.request_attempts += response.attempts
@@ -357,6 +364,9 @@ def prepare_automatic_execution(text: str, task: TaskSpec, backend: Any, generat
                 "table_rows_per_chunk": table_rows_per_chunk,
                 "context": (context or ContextOptions()).model_dump(),
                 "structure": structure.model_dump(mode="json") if structure is not None else None}
+    if task.input_materials is not None:
+        from .execution import SIMPLE_TASK_REVISION
+        identity["simple_task_revision"] = SIMPLE_TASK_REVISION
     if routed is not None:
         identity["table_routing"] = {"mode": "auto", "revision": ROUTING_REVISION}
     table_migration = None

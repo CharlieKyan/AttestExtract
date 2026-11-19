@@ -1,6 +1,6 @@
 # AttestExtract
 
-Dev42 builds full-schema datasets from frozen observations and source evidence. It preserves the directly described object, the requested row subject, and the evidence for each field in separately queryable detail. Historical runs can be assembled offline. See the [dataset assembly guide](docs/dataset-assembly.md) and [verification recovery](docs/analysis-tables.md#verification-format-recovery-dev41).
+Dev48 extends observation-first extraction. The main CSV ends with a filterable record status. Source-backed alternatives and missing property qualifications can appear as provisional rows. Strict queries select confirmed observations. During extraction, missing values under an explicitly matching table header can trigger one targeted reread within the extraction budget. See the [dataset assembly guide](docs/dataset-assembly.md).
 
 Dev40 limits format-regeneration feedback to observed syntax facts, including when
 resuming historical checkpoints. It removes speculative shape corrections without

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.0.dev48
+
+- On the observation-first branch, preserve locally supported names and competing row subjects. Export confirmed and provisional rows with a final CSV status column and separate strict-query semantics.
+- Check task-declared property qualifications and exclusions against source evidence. Reread clearly missing table values at most once per local region within the existing extraction budget.
+
 ## 0.1.0.dev42
 
 - Assemble frozen observations into schema-ordered rows, searchable details and source lineage. Resolve scoped names, local table roles and supported associations offline. Review unresolved claims and coverage gaps with a separately budgeted, resumable supplement.

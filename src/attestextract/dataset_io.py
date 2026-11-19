@@ -83,6 +83,15 @@ def _csv_file(path: Path, columns, rows) -> None:
             })
 
 
+def _main_rows(data, status_column):
+    for row, lineage in zip(data["rows"], data["lineage"]["rows"], strict=True):
+        annotations = [lineage["status"]]
+        if not data.get("subject_label_field"):
+            annotations.append("主体 " + lineage["subject_label"])
+        annotations.extend(lineage["context"])
+        yield {**row, status_column: "｜".join(annotations)}
+
+
 def save_dataset(data: dict, directory: str | Path) -> Path:
     """Publish both CSV views and JSON provenance together to a fresh directory."""
     target = Path(directory).absolute()
@@ -95,10 +104,14 @@ def save_dataset(data: dict, directory: str | Path) -> Path:
     try:
         _json_file(stage / "dataset.json", data)
         _json_file(stage / "lineage.json", data["lineage"])
-        _csv_file(stage / "main.csv", data["schema"], data["rows"])
+        status_column = data.get("status_column")
+        if status_column:
+            _csv_file(stage / "main.csv", [*data["schema"], status_column], _main_rows(data, status_column))
+        else:
+            _csv_file(stage / "main.csv", data["schema"], data["rows"])
         # Keep the first columns immediately usable, including when the export is empty.
         columns = ["observation_id", "entity", "direct_subject", "target_subject",
-                   "field", "value", "unit", "conditions", "purpose", "source_record"]
+                   "field", "value", "unit", "conditions", "statistic", "purpose", "delivery", "source_record"]
         details = []
         for observation in data["observations"]:
             detail = dict(observation)

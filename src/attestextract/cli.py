@@ -439,6 +439,13 @@ def _offline_decisions(args: argparse.Namespace) -> int:
     return code
 
 
+def _dataset_summary(dataset: dict) -> str:
+    rows = dataset["lineage"]["rows"]
+    confirmed = sum(row["delivery"] == "confirmed" for row in rows)
+    detail = sum(obs["delivery"] == "detail" for obs in dataset["observations"])
+    return f"Main rows: {confirmed} confirmed, {len(rows) - confirmed} provisional | detail-only observations: {detail}"
+
+
 def _supplement_dataset(args: argparse.Namespace, registry: BackendRegistry | None) -> int:
     from .dataset_io import assemble_from_files, load_dataset_options
     from .dataset_supplement import run_supplement
@@ -487,6 +494,7 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
             dataset = assemble_from_files(args.input, args.run_dir, result_path=args.result,
                 analysis_path=args.analysis, output_dir=args.output_dir, raw_only=args.raw_only, **options)
             print(f"Wrote {len(dataset['rows'])} rows and {len(dataset['observations'])} observations to {args.output_dir}")
+            print(_dataset_summary(dataset))
             return 0
         if args.command == "supplement-dataset":
             return _supplement_dataset(args, registry)
@@ -733,8 +741,9 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
                     "coverage": coverage_report(text, [session.chunks[key] for key in session.leaves()], max_chars=args.max_chunk_chars),
                     "structure_diagnostics": structure.diagnostics if structure is not None else [],
                     "execution": session.summary(), "execution_options": execution.model_dump(mode="json"),
-                    "resume": {"requested": args.resume is not None, "reusable_chunks": len(session.cached),
-                               "remaining_chunks": len(session.leaves()) - len(session.cached),
+                    "resume": {"requested": args.resume is not None,
+                               "reusable_chunks": sum(key in session.cached for key in session.leaves()),
+                               "remaining_chunks": sum(key not in session.cached for key in session.leaves()),
                                "remaining_call_budget": session.state.max_model_calls - session.state.calls_used},
                     "max_http_attempts_upper_bound": (session.state.request_attempts +
                                                       (session.state.max_model_calls - session.state.calls_used) * backend.max_attempts
@@ -812,6 +821,8 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
             if result.dataset is not None:
                 from .dataset_io import save_dataset
                 save_dataset(trace._mask(result.dataset), args.output.resolve().parent / "dataset")
+                if args.progress != "quiet":
+                    print(_dataset_summary(result.dataset), file=sys.stderr)
             if trace is not None:
                 trace.finish(payload, analysis=result.analysis)
         if trace is not None:
