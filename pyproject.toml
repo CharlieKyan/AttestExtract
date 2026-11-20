@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=69", "wheel"]
+requires = ["setuptools>=77.0.3", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -9,6 +9,8 @@ description = "Schema-driven extraction from text and tables, with source-linked
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [{name = "CharlieKyan"}]
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 dependencies = ["pydantic>=2.8,<3", "httpx>=0.27,<1", "certifi"]
 classifiers = [
     "Development Status :: 2 - Pre-Alpha",

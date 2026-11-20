@@ -474,7 +474,9 @@ Next steps are a Jev-style bounded decision adapter, conflict handling and suppo
 
 Related work: [LangExtract](https://github.com/google/langextract) and the existing [JevExtract](https://github.com/gabazureus/jevextract) project. AttestExtract is a separate early project and does not vendor either implementation.
 
-No license has been added to this early repository. Public availability does not grant an open-source license. This version is not published to PyPI.
+AttestExtract is licensed under the [Apache License, Version 2.0](LICENSE). Copyright 2026 Yuzhi Kuang. See [NOTICE](NOTICE) for attribution.
+
+This version is not published to PyPI.
 
 
 ### Flat protocol and range evidence (dev17)

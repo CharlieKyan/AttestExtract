@@ -338,7 +338,9 @@ CI 在 Windows／Ubuntu、Python 3.11／3.13 下运行，公共测试仅使用�
 
 公开内容仅包含新框架、文档、测试和合成示例，不包含论文原文、专家标注、专利材料、研究目录、运行输出或凭据。相关项目：[LangExtract](https://github.com/google/langextract)、已有的 [JevExtract](https://github.com/gabazureus/jevextract)。本项目独立实现，没有直接包含它们的代码。
 
-当前未添加许可证，也未发布到 PyPI；公开可读不代表已授予开源许可。
+AttestExtract 采用 [Apache License, Version 2.0](LICENSE)。版权所有 © 2026 Yuzhi Kuang。署名见 [NOTICE](NOTICE)。
+
+当前版本尚未发布到 PyPI。
 
 
 ## dev17 离线验收
