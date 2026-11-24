@@ -22,7 +22,7 @@ from niceextract.adapter_examples import synthetic_factory
 from niceextract.chunking import chunk_document
 from niceextract.config import resolve_backend_config
 from niceextract.envconfig import load_env_file
-from niceextract.errors import NICEExtractError, ConfigurationError
+from niceextract.errors import NiceExtractError, ConfigurationError
 from niceextract.registry import default_registry
 
 
@@ -209,7 +209,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         return run(args)
-    except NICEExtractError as exc:
+    except NiceExtractError as exc:
         print(f"D2 acceptance: {exc}", file=sys.stderr)
         return 1
     except (OSError, ValueError):

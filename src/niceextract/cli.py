@@ -22,7 +22,7 @@ from .config import resolve_backend_config
 from .d1_examples import d1_example_names, load_d1_example
 from .diagnostics import RunTrace
 from .envconfig import connection_env_prefix, load_env_file
-from .errors import NICEExtractError, ConfigurationError, InvalidResponseError
+from .errors import NiceExtractError, ConfigurationError, InvalidResponseError
 from .execution import _read_state, check_resume_paths, digest, prepare_execution
 from .models import ContextOptions, ExecutionOptions, ExtractionResult, TaskSpec
 from .documents import Document
@@ -770,7 +770,7 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
         else:
             print("No execution checkpoint was saved yet.", file=sys.stderr)
         return 130
-    except (NICEExtractError, OSError, ValueError) as exc:
+    except (NiceExtractError, OSError, ValueError) as exc:
         if trace is not None:
             trace.fail(exc)
         message = trace._mask_text(str(exc)) if trace is not None else str(exc)

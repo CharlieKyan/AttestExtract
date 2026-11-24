@@ -1,12 +1,12 @@
-# NICEExtract
+# NiceExtract
 
 [English](README.md) · [快速开始](#快速开始) · [任务与标准示例](#定义任务与编写标准示例) · [配置 API 与切换模型](#配置-api-与切换模型)
 
 ## 简介
 
-NICEExtract 是一个开源 Python 框架，帮助不同领域的研究者从文献中提取结构化信息。你可以按自己的研究问题定义要收集的内容。NICEExtract 借助语言模型从正文和表格中提取候选记录，将结果和原文依据一起保存为 JSON，方便逐项核对。
+NiceExtract 是一个开源 Python 框架，帮助不同领域的研究者从文献中提取结构化信息。你可以按自己的研究问题定义要收集的内容。NiceExtract 借助语言模型从正文和表格中提取候选记录，将结果和原文依据一起保存为 JSON，方便逐项核对。
 
-## 为什么选择 NICEExtract？
+## 为什么选择 NiceExtract？
 
 - **用同一套研究口径读多篇文献。** 用自己的话定义要收集的字段。遇到有特定含义的术语，可以给一个示例说明取舍，再把同一份任务用于下一篇文献。
 - **回到原文核对每个字段。** 正文字段保留引文，成功匹配时还会给出原文位置。缺少引文、同一句话能匹配多处等情况会被标出，方便你有针对性地复核。
@@ -16,9 +16,9 @@ NICEExtract 是一个开源 Python 框架，帮助不同领域的研究者从文
 
 ## 从原文定位到科研记录
 
-LangExtract 可以在文档中高亮抽取到的文本。在它的 v1.7.2 数据结构中，一条抽取记录可以带一个字符区间、一个对齐状态，以及一组属性。读论文时，一个数值、它的单位和适用条件却可能分别来自不同位置。NICEExtract 可以为这些字段分别保留依据，让你逐项核对。[LangExtract 数据结构](https://github.com/google/langextract/blob/v1.7.2/langextract/core/data.py#L64-L92)
+LangExtract 可以在文档中高亮抽取到的文本。在它的 v1.7.2 数据结构中，一条抽取记录可以带一个字符区间、一个对齐状态，以及一组属性。读论文时，一个数值、它的单位和适用条件却可能分别来自不同位置。NiceExtract 可以为这些字段分别保留依据，让你逐项核对。[LangExtract 数据结构](https://github.com/google/langextract/blob/v1.7.2/langextract/core/data.py#L64-L92)
 
-| 复核时会遇到的问题 | 在 NICEExtract 中怎么查 |
+| 复核时会遇到的问题 | 在 NiceExtract 中怎么查 |
 | --- | --- |
 | **原文有几处相同的表述，这个字段引用了哪一处？** | 正文字段各自记录引文的匹配状态。引文在检索范围内出现多次时，可以查看各个可能的位置。如果只在折叠空白或对齐部分标点后才找到匹配，结果会同时保留模型引文和原文片段，供你对照。[引文定位说明](docs/D4_EVIDENCE.md) |
 | **这个表头的单位适用于哪一列数值？** | 沿着单元格引用，可以从数值查到为它引用的表头、单位或脚注。结果分别记录引文是否找到、行列位置是否符合局部规则。遇到跨列表头时，可以回到原表判断这个单位是否适用。[表格检查说明](docs/TABLE_EXTRACTION.md) |
@@ -27,7 +27,7 @@ LangExtract 可以在文档中高亮抽取到的文本。在它的 v1.7.2 数据
 
 ## 快速开始
 
-准备 Python 3.11 或更高版本，下载并解压[预览版源码](https://github.com/CharlieKyan/AttestExtract/archive/refs/tags/v0.1.0a1-preview.1.zip)，在包含 `pyproject.toml` 的目录运行以下命令。
+在 GitHub 打开[预览分支](https://github.com/CharlieKyan/AttestExtract/tree/release/0.1.0a1)，点击 **Code → Download ZIP** 下载源码。解压后，在包含 `pyproject.toml` 的目录使用 Python 3.11 或更高版本运行以下命令。
 
 ```sh
 python -m pip install .

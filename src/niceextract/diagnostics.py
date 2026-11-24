@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from .errors import NICEExtractError, BackendError, ConfigurationError
+from .errors import NiceExtractError, BackendError, ConfigurationError
 
 
 def _now() -> str:
@@ -187,7 +187,7 @@ class RunTrace:
             return
         failure_stage = stage or self.stage
         error: dict[str, Any] = {"stage": failure_stage, "error_type": type(exc).__name__}
-        if isinstance(exc, NICEExtractError):
+        if isinstance(exc, NiceExtractError):
             error["message"] = str(exc)
         elif isinstance(exc, OSError):
             error.update(message=exc.strerror or "Could not read or write a local file.", errno=exc.errno)

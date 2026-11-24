@@ -1,12 +1,12 @@
-# NICEExtract
+# NiceExtract
 
 [简体中文](README.zh-CN.md) · [Quick start](#quick-start) · [Tasks and examples](#define-a-task-and-label-examples) · [API setup and model switching](#configure-the-api-and-switch-models)
 
 ## Introduction
 
-NICEExtract is an open-source Python framework for extracting structured information from research documents. You define what to collect. NICEExtract uses a language model to find it in prose and tables, then returns candidate records as JSON with evidence you can check against the source.
+NiceExtract is an open-source Python framework for extracting structured information from research documents. You define what to collect. NiceExtract uses a language model to find it in prose and tables, then returns candidate records as JSON with evidence you can check against the source.
 
-## Why NICEExtract?
+## Why NiceExtract?
 
 - **Use the same definitions across papers.** Describe the fields your study needs in your own words. Add a worked example when a term has a specific meaning in your field, then reuse that task on the next paper.
 - **Check a result against the source.** For text fields, inspect the quotation and its location when a match is found. Missing quotations and ambiguous matches are flagged so you can decide where to look more closely.
@@ -16,18 +16,18 @@ NICEExtract is an open-source Python framework for extracting structured informa
 
 ## From a text match to a research record
 
-LangExtract can highlight where an extraction appears in a document. In its v1.7.2 data model, each extraction has one optional character span, an alignment status and a dictionary of attributes. In a paper, the value, its unit and the conditions under which it was measured can each come from a different place. NICEExtract lets you examine the evidence for those fields separately. [LangExtract data model](https://github.com/google/langextract/blob/v1.7.2/langextract/core/data.py#L64-L92)
+LangExtract can highlight where an extraction appears in a document. In its v1.7.2 data model, each extraction has one optional character span, an alignment status and a dictionary of attributes. In a paper, the value, its unit and the conditions under which it was measured can each come from a different place. NiceExtract lets you examine the evidence for those fields separately. [LangExtract data model](https://github.com/google/langextract/blob/v1.7.2/langextract/core/data.py#L64-L92)
 
-| Question during review | What you can inspect in NICEExtract |
+| Question during review | What you can inspect in NiceExtract |
 | --- | --- |
 | **Which occurrence supports this field?** | Each quoted text field has its own match status. When the wording occurs more than once in the search range, you can inspect the possible locations. If spacing or punctuation differs, a normalized match keeps both the model's quotation and the original source text for review. [Evidence guide (in Chinese)](docs/D4_EVIDENCE.md) |
 | **Does this unit apply to this table value?** | Follow cell references from a reported value to the header, unit or footnote cited for it. The result distinguishes finding the quoted text from checking its row or column relationship. That gives you the original cells to consult when a header spans several columns. [Table checks (in Chinese)](docs/TABLE_EXTRACTION.md) |
 | **Which object does this observation describe? Does it fit my definition?** | For field-list tasks, `table_subject` in Python (`--table-subject` in the CLI) enables an optional verification stage with its own model-call budget. The model can search and reread passages in the same document to assess ownership and field fit separately. A total mass may clearly belong to a specimen and still fall outside your definition of *dry mass*. Ownership can remain unknown, and the original value is preserved for review. [How verification works](docs/analysis-tables.md#what-the-loop-does) |
-| **What if the model's output cuts off halfway through a table?** | When the service reports an output-length limit, NICEExtract can split the work by row and, if needed, by cell. Each retry still sees the original table and its headers. The retries share the run's call budget, and the incomplete response stays out of the results. [Table recovery (in Chinese)](docs/TABLE_EXTRACTION.md#预算格式错误与恢复) |
+| **What if the model's output cuts off halfway through a table?** | When the service reports an output-length limit, NiceExtract can split the work by row and, if needed, by cell. Each retry still sees the original table and its headers. The retries share the run's call budget, and the incomplete response stays out of the results. [Table recovery (in Chinese)](docs/TABLE_EXTRACTION.md#预算格式错误与恢复) |
 
 ## Quick start
 
-Download and unzip the [preview source](https://github.com/CharlieKyan/AttestExtract/archive/refs/tags/v0.1.0a1-preview.1.zip). With Python 3.11 or newer, run these commands in the directory containing `pyproject.toml`.
+Open the [preview branch](https://github.com/CharlieKyan/AttestExtract/tree/release/0.1.0a1) on GitHub and choose **Code → Download ZIP**. Unzip the source and run these commands with Python 3.11 or newer in the directory containing `pyproject.toml`.
 
 ```sh
 python -m pip install .

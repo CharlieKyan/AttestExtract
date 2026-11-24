@@ -2,7 +2,7 @@
 
 ## 0.1.0a1
 
-- The framework previously published as AttestExtract is now **NICEExtract**. Install the new distribution and use `niceextract` for the CLI and Python imports. In scripts that catch the base exception by name, use `NICEExtractError`.
+- The framework previously published as AttestExtract is now **NiceExtract**. The distribution, CLI command and Python package all use `niceextract`. Scripts can catch `niceextract.errors.NiceExtractError`. The original `NICEExtractError` spelling refers to the same exception class.
 - Custom connections now use `NICEEXTRACT_*` environment variables. Legacy-only configurations still work. The default route preference cache starts in `~/.niceextract/cache`; an explicitly configured legacy cache directory is still honored. Existing result files and supported checkpoints keep their original formats. [Connection settings](docs/BACKENDS.md)
 - The English and Chinese homepages now walk through a synthetic example, from a reported measurement to its source quotation, and show how to extract your own fields into JSON.
 

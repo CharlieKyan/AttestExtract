@@ -11,7 +11,7 @@ import pytest
 from niceextract import cli, extract
 from niceextract.backends import OpenAICompatibleBackend, ReplayBackend
 from niceextract.diagnostics import RunTrace
-from niceextract.errors import BackendError, ConfigurationError, InvalidResponseError
+from niceextract.errors import BackendError, ConfigurationError, InvalidResponseError, NiceExtractError, NICEExtractError
 from niceextract.models import BackendResponse
 
 
@@ -146,6 +146,16 @@ def test_pipeline_redacts_secrets_in_source_request_response_and_candidate_logs(
         artifacts = list((directory / folder).glob(f"*.{suffix}"))
         assert artifacts
         assert any("[REDACTED]" in path.read_text(encoding="utf-8") for path in artifacts)
+
+
+def test_public_base_error_spelling_preserves_catch_and_diagnostic_type(tmp_path):
+    assert NiceExtractError is NICEExtractError
+    with pytest.raises(NiceExtractError):
+        raise ConfigurationError("synthetic configuration error")
+
+    directory = tmp_path / "base-error"
+    RunTrace(directory).fail(NiceExtractError("synthetic failure"), stage="configuration")
+    assert read_json(directory / "error.json")["error_type"] == "NICEExtractError"
 
 
 def test_failed_trace_masks_sensitive_exception_message_and_keeps_first_failure(tmp_path):

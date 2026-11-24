@@ -1,4 +1,4 @@
-"""NICEExtract: schema-driven extraction with source-linked evidence."""
+"""NiceExtract: schema-driven extraction with source-linked evidence."""
 
 from .decisions import DecisionBackend, DecisionResult, DecisionTask, validate_decision
 from .models import (

@@ -1,4 +1,4 @@
-"""Public exceptions raised by NICEExtract."""
+"""Public exceptions raised by NiceExtract."""
 
 from typing import Any
 
@@ -20,11 +20,15 @@ class NICEExtractError(Exception):
     """Base class for expected, user-facing failures."""
 
 
-class ConfigurationError(NICEExtractError):
+# Keep the original runtime class name for diagnostics and saved exceptions.
+NiceExtractError = NICEExtractError
+
+
+class ConfigurationError(NiceExtractError):
     """The task or model connection is not configured correctly."""
 
 
-class BackendError(NICEExtractError):
+class BackendError(NiceExtractError):
     """A model request failed without producing a usable response."""
 
     def __init__(
@@ -65,5 +69,5 @@ class InvalidResponseError(BackendError):
         self.response_metadata = response_metadata
 
 
-class TaskValidationError(NICEExtractError):
+class TaskValidationError(NiceExtractError):
     """A task definition or extracted record does not satisfy its schema."""
