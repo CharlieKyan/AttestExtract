@@ -1,5 +1,7 @@
 # 每次修改的审查摘要
 
+[2026-11-24 首页科研证据与模型接入说明](2026-11-24-homepage-evidence-models.md)记录与 LangExtract 的证据粒度对照、双语 API 示例以及模拟 HTTP 和离线复核结果。
+
 [2026-11-24 中英文首页改版](2026-11-24-bilingual-homepage.md)记录通用框架定位、示例后置、双语链接核对及离线快速开始验证。
 
 [2026-11-20 NICEExtract 名称迁移与中英文首页预览](2026-11-20-niceextract-preview.md)记录新包名、合成 JSON 示例、旧配置迁移与预览版验收。
