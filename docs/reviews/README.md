@@ -1,5 +1,7 @@
 # 每次修改的审查摘要
 
+[2026-11-24 NiceExtract 品牌拼写与发布准备](2026-11-24-niceextract-display-name.md)记录正式拼写、兼容性和分发包核对范围。
+
 [2026-11-24 首页任务定义与标准示例](2026-11-24-task-authoring-homepage.md)记录双语任务模板、逐字段引文、无密钥校验与错误提示验证。
 
 [2026-11-24 首页科研证据与模型接入说明](2026-11-24-homepage-evidence-models.md)记录与 LangExtract 的证据粒度对照、双语 API 示例以及模拟 HTTP 和离线复核结果。
