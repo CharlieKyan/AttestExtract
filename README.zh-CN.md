@@ -1,6 +1,6 @@
 # NICEExtract
 
-[English](README.md) · [快速开始](#快速开始) · [配置 API 与切换模型](#配置-api-与切换模型)
+[English](README.md) · [快速开始](#快速开始) · [任务与标准示例](#定义任务与编写标准示例) · [配置 API 与切换模型](#配置-api-与切换模型)
 
 ## 简介
 
@@ -48,11 +48,57 @@ niceextract demo --output result.json
 
 ## 抽取自己的文档
 
-1. **准备原文。** 将文档保存为 UTF-8 文本或 Markdown，例如 `paper.md`。如果从 PDF 开始，请先转换，并核对需要的表格是否保留为 Markdown 或 HTML 表格。[表格抽取指南](docs/TABLE_EXTRACTION.md)
-2. **定义任务。** 将示例任务另存为 `task.json`。根据自己的研究问题重写任务说明和字段定义，再调整或移除可选的标注示例。[示例任务](src/niceextract/examples/observations.task.json) · [任务编写指南](docs/SIMPLE_TASKS.md)
-3. **选择模型连接。** 下面分别介绍内置预设、实验室兼容接口和团队配置。正式抽取会将文档内容发送给选定的服务商，可能产生费用。
+在同一目录准备两个文件。`paper.md` 放这次要处理的原文，保存为 UTF-8 文本或 Markdown。`task.json` 保存本研究的抽取规则，换一篇论文时也可以继续用。如果从 PDF 开始，请先转换，并核对需要的表格是否保留为 Markdown 或 HTML 表格。[表格抽取指南](docs/TABLE_EXTRACTION.md)
+
+### 定义任务与编写标准示例
+
+抽取观测时，最少只需填两项。在 `prompt_description` 里写明要抽什么、哪些情况应分别记录。在 `field_list` 里列出**所有目标字段**，为每个字段写一句定义，说明什么情况算入。如果某个字段容易混淆，可以加上 `examples`，用一段短文和你期望看到的标注来说明取舍。
+
+下面是一份可直接保存为 `task.json` 的完整示例。任务要收集两个指标，并示范同一试样出现两个质量值时，哪一个应计入干质量。
+
+```json
+{
+  "prompt_description": "收集文中明确报告的试样属性。不同条件下的测量分别记录，保留原单位。",
+  "field_list": {
+    "dry_mass": "试样干燥后测得的质量。排除干燥前的测量值。",
+    "thickness": "原文报告的试样厚度，保留测量时的条件。"
+  },
+  "examples": [
+    {
+      "text": "试样 B 干燥前的质量为 5.1 g。干燥后，试样 B 的质量为 4.2 g。干燥温度为 60 °C。",
+      "extractions": [
+        {
+          "field": "dry_mass",
+          "entity": "试样 B",
+          "value": "4.2",
+          "unit": "g",
+          "conditions": "60 °C",
+          "quote": "干燥后，试样 B 的质量为 4.2 g。",
+          "quotes": {"conditions": "干燥温度为 60 °C。"}
+        }
+      ]
+    }
+  ]
+}
+```
+
+**怎样给自己的任务写标准示例**
+
+- `text` 放一小段示例原文。`extractions` 放你认为**从这段原文中**应该抽出的观测，每条观测单独写一项。上例只有 4.2 g 符合干质量定义。示例没报告厚度，但 `thickness` 仍是抽取目标。要增加示例，可以在 `examples` 数组中追加一组 `text` 和 `extractions`。如果字段定义已足够清楚，也可以省略整个 `examples`。
+- `field` 填 `field_list` 中的字段名。`value` 填非空字符串，数值或范围也加双引号，单位按原文保留。原文没写的对象（`entity`）、单位（`unit`）或条件（`conditions`），可以省略或填 `null`。
+- `quote` 从这条示例自己的 `text` 中连续、逐字摘录。上例第二句支持质量和单位，第三句才给出温度，所以在 `quotes` 中单独为 `conditions` 引用第三句。正式抽取时，模型参考示例了解你的口径，结果中的引文会回到本次输入的 `paper.md` 中核对。
+
+安装后，在 `task.json` 所在目录运行下面的命令，可以先检查任务，无需模型或 API 密钥。
+
+```sh
+python -c "from niceextract import load_task; print(list(load_task('task.json').record_types))"
+```
+
+上例应输出 `['dry_mass', 'thickness']`。如果标注用了未声明的字段，或引文在示例原文中找不到，错误会指出对应条目。引文的含义是否支持这条标注，仍由你判断。若需要记录“主体—关系—客体”等自定义结构，可参考关系任务。[另一份质量与长度任务](src/niceextract/examples/observations.task.json) · [关系任务](src/niceextract/examples/d1/relation/task.json) · [任务编写指南](docs/SIMPLE_TASKS.md)
 
 ## 配置 API 与切换模型
+
+正式抽取会将文档内容和任务中的示例发送给选定的模型服务商，可能产生费用。
 
 ### 在内置模型之间切换
 

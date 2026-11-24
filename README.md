@@ -1,6 +1,6 @@
 # NICEExtract
 
-[简体中文](README.zh-CN.md) · [Quick start](#quick-start) · [API setup and model switching](#configure-the-api-and-switch-models)
+[简体中文](README.zh-CN.md) · [Quick start](#quick-start) · [Tasks and examples](#define-a-task-and-label-examples) · [API setup and model switching](#configure-the-api-and-switch-models)
 
 ## Introduction
 
@@ -48,11 +48,57 @@ These synthetic examples show how the choice of task changes what you extract. Y
 
 ## Use your own documents
 
-1. **Prepare the source.** Save the document as UTF-8 text or Markdown, for example `paper.md`. Convert PDFs first and check that the tables you need are preserved as Markdown or HTML tables. [Table extraction guide (in Chinese)](docs/TABLE_EXTRACTION.md)
-2. **Define your task.** Copy the sample task to `task.json`. Rewrite the task description and field definitions for your study, then adapt or remove the optional example. [Sample task](src/niceextract/examples/observations.task.json) · [Task guide (in Chinese)](docs/SIMPLE_TASKS.md)
-3. **Choose a model connection.** Use a built-in preset, your lab's compatible service or a saved team configuration as described below. A live run sends document content to the chosen provider and may incur charges.
+Keep two files side by side. `paper.md` contains the document you want to process, saved as UTF-8 text or Markdown. `task.json` describes what to collect and can be reused across papers. If you start from a PDF, convert it first and check that the tables you need are preserved as Markdown or HTML tables. [Table extraction guide (in Chinese)](docs/TABLE_EXTRACTION.md)
+
+### Define a task and label examples
+
+For observations, a task needs just two entries. In `prompt_description`, say what to extract and when to keep observations separate. In `field_list`, give **every target field** a name and a definition that tells a reader what counts. Add `examples` when a short passage and your expected labels can resolve a tricky choice.
+
+Save this complete example as `task.json`. It asks for two properties and shows how to distinguish dry mass from a second mass reported for the same specimen.
+
+```json
+{
+  "prompt_description": "Collect explicitly reported specimen properties. Keep measurements under different conditions separate and preserve the reported units.",
+  "field_list": {
+    "dry_mass": "Mass measured after drying. Exclude measurements taken before drying.",
+    "thickness": "Reported specimen thickness at the stated measurement conditions."
+  },
+  "examples": [
+    {
+      "text": "Sample B weighed 5.1 g before drying. After drying, Sample B weighed 4.2 g. The drying temperature was 60 °C.",
+      "extractions": [
+        {
+          "field": "dry_mass",
+          "entity": "Sample B",
+          "value": "4.2",
+          "unit": "g",
+          "conditions": "60 °C",
+          "quote": "After drying, Sample B weighed 4.2 g.",
+          "quotes": {"conditions": "The drying temperature was 60 °C."}
+        }
+      ]
+    }
+  ]
+}
+```
+
+**How to label your own example**
+
+- Put a short passage in `text` and the observations you would accept from **that passage** in `extractions`, one entry per observation. Here only 4.2 g meets the dry-mass definition. Thickness remains a target even though this passage gives no thickness measurement. To add another example, append another pair of `text` and `extractions` to the `examples` array. You can also omit `examples` entirely.
+- Set `field` to a key from `field_list`. Write `value` as a nonempty string, even for numbers or ranges. Keep the original unit. You can omit `entity`, `unit` or `conditions`, or set them to `null`, when the passage leaves them unstated.
+- Copy a continuous passage from the example's own `text` into `quote`. Here the second sentence supports the value and unit, while the third supplies the temperature. The `conditions` entry inside `quotes` cites that third sentence separately. When you run on `paper.md`, the examples guide the model and its output quotations are checked against `paper.md`.
+
+After installation you can check the task locally without a model or API key. Run this in the directory containing `task.json`.
+
+```sh
+python -c "from niceextract import load_task; print(list(load_task('task.json').record_types))"
+```
+
+For the example above, this prints `['dry_mass', 'thickness']`. An undeclared field or a quotation the loader cannot find raises an error identifying the offending entry. You still decide whether the passage supports your label. For custom record shapes such as subject–relation–object, see the relation task. [Another task covering mass and length](src/niceextract/examples/observations.task.json) · [Relation task](src/niceextract/examples/d1/relation/task.json) · [Task guide (in Chinese)](docs/SIMPLE_TASKS.md)
 
 ## Configure the API and switch models
+
+A live run sends document content and task examples to the chosen provider and may incur charges.
 
 ### Switch between built-in presets
 
