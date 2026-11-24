@@ -27,7 +27,7 @@ LangExtract 可以在文档中高亮抽取到的文本。在它的 v1.7.2 数据
 
 ## 快速开始
 
-在 GitHub 打开[预览分支](https://github.com/CharlieKyan/AttestExtract/tree/release/0.1.0a1)，点击 **Code → Download ZIP** 下载源码。解压后，在包含 `pyproject.toml` 的目录使用 Python 3.11 或更高版本运行以下命令。
+下载并解压 [NiceExtract 0.1.0a1 源码 ZIP](https://github.com/CharlieKyan/NiceExtract/archive/refs/tags/v0.1.0a1.zip)。在包含 `pyproject.toml` 的目录使用 Python 3.11 或更高版本运行以下命令。
 
 ```sh
 python -m pip install .

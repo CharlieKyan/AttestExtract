@@ -27,7 +27,7 @@ LangExtract can highlight where an extraction appears in a document. In its v1.7
 
 ## Quick start
 
-Open the [preview branch](https://github.com/CharlieKyan/AttestExtract/tree/release/0.1.0a1) on GitHub and choose **Code → Download ZIP**. Unzip the source and run these commands with Python 3.11 or newer in the directory containing `pyproject.toml`.
+Download and unpack the [source ZIP for NiceExtract 0.1.0a1](https://github.com/CharlieKyan/NiceExtract/archive/refs/tags/v0.1.0a1.zip). With Python 3.11 or newer, run these commands in the directory containing `pyproject.toml`.
 
 ```sh
 python -m pip install .

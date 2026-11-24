@@ -28,9 +28,9 @@ dev = ["pytest>=8,<10", "build>=1,<2"]
 niceextract = "niceextract.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/CharlieKyan/AttestExtract/tree/release/0.1.0a1"
-Repository = "https://github.com/CharlieKyan/AttestExtract"
-Issues = "https://github.com/CharlieKyan/AttestExtract/issues"
+Homepage = "https://github.com/CharlieKyan/NiceExtract"
+Repository = "https://github.com/CharlieKyan/NiceExtract"
+Issues = "https://github.com/CharlieKyan/NiceExtract/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]
