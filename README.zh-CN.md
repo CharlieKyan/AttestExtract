@@ -2,47 +2,50 @@
 
 [English](README.md)
 
-NICEExtract 是面向科研文献的 Python 抽取框架。你可以用自己的话定义想收集的指标，让框架从正文和表格里提取候选观测。结果以 JSON 保存，每条观测都能记录报告值、单位、测量条件和原文依据，便于逐项核对。
+## 简介
 
-## 一个样品，两种温度
+NICEExtract 是一个开源 Python 框架，帮助不同领域的研究者从文献中提取结构化信息。你可以按自己的研究问题定义要收集的内容。NICEExtract 借助语言模型从正文和表格中提取候选记录，将结果和原文依据一起保存为 JSON，方便逐项核对。
 
-下面的合成片段记录了同一样品在两个温度下的吸附压力。虽然压力数值相同，抽取结果保留了两条观测，每条都附有各自的原句。你可以直接在浏览器里对照阅读。[查看原文](src/niceextract/examples/ccus.txt) · [打开示例 JSON](examples/ccus-result.json)
+## 为什么选择 NICEExtract？
 
-| 样品 | 压力 | 温度 | 对应原句 |
-| --- | --- | --- | --- |
-| 样品A | 12 bar | 25 °C | 样品A在25 °C时的CO2吸附压力为12 bar。 |
-| 样品A | 12 bar | 50 °C | 样品A在50 °C时的CO2吸附压力为12 bar。 |
+- **用同一套研究口径读多篇文献。** 用自己的话定义要收集的字段。遇到有特定含义的术语，可以给一个示例说明取舍，再把同一份任务用于下一篇文献。
+- **回到原文核对每个字段。** 正文字段保留引文，成功匹配时还会给出原文位置。缺少引文、同一句话能匹配多处等情况会被标出，方便你有针对性地复核。
+- **正文和表格可以一起读。** 一次运行就能处理正文及其中的 Markdown 或 HTML 表格。两类结果保存在同一份 JSON 中，表格观测还可通过单元格引用追溯到原表的行和列。
+- **保留理解数值所需的上下文。** 核对一个报告值时，可以一起查看它描述的对象、单位和适用条件。即使数值相同，在不同条件下得到的观测也可以分别记录。
+- **长文档中断后可以接着处理。** 你可以设置模型调用次数上限并保存运行记录。恢复时可以复用已完成的片段，省去重复调用。[运行与恢复指南](docs/EXECUTION.md)
 
-这两处引文均已在原文中定位。遇到证据缺失或引文位置有歧义时，框架会提示复核。即使找到了原句，数值是否属于目标样品、测量条件是否符合研究要求，仍需研究者结合原文判断。
+## 快速开始
 
-## 用在你的研究中
-
-- **按研究口径收集数据。** 你可以把“质量”限定为实际接受测试的试样质量。不同论文对同一术语用法不一时，还可以附一条示例说明取舍。
-- **追溯表格里的数值。** 表格观测保留单元格引用，正文观测保留引文，两者保存在同一个 JSON 文件里，便于对照原表与正文核查。
-- **从中断处接着读长文。** 保存运行目录后，可以复用已完成的抽取。继续前可先查看恢复计划，设定模型调用预算。[运行与恢复指南](docs/EXECUTION.md)
-
-## 在本地运行示例
-
-准备 Python 3.11 或更高版本，下载并解压[本次预览的源码包](https://github.com/CharlieKyan/AttestExtract/archive/refs/tags/v0.1.0a1-preview.1.zip)。在包含 `pyproject.toml` 的目录运行以下两条命令。演示离线回放预先编写的合成回答，无需 API 密钥。
+准备 Python 3.11 或更高版本，下载并解压[预览版源码](https://github.com/CharlieKyan/AttestExtract/archive/refs/tags/v0.1.0a1-preview.1.zip)，在包含 `pyproject.toml` 的目录运行以下命令。
 
 ```sh
 python -m pip install .
-niceextract demo --example ccus --output result.json
+niceextract demo --output result.json
 ```
 
-## 抽取自己的材料
+打开 `result.json`，即可查看两份合成材料的候选记录及对应引文。演示在本地回放预设回答，无需 API 密钥。
 
-将论文或片段保存为 UTF-8 文本或 Markdown，例如 `paper.md`。如果原文是 PDF，请先转换，并核对表格是否完整保留为 Markdown 或 HTML 表格。[表格抽取指南](docs/TABLE_EXTRACTION.md)
+## 浏览示例
 
-将示例任务另存为 `task.json`，换成你想收集的字段，为每个字段写一句定义，再改写或移除可选的标注示例。[示例任务](src/niceextract/examples/observations.task.json) · [任务定义与 Python 示例](docs/SIMPLE_TASKS.md)
+下面三种任务都使用合成材料，可直接在浏览器里对照阅读。
 
-下面以 DeepSeek 预设为例。先在环境变量中设置 `DEEPSEEK_API_KEY`。这次运行会将输入发送到模型服务，服务商可能计费。[其他模型的连接方式](docs/BACKENDS.md)
+| 你想收集什么？ | 可以看哪里？ |
+| --- | --- |
+| 测量结果和实验条件 | 对照[研究片段](src/niceextract/examples/ccus.txt)和[抽取结果 JSON](examples/ccus-result.json)，看同一样品的两次测量如何分别记录。 |
+| 物品、数量和交付要求 | 对照[采购需求](src/niceextract/examples/procurement.md)和[任务定义](src/niceextract/examples/procurement.task.json)，看换一组字段后如何处理另一类文档。 |
+| 原文明示的关系 | 对照[原句](src/niceextract/examples/d1/relation/source.txt)和[人工编写的预期记录](src/niceextract/examples/d1/relation/expected.json)，看如何表达谁供应什么。 |
+
+## 抽取自己的文档
+
+1. **准备原文。** 将文档保存为 UTF-8 文本或 Markdown，例如 `paper.md`。如果从 PDF 开始，请先转换，并核对需要的表格是否保留为 Markdown 或 HTML 表格。[表格抽取指南](docs/TABLE_EXTRACTION.md)
+2. **定义任务。** 将示例任务另存为 `task.json`。根据自己的研究问题重写任务说明和字段定义，再调整或移除可选的标注示例。[示例任务](src/niceextract/examples/observations.task.json) · [任务编写指南](docs/SIMPLE_TASKS.md)
+3. **连接模型。** 以下命令使用 DeepSeek，请先在环境中设置 `DEEPSEEK_API_KEY`。这一步会把文档发送给模型服务商，可能产生费用。[其他模型的连接方式](docs/BACKENDS.md)
 
 ```sh
 niceextract extract --model-id deepseek:deepseek-flash --input paper.md --task task.json --output my-result.json
 ```
 
-打开 `my-result.json`，即可结合原文引句或表格单元格引用，逐条核对候选观测。[结果复核指南](docs/EXPERT_REVIEW.md)
+打开 `my-result.json`，把候选记录与对应的原文引句或表格单元格逐条核对，再用于自己的研究。[结果复核指南](docs/EXPERT_REVIEW.md)
 
 ## 许可证
 
