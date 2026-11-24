@@ -21,6 +21,7 @@ from pydantic import Field
 
 from .config import BackendConfig
 from .diagnostics import RunTrace
+from .envconfig import connection_env_prefix
 from .errors import BackendError, ConfigurationError, InvalidResponseError
 from .models import ContractModel, ExtractionRequest, GenerationOptions
 from .providers import resolve_model_credentials
@@ -33,7 +34,7 @@ class ModelConnection(ContractModel):
     base_url: str = Field(min_length=1, repr=False)
     model: str = Field(min_length=1)
     api_key: str | None = Field(default=None, repr=False, exclude=True)
-    api_key_env: str = Field(default="ATTESTEXTRACT_API_KEY", pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+    api_key_env: str = Field(default="NICEEXTRACT_API_KEY", pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
     timeout: float | None = Field(default=None, gt=0, le=600)
     read_timeout: float | None = Field(default=None, gt=0, le=600)
     tls_mode: Literal["auto", "1.2", "auto_fallback", "tls12_fallback"] = "tls12_fallback"
@@ -212,8 +213,9 @@ class AutomaticBackend:
         self.routes = {route.route_id: route for route in routes}
         self.preferred_route_id = next(route.route_id for route in routes if route.role == "primary")
         self.fallback_route_id = next((route.route_id for route in routes if route.role == "fallback"), None)
-        self._cache_dir = Path(cache_dir) if cache_dir is not None else Path(
-            os.environ.get("ATTESTEXTRACT_MODEL_CACHE_DIR", str(Path.home() / ".attestextract" / "cache")))
+        if cache_dir is None:
+            cache_dir = os.environ.get("NICEEXTRACT_MODEL_CACHE_DIR", os.environ.get("ATTESTEXTRACT_MODEL_CACHE_DIR"))
+        self._cache_dir = Path(cache_dir) if cache_dir is not None else Path.home() / ".niceextract" / "cache"
         self._use_cache = use_cache
         if use_cache:
             self.preferred_route_id = self._cached_route("primary") or self.preferred_route_id
@@ -375,6 +377,8 @@ def build_automatic_backend(
             continue
         if role == "fallback" and connection.api_key is None and "api_key_env" not in connection.model_fields_set:
             raise ConfigurationError("A fallback needs its own explicit api_key or api_key_env binding.")
+        if role == "primary" and "api_key_env" not in connection.model_fields_set:
+            connection = connection.model_copy(update={"api_key_env": f"{connection_env_prefix(environment)}_API_KEY"})
         if trace is not None and connection.api_key:
             trace.add_secrets(connection.api_key)
         choices = _configs(connection, dict(overrides or {}) if role == "primary" else {})

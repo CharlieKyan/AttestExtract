@@ -4,11 +4,11 @@ import json
 
 import pytest
 
-from attestextract import RunTrace
-from attestextract.errors import BackendError, ConfigurationError
-from attestextract.execution import digest
-from attestextract.models import BackendResponse
-from attestextract.verification import build_verification
+from niceextract import RunTrace
+from niceextract.errors import BackendError, ConfigurationError
+from niceextract.execution import digest
+from niceextract.models import BackendResponse
+from niceextract.verification import build_verification
 from test_verification_loop import SHORT, MEASUREMENT, action, frozen_extraction, cite
 
 

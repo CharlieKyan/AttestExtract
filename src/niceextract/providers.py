@@ -90,7 +90,7 @@ def resolve_model_config(
 
     Qwen keys are selected by presence: QWEN_API_KEY, DASHSCOPE_API_KEY, then
     VLM_API_KEY. The first two use QWEN_BASE_URL; VLM uses VLM_BASE_URL. Missing
-    provider URLs use the official default. Global ATTESTEXTRACT settings and
+    provider URLs use the official default. Global NICEEXTRACT settings and
     dedicated *_MODEL variables never influence this explicit model selection.
     """
     if not isinstance(selector, str) or selector.count(":") != 1 or any(ch.isspace() for ch in selector):

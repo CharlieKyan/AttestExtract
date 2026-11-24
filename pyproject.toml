@@ -3,9 +3,9 @@ requires = ["setuptools>=77.0.3", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "attestextract"
-version = "0.1.0.dev41"
-description = "Schema-driven extraction from text and tables, with source-linked evidence and pluggable decision backends."
+name = "niceextract"
+version = "0.1.0a1"
+description = "Extract observations from research text and tables into JSON with source-linked evidence."
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [{name = "CharlieKyan"}]
@@ -13,7 +13,7 @@ license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 dependencies = ["pydantic>=2.8,<3", "httpx>=0.27,<1", "certifi"]
 classifiers = [
-    "Development Status :: 2 - Pre-Alpha",
+    "Development Status :: 3 - Alpha",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -25,10 +25,10 @@ classifiers = [
 dev = ["pytest>=8,<10", "build>=1,<2"]
 
 [project.scripts]
-attestextract = "attestextract.cli:main"
+niceextract = "niceextract.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/CharlieKyan/AttestExtract"
+Homepage = "https://github.com/CharlieKyan/AttestExtract/tree/v0.1.0a1-preview.1"
 Repository = "https://github.com/CharlieKyan/AttestExtract"
 Issues = "https://github.com/CharlieKyan/AttestExtract/issues"
 
@@ -36,7 +36,7 @@ Issues = "https://github.com/CharlieKyan/AttestExtract/issues"
 where = ["src"]
 
 [tool.setuptools.package-data]
-attestextract = ["examples/*.json", "examples/*.txt", "examples/*.md", "examples/d1/*/*.json", "examples/d1/*/*.txt", "examples/table_routes/*.json"]
+niceextract = ["examples/*.json", "examples/*.txt", "examples/*.md", "examples/d1/*/*.json", "examples/d1/*/*.txt", "examples/table_routes/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

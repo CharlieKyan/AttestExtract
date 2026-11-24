@@ -16,7 +16,7 @@ strings are unverified hints, not an authoritative object inventory.
 This synthetic example makes real model calls when run with valid credentials:
 
 ```python
-from attestextract import extract
+from niceextract import extract
 
 result = extract(
     text="Batch P contains specimen A. Specimen A has a mass of 17 g.",
@@ -54,7 +54,7 @@ this simple task in `task.json`:
 ```
 
 ```powershell
-python -m attestextract extract `
+python -m niceextract extract `
   --input input/paper.md --task task.json `
   --model-id deepseek:deepseek-flash `
   --table-subject "Individual specimens, distinguished by batch and experiment" `
@@ -286,7 +286,7 @@ legal; the program never manufactures one to replace a bad response.
 To reopen an **already failed** job, explicitly select it on resume:
 
 ```powershell
-python -m attestextract extract `
+python -m niceextract extract `
   --input input/paper.md --task task.json --model-id deepseek:deepseek-flash `
   --resume output/old-run --output-dir output/recovered-run `
   --table-subject "Individual specimens, distinguished by batch and experiment" `
@@ -365,7 +365,7 @@ new requests.
 Resume a **new-policy** run into a new output directory:
 
 ```powershell
-python -m attestextract extract `
+python -m niceextract extract `
   --input input/paper.md --task task.json `
   --model-id deepseek:deepseek-flash `
   --table-subject "Individual specimens, distinguished by batch and experiment" `
@@ -416,12 +416,12 @@ example, assuming the original run has two completed extraction calls and one
 failed analysis call within an eight-call analysis budget:
 
 ```powershell
-python -m attestextract extract `
+python -m niceextract extract `
   --input input/paper.md --task task.json --model-id deepseek:deepseek-flash `
   --resume output/old-run --max-model-calls 2 --output-dir output/extraction-reused
 if ($LASTEXITCODE -ne 0) { throw "Extraction replay failed; stop before analysis." }
 
-python -m attestextract extract `
+python -m niceextract extract `
   --input input/paper.md --task task.json --model-id deepseek:deepseek-flash `
   --resume output/extraction-reused --max-model-calls 2 `
   --table-subject "Individual specimens, distinguished by batch and experiment" `

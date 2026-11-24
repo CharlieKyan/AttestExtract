@@ -6,8 +6,8 @@ import sys
 
 import pytest
 
-from attestextract.errors import ConfigurationError
-from attestextract.models import BackendResponse
+from niceextract.errors import ConfigurationError
+from niceextract.models import BackendResponse
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
 import table_route_experiment as cli

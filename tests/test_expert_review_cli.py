@@ -5,9 +5,9 @@ import socket
 
 import pytest
 
-from attestextract import cli
-from attestextract.diagnostics import RunTrace
-from attestextract.progress import ConsoleProgress
+from niceextract import cli
+from niceextract.diagnostics import RunTrace
+from niceextract.progress import ConsoleProgress
 
 
 @pytest.fixture(autouse=True)

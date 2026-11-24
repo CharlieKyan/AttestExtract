@@ -9,9 +9,9 @@ import warnings
 import pytest
 from pydantic import ValidationError
 
-from attestextract.errors import TaskValidationError
-from attestextract.models import FieldSpec, RecordSpec, TaskSpec
-from attestextract.task_input import (
+from niceextract.errors import TaskValidationError
+from niceextract.models import FieldSpec, RecordSpec, TaskSpec
+from niceextract.task_input import (
     TaskInputWarning, observation_quotes, observation_values, resolve_task,
     task_from_json, task_summary,
 )

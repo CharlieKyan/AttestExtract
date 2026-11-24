@@ -9,14 +9,14 @@ from pathlib import Path
 import httpx
 import pytest
 
-from attestextract import cli, extract
-from attestextract.backends import OpenAICompatibleBackend, ReplayBackend
-from attestextract.diagnostics import RunTrace
-from attestextract.errors import BackendError, InvalidResponseError
-from attestextract.models import ExtractionRequest
-from attestextract.progress import ConsoleProgress
-from attestextract.providers import resolve_model_config
-from attestextract.transport import tls_context
+from niceextract import cli, extract
+from niceextract.backends import OpenAICompatibleBackend, ReplayBackend
+from niceextract.diagnostics import RunTrace
+from niceextract.errors import BackendError, InvalidResponseError
+from niceextract.models import ExtractionRequest
+from niceextract.progress import ConsoleProgress
+from niceextract.providers import resolve_model_config
+from niceextract.transport import tls_context
 
 
 TASK = {"name": "Synthetic lamp", "record_types": {"power": {
@@ -39,18 +39,51 @@ def arguments(tmp_path):
 def clean_environment(monkeypatch):
     import os
     for key in list(os.environ):
-        if key.startswith(("ATTESTEXTRACT_", "DEEPSEEK_", "QWEN_", "DASHSCOPE_", "VLM_")):
+        if key.startswith(("NICEEXTRACT_", "ATTESTEXTRACT_", "DEEPSEEK_", "QWEN_", "DASHSCOPE_", "VLM_")):
             monkeypatch.delenv(key)
 
 
 def intercept(monkeypatch, handler):
-    monkeypatch.setattr("attestextract.backends.OpenAICompatibleBackend", lambda **kwargs:
+    monkeypatch.setattr("niceextract.backends.OpenAICompatibleBackend", lambda **kwargs:
                         OpenAICompatibleBackend(**kwargs, transport=httpx.MockTransport(handler)))
 
 
 def response(content=VALID):
     return httpx.Response(200, json={"choices": [{"message": {"content": content}, "finish_reason": "stop"}],
                                     "usage": {"prompt_tokens": 37, "completion_tokens": 24, "total_tokens": 61}})
+
+
+@pytest.mark.parametrize("new_endpoint,key_override,expected_host,expected_auth", [
+    (False, False, "old.example", "Bearer synthetic-legacy"),
+    (True, False, "new.example", None),
+    (True, True, "new.example", "Bearer synthetic-explicit"),
+])
+def test_cli_connection_namespace_keeps_credentials_with_their_endpoint(
+    tmp_path, monkeypatch, new_endpoint, key_override, expected_host, expected_auth,
+):
+    source, task = tmp_path / "paper.txt", tmp_path / "task.json"
+    source.write_text("Lamp A uses 8 W.", encoding="utf-8")
+    task.write_text(json.dumps(TASK), encoding="utf-8")
+    monkeypatch.setenv("ATTESTEXTRACT_BASE_URL", "https://old.example/v1")
+    monkeypatch.setenv("ATTESTEXTRACT_MODEL", "old-model")
+    monkeypatch.setenv("ATTESTEXTRACT_API_KEY", "synthetic-legacy")
+    if new_endpoint:
+        monkeypatch.setenv("NICEEXTRACT_BASE_URL", "https://new.example/v1")
+        monkeypatch.setenv("NICEEXTRACT_MODEL", "new-model")
+    args = ["extract", "--input", str(source), "--task", str(task), "--output", str(tmp_path / "result.json")]
+    if key_override:
+        monkeypatch.setenv("EXPLICIT_FIXTURE_KEY", "synthetic-explicit")
+        args.extend(["--api-key-env", "EXPLICIT_FIXTURE_KEY"])
+    observed = []
+
+    def handler(request):
+        payload = json.loads(request.content)
+        observed.append((request.url.host, payload["model"], request.headers.get("Authorization")))
+        return response()
+
+    intercept(monkeypatch, handler)
+    assert cli.main(args) == 0
+    assert observed == [(expected_host, "new-model" if new_endpoint else "old-model", expected_auth)]
 
 
 def test_minimal_cli_creates_unique_results_report_logs_and_progress(tmp_path, monkeypatch, capsys):
@@ -384,7 +417,7 @@ def test_cli_resume_preview_revalidates_cache_after_transport_changes(tmp_path, 
     assert preview["resume"] == {"requested": True, "reusable_chunks": 1, "remaining_chunks": 0, "remaining_call_budget": 2}
     assert before == {f.relative_to(old): f.read_bytes() for f in old.rglob("*") if f.is_file()}
     # An integrity-valid but contract-invalid cache must fail even in --check.
-    from attestextract.execution import digest
+    from niceextract.execution import digest
     cache = old / "diagnostics/execution/cache/chunk-0001.json"
     data = json.loads(cache.read_text())
     data["text"] = '{"records":[{"record_type":"unknown","values":{},"quotes":{}}]}'

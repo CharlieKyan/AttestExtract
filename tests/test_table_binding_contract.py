@@ -6,12 +6,12 @@ import json
 import pytest
 from pydantic import ValidationError
 
-from attestextract.schema_diagnostics import _check
-from attestextract.table_routes import (
+from niceextract.schema_diagnostics import _check
+from niceextract.table_routes import (
     Binding, TABLE_REQUEST_REVISION, build_route_request, build_route_schema,
     build_table_input, evaluate_route, parse_route_response_partial,
 )
-from attestextract.task_input import resolve_task
+from niceextract.task_input import resolve_task
 
 
 SOURCE = "| Object | Pressure/kPa |\n|---|---|\n| Actual A | 12 |\n"

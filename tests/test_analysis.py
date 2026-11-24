@@ -5,12 +5,12 @@ import json
 
 import pytest
 
-from attestextract import RunTrace, extract
-from attestextract.analysis import _build_legacy_analysis as build_analysis
-from attestextract.backends import ReplayBackend
-from attestextract.errors import BackendError, ConfigurationError
-from attestextract.execution import digest
-from attestextract.models import BackendResponse, GenerationOptions, ReviewItem
+from niceextract import RunTrace, extract
+from niceextract.analysis import _build_legacy_analysis as build_analysis
+from niceextract.backends import ReplayBackend
+from niceextract.errors import BackendError, ConfigurationError
+from niceextract.execution import digest
+from niceextract.models import BackendResponse, GenerationOptions, ReviewItem
 
 
 SOURCE = "East contains reactor R. West contains reactor R. East R yields 18%. West R yields 32%."
@@ -100,7 +100,7 @@ def test_unknown_is_valid_and_original_blockers_remain():
 
 
 def test_public_dispatch_preserves_saved_v01_contract(tmp_path):
-    from attestextract.analysis import build_analysis as public_analysis
+    from niceextract.analysis import build_analysis as public_analysis
 
     original = extraction()
     analyse(original, max_calls=1, trace=RunTrace(tmp_path / "old"))
@@ -307,9 +307,9 @@ def test_orphan_relation_rejected_before_binding_calls():
 
 
 def test_automatic_analysis_uses_successful_route_and_rejects_changed_endpoint_model(tmp_path):
-    from attestextract.automatic import AutomaticBackend, AutomaticRoute
-    from attestextract.config import BackendConfig
-    from attestextract.models import ExecutionOptions
+    from niceextract.automatic import AutomaticBackend, AutomaticRoute
+    from niceextract.config import BackendConfig
+    from niceextract.models import ExecutionOptions
 
     class Hybrid(Backend):
         def generate(self, request):

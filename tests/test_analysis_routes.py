@@ -5,7 +5,7 @@ import json
 import httpx
 import pytest
 
-from attestextract import ExecutionOptions, extract
+from niceextract import ExecutionOptions, extract
 
 
 TASK = {"prompt_description": "Extract directly reported sample mass without changing units.",
@@ -19,7 +19,7 @@ def envelope(payload, *, finish="stop"):
 
 
 def install_http(monkeypatch, tmp_path, handler):
-    monkeypatch.setenv("ATTESTEXTRACT_MODEL_CACHE_DIR", str(tmp_path / "model-cache"))
+    monkeypatch.setenv("NICEEXTRACT_MODEL_CACHE_DIR", str(tmp_path / "model-cache"))
     original = httpx.Client
     sent = []
 

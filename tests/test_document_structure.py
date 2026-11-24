@@ -4,9 +4,9 @@ import hashlib
 
 import pytest
 
-from attestextract.documents import Document
-from attestextract.models import SourceSpan
-from attestextract.structure import build_structure, validate_structure
+from niceextract.documents import Document
+from niceextract.models import SourceSpan
+from niceextract.structure import build_structure, validate_structure
 
 
 def content(text, span):

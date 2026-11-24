@@ -8,11 +8,11 @@ import json
 import pytest
 from pydantic import ValidationError
 
-from attestextract import extract
-from attestextract.archive import CandidateReview, ExtractionArchive, create_archive
-from attestextract.backends import ReplayBackend
-from attestextract.documents import Document, DocumentMetadata
-from attestextract.storage import load_archive, save_archive
+from niceextract import extract
+from niceextract.archive import CandidateReview, ExtractionArchive, create_archive
+from niceextract.backends import ReplayBackend
+from niceextract.documents import Document, DocumentMetadata
+from niceextract.storage import load_archive, save_archive
 
 
 TEXT = "前言🙂\r\n\r\n样品甲在 20 ℃ 下容量为 12.5 mmol/g。\r\n"

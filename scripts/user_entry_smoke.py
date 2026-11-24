@@ -13,9 +13,9 @@ from unittest.mock import patch
 
 import httpx
 
-import attestextract
-from attestextract import cli, extract
-from attestextract.errors import BackendError, ConfigurationError
+import niceextract
+from niceextract import cli, extract
+from niceextract.errors import BackendError, ConfigurationError
 
 
 SOURCE = "Sample A has mass 17 g."
@@ -62,8 +62,8 @@ def main() -> None:
         kwargs["transport"] = httpx.MockTransport(handle)
         return original_client(*args, **kwargs)
 
-    environment = {k: v for k, v in os.environ.items() if not k.startswith("ATTESTEXTRACT_")}
-    environment.update(DEEPSEEK_API_KEY="synthetic-entry-key", ATTESTEXTRACT_MODEL_CACHE_DIR=str(root / "cache"))
+    environment = {k: v for k, v in os.environ.items() if not k.startswith(("NICEEXTRACT_", "ATTESTEXTRACT_"))}
+    environment.update(DEEPSEEK_API_KEY="synthetic-entry-key", NICEEXTRACT_MODEL_CACHE_DIR=str(root / "cache"))
     with patch.dict(os.environ, environment, clear=True), patch.object(httpx, "Client", mock_client), \
             patch("socket.socket.connect", blocked), patch("socket.create_connection", blocked), \
             patch("socket.getaddrinfo", blocked):
@@ -109,8 +109,8 @@ def main() -> None:
         assert manifest["status"] == "failed" and not (root / "failed/result.json").exists()
         assert (root / "failed/diagnostics/execution/checkpoint.json").is_file()
     assert not network_attempts
-    summary = {"passed": True, "package_version": attestextract.__version__,
-               "module_path": attestextract.__file__, "mock_model_posts": len(calls),
+    summary = {"passed": True, "package_version": niceextract.__version__,
+               "module_path": niceextract.__file__, "mock_model_posts": len(calls),
                "real_model_calls": 0, "network_attempts": 0, "cli_exit_status": status,
                "completed_resume_new_calls": 0, "historical_artifacts_unchanged": True,
                "failure_checkpoint_saved": True, "python_cli_candidates_equal": True}

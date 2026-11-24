@@ -7,10 +7,10 @@ import hashlib
 import json
 from pathlib import Path
 
-import attestextract
-from attestextract import ExecutionOptions, RunTrace, cli, extract
-from attestextract.backends import ReplayBackend
-from attestextract.decision_bundle import load_decision_bundle
+import niceextract
+from niceextract import ExecutionOptions, RunTrace, cli, extract
+from niceextract.backends import ReplayBackend
+from niceextract.decision_bundle import load_decision_bundle
 
 
 def _write(path: Path, value: object) -> None:
@@ -75,7 +75,7 @@ def run_acceptance(directory: Path) -> dict:
     assert json.loads((incomplete / "decision-ledger.json").read_text(encoding="utf-8"))["status"] == "incomplete"
     assert _hashes(run) == before
     assert load_decision_bundle(bundle_path).extraction == result
-    summary = {"package_version": attestextract.__version__, "module_path": str(Path(attestextract.__file__).resolve()),
+    summary = {"package_version": niceextract.__version__, "module_path": str(Path(niceextract.__file__).resolve()),
                "passed": True, "real_endpoint_calls": 0, "decision_model_calls": 0,
                "batch_count": 2, "candidate_count": 2, "empty_chunk_count": 1,
                "same_batch_selects": 2, "created_final_records": 0, "source_run_unchanged": True}

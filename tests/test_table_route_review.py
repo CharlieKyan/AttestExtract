@@ -2,7 +2,7 @@
 
 import pytest
 
-from attestextract.table_routes import build_table_input, evaluate_route
+from niceextract.table_routes import build_table_input, evaluate_route
 
 
 def selection(table, cell_text, quote=None):

@@ -4,17 +4,17 @@ import hashlib
 
 import pytest
 
-from attestextract.automatic import ModelConnection, build_automatic_backend
-from attestextract.automatic_execution import prepare_automatic_execution
-from attestextract.contextual_chunking import coverage_report
-from attestextract.diagnostics import RunTrace
-from attestextract.document_routing import is_table_chunk, routing_structure, table_input_for_chunk
-from attestextract.errors import ConfigurationError
-from attestextract.execution import prepare_execution
-from attestextract.models import BackendResponse, ContextOptions, ExecutionOptions, GenerationOptions, TaskSpec
-from attestextract.planning import plan_chunks, split_chunk
-from attestextract.structure import build_structure
-from attestextract.table_routes import build_table_input
+from niceextract.automatic import ModelConnection, build_automatic_backend
+from niceextract.automatic_execution import prepare_automatic_execution
+from niceextract.contextual_chunking import coverage_report
+from niceextract.diagnostics import RunTrace
+from niceextract.document_routing import is_table_chunk, routing_structure, table_input_for_chunk
+from niceextract.errors import ConfigurationError
+from niceextract.execution import prepare_execution
+from niceextract.models import BackendResponse, ContextOptions, ExecutionOptions, GenerationOptions, TaskSpec
+from niceextract.planning import plan_chunks, split_chunk
+from niceextract.structure import build_structure
+from niceextract.table_routes import build_table_input
 
 
 TASK = TaskSpec.model_validate({"name": "Synthetic observations", "record_types": {"reading": {

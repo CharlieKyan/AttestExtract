@@ -24,6 +24,14 @@ _POWERSHELL_ENV = re.compile(r"\$env:", re.IGNORECASE)
 _READ_HOST = re.compile(r"\bRead-Host\b", re.IGNORECASE)
 
 
+def connection_env_prefix(environment: Mapping[str, str]) -> str:
+    """Choose one namespace for endpoint, model and key, even for empty values."""
+    for prefix in ("NICEEXTRACT", "ATTESTEXTRACT"):
+        if any(f"{prefix}_{suffix}" in environment for suffix in ("BASE_URL", "MODEL", "API_KEY")):
+            return prefix
+    return "NICEEXTRACT"
+
+
 def _invalid(line_number: int, reason: str) -> NoReturn:
     raise ConfigurationError(f"Invalid .env file at line {line_number}: {reason}")
 

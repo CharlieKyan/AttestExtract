@@ -17,13 +17,13 @@ import re
 import sys
 from urllib.parse import urlsplit
 
-from attestextract import __version__, cli
-from attestextract.adapter_examples import synthetic_factory
-from attestextract.chunking import chunk_document
-from attestextract.config import resolve_backend_config
-from attestextract.envconfig import load_env_file
-from attestextract.errors import AttestExtractError, ConfigurationError
-from attestextract.registry import default_registry
+from niceextract import __version__, cli
+from niceextract.adapter_examples import synthetic_factory
+from niceextract.chunking import chunk_document
+from niceextract.config import resolve_backend_config
+from niceextract.envconfig import load_env_file
+from niceextract.errors import NICEExtractError, ConfigurationError
+from niceextract.registry import default_registry
 
 
 CASES = ("attribute", "observation", "relation")
@@ -31,7 +31,7 @@ LIMITS = {"timeout": 60, "max_attempts": 1, "format_retries": 0, "max_output_tok
 
 
 def fixture(name):
-    resource = files("attestextract").joinpath("examples", "d1", name)
+    resource = files("niceextract").joinpath("examples", "d1", name)
     source = resource.joinpath("source.txt").read_bytes()
     task = resource.joinpath("task.json").read_bytes()
     expected = json.loads(resource.joinpath("expected.json").read_text(encoding="utf-8"))
@@ -209,7 +209,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         return run(args)
-    except AttestExtractError as exc:
+    except NICEExtractError as exc:
         print(f"D2 acceptance: {exc}", file=sys.stderr)
         return 1
     except (OSError, ValueError):

@@ -37,7 +37,7 @@ CLI 默认按任务的输出复杂度规划分块；遇到明确的输出截断�
 在仓库根目录配置好本地 `.env` 后：
 
 ```powershell
-python -m attestextract extract --input src/attestextract/examples/procurement.md --task src/attestextract/examples/procurement.task.json --model-id deepseek:deepseek-flash --env-file .env --check
+python -m niceextract extract --input src/niceextract/examples/procurement.md --task src/niceextract/examples/procurement.task.json --model-id deepseek:deepseek-flash --env-file .env --check
 ```
 
 `--check` 显示块数、总调用预算、已预留次数及内置适配器 HTTP 尝试上界，不发请求、不验证密钥或模型效果，也不产生可恢复的抽取检查点。去掉 `--check` 即运行；输出位置沿用 `outputs/<时间-ID>/`。切换到 Qwen 时只改 `--model-id qwen:qwen3.8-27b`；切换模型是新运行，不能复用另一个模型的检查点。
@@ -81,12 +81,12 @@ python -m attestextract extract --input src/attestextract/examples/procurement.m
 
 ```python
 from pathlib import Path
-from attestextract import ExecutionOptions, extract, load_task
-from attestextract.diagnostics import RunTrace
+from niceextract import ExecutionOptions, extract, load_task
+from niceextract.diagnostics import RunTrace
 
 result = extract(
-    Path("src/attestextract/examples/procurement.md").read_bytes().decode("utf-8"),
-    load_task("src/attestextract/examples/procurement.task.json"),
+    Path("src/niceextract/examples/procurement.md").read_bytes().decode("utf-8"),
+    load_task("src/niceextract/examples/procurement.task.json"),
     model="deepseek:deepseek-flash", env_file=".env",
     execution=ExecutionOptions(max_model_calls=12),
     trace=RunTrace("outputs/python-run-1/diagnostics"),

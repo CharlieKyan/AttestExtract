@@ -5,16 +5,16 @@ import json
 import httpx
 import pytest
 
-from attestextract import ExecutionOptions, extract
-from attestextract.archive import create_archive
-from attestextract.automatic import ModelConnection
-from attestextract.decision_bundle import DecisionBundle, prepare_decision_bundle
-from attestextract.decision_reporting import render_decision_bundle
-from attestextract.diagnostics import RunTrace
-from attestextract.documents import Document
-from attestextract.execution import digest
-from attestextract.reporting import render_markdown_report
-from attestextract.storage import load_archive
+from niceextract import ExecutionOptions, extract
+from niceextract.archive import create_archive
+from niceextract.automatic import ModelConnection
+from niceextract.decision_bundle import DecisionBundle, prepare_decision_bundle
+from niceextract.decision_reporting import render_decision_bundle
+from niceextract.diagnostics import RunTrace
+from niceextract.documents import Document
+from niceextract.execution import digest
+from niceextract.reporting import render_markdown_report
+from niceextract.storage import load_archive
 
 
 TEXT = "Lamp A: 8 W.\n\nLamp B: 9 W."
@@ -56,7 +56,7 @@ def _run(tmp_path, monkeypatch):
         })
 
     monkeypatch.setattr(httpx.Client, "send", send)
-    monkeypatch.setenv("ATTESTEXTRACT_MODEL_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setenv("NICEEXTRACT_MODEL_CACHE_DIR", str(tmp_path / "cache"))
     directory = tmp_path / "run"
     trace = RunTrace(directory / "diagnostics")
     result = extract(TEXT, TASK, model="novel-primary", base_url="https://primary.invalid/v1",

@@ -6,9 +6,9 @@ import json
 import httpx
 import pytest
 
-from attestextract import ExecutionOptions, extract
-from attestextract.automatic_execution import AutomaticState, validate_automatic_state
-from attestextract.errors import BackendError
+from niceextract import ExecutionOptions, extract
+from niceextract.automatic_execution import AutomaticState, validate_automatic_state
+from niceextract.errors import BackendError
 
 
 SOURCE = ("<table><tr><th>Sample</th><th>Value</th></tr>"
@@ -46,7 +46,7 @@ def records(table, *, include_foreign=False):
 
 @pytest.fixture
 def http(monkeypatch, tmp_path):
-    monkeypatch.setenv("ATTESTEXTRACT_MODEL_CACHE_DIR", str(tmp_path / "model-cache"))
+    monkeypatch.setenv("NICEEXTRACT_MODEL_CACHE_DIR", str(tmp_path / "model-cache"))
     original = httpx.Client
     calls, controls = [], {"foreign": False}
 

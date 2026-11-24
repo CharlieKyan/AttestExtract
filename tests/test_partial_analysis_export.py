@@ -7,9 +7,9 @@ import sqlite3
 
 import pytest
 
-from attestextract.analysis import is_review_only_partial
-from attestextract.analysis_export import save_analysis
-from attestextract.progress import ConsoleProgress
+from niceextract.analysis import is_review_only_partial
+from niceextract.analysis_export import save_analysis
+from niceextract.progress import ConsoleProgress
 from test_analysis_export import review_sample, read_csv
 
 

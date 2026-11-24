@@ -6,12 +6,12 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from attestextract.backends import OpenAICompatibleBackend
-from attestextract.connection_observation import ConnectionObservation
-from attestextract.diagnostics import RunTrace
-from attestextract.errors import BackendError
-from attestextract.models import ExtractionRequest
-from attestextract.responses_backend import DeepSeekResponsesBackend
+from niceextract.backends import OpenAICompatibleBackend
+from niceextract.connection_observation import ConnectionObservation
+from niceextract.diagnostics import RunTrace
+from niceextract.errors import BackendError
+from niceextract.models import ExtractionRequest
+from niceextract.responses_backend import DeepSeekResponsesBackend
 
 
 class SSLObject:

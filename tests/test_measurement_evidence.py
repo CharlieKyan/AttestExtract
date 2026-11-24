@@ -10,12 +10,12 @@ import json
 import pytest
 from pydantic import ValidationError
 
-from attestextract import TaskSpec, extract
-from attestextract.backends import ReplayBackend
-from attestextract.chunking import chunk_document
-from attestextract.errors import InvalidResponseError
-from attestextract.prompting import build_example, build_output_schema
-from attestextract.schema_diagnostics import assess_schema_compliance
+from niceextract import TaskSpec, extract
+from niceextract.backends import ReplayBackend
+from niceextract.chunking import chunk_document
+from niceextract.errors import InvalidResponseError
+from niceextract.prompting import build_example, build_output_schema
+from niceextract.schema_diagnostics import assess_schema_compliance
 
 
 @pytest.fixture

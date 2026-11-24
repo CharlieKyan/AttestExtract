@@ -565,20 +565,36 @@ def _responses_for_chunks(task: TaskSpec, chunks: list[DocumentChunk], backend: 
     session.event("finished", **session.summary())
 
 
+def _model_environment(env_file, trace, api_key, api_key_env, model_options, fallback):
+    """Bind redaction before model configuration or caller-owned trace errors can expose input."""
+    from .envconfig import load_env_file
+
+    option_name = model_options.get("api_key_env") if isinstance(model_options, Mapping) else None
+    backup = fallback if isinstance(fallback, ModelConnection) else None
+    names = (api_key_env, option_name, backup.api_key_env if backup is not None else None)
+    if trace is not None:
+        trace.add_secrets(api_key, backup.api_key if backup is not None else None)
+        trace.add_env_secrets(os.environ, *names)
+    if env_file is None:
+        return dict(os.environ)
+    environment = load_env_file(env_file)
+    if trace is not None:
+        trace.add_env_secrets(environment, *names)
+    return environment
+
+
 def _selected_backend(
-    model: str, *, env_file: str | Path | None, api_key: str | None,
+    model: str, *, environment: Mapping[str, str], env_file_used: bool, api_key: str | None,
     api_key_env: str | None, base_url: str | None, region: str | None,
     model_options: Mapping[str, Any] | None, generation: GenerationOptions | None,
     format_retries: int, trace: RunTrace | None, fallback: ModelConnection | None = None,
 ) -> tuple[ExtractionBackend, GenerationOptions]:
     """Resolve the opt-in model shortcut without changing backend injection."""
     # Import lazily: the public package imports this module before the registry.
-    from .envconfig import load_env_file
+    from .envconfig import connection_env_prefix
     from .providers import resolve_model_config, resolve_model_credentials
     from .registry import default_registry
 
-    if trace is not None and api_key is not None:
-        trace.add_secrets(api_key)
     if model_options is not None and not isinstance(model_options, Mapping):
         raise ConfigurationError("model_options must be a mapping of backend configuration overrides.")
     overrides = dict(model_options or {})
@@ -601,7 +617,6 @@ def _selected_backend(
         if value is not None:
             overrides[name] = value
     overrides["format_retries"] = format_retries
-    environment = load_env_file(env_file) if env_file is not None else dict(os.environ)
     from .providers import available_models
     effective_url = overrides.get("base_url")
     if model not in available_models() and effective_url is not None:
@@ -613,7 +628,7 @@ def _selected_backend(
         automatic_options.pop("api_key_env", None)
         try:
             primary = ModelConnection(base_url=effective_url, model=model, api_key=api_key,
-                                      api_key_env=overrides.get("api_key_env", "ATTESTEXTRACT_API_KEY"))
+                                      api_key_env=overrides.get("api_key_env", f"{connection_env_prefix(environment)}_API_KEY"))
         except (ValueError, TypeError):
             raise ConfigurationError("Supply a valid API address, model name and credential binding.") from None
         backend = build_automatic_backend(primary, fallback=fallback, trace=trace,
@@ -625,7 +640,7 @@ def _selected_backend(
                 "structured_output": selected.structured_output, "output_protocol": "flat-v1",
                 "generation": selected.generation.model_dump(mode="json"),
                 "format_retries": format_retries, "max_attempts": 1,
-                "api_key_configured": True, "env_file_used": env_file is not None,
+                "api_key_configured": True, "env_file_used": env_file_used,
             })
         return backend, selected.generation
     if fallback is not None:
@@ -641,7 +656,7 @@ def _selected_backend(
             "model_id": model, "selection_mode": "preset", "timeout": config.timeout,
             "read_timeout": config.read_timeout,
             "max_attempts": config.max_attempts, "api_key_configured": bool(key),
-            "env_file_used": env_file is not None, "structured_output": config.structured_output,
+            "env_file_used": env_file_used, "structured_output": config.structured_output,
             "format_retries": config.format_retries,
             "generation": config.generation.model_dump(mode="json"),
             "output_token_parameter": config.output_token_parameter,
@@ -736,7 +751,10 @@ def extract(
     console = None
     directory = None
     owns_trace = False
+    environment = None
     try:
+        if trace is not None and backend is None and model is not None:
+            environment = _model_environment(env_file, trace, api_key, api_key_env, model_options, fallback)
         if trace is not None and (output_dir is not None or progress is not None):
             raise ConfigurationError("Pass output_dir/progress or a caller-owned trace, not both.")
         if progress is not None and progress not in ("normal", "quiet", "verbose"):
@@ -802,8 +820,10 @@ def extract(
                              secrets=[api_key] if api_key else [], on_event=console)
             owns_trace = True
         if backend is None:
+            if environment is None:
+                environment = _model_environment(env_file, trace, api_key, api_key_env, model_options, fallback)
             backend, options = _selected_backend(
-                model, env_file=env_file, api_key=api_key, api_key_env=api_key_env,
+                model, environment=environment, env_file_used=env_file is not None, api_key=api_key, api_key_env=api_key_env,
                 base_url=base_url, region=region, model_options=model_options,
                 generation=options if generation is not None else None,
                 format_retries=format_retries, trace=trace, fallback=fallback,

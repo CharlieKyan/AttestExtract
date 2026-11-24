@@ -6,13 +6,13 @@ import json
 import httpx
 import pytest
 
-from attestextract import extract
-from attestextract.backends import OpenAICompatibleBackend
-from attestextract.diagnostics import RunTrace
-from attestextract.errors import BackendError, InvalidResponseError
-from attestextract.models import ExtractionRequest, TaskSpec
-from attestextract.prompting import build_output_schema
-from attestextract.schema_diagnostics import assess_schema_compliance
+from niceextract import extract
+from niceextract.backends import OpenAICompatibleBackend
+from niceextract.diagnostics import RunTrace
+from niceextract.errors import BackendError, InvalidResponseError
+from niceextract.models import ExtractionRequest, TaskSpec
+from niceextract.prompting import build_output_schema
+from niceextract.schema_diagnostics import assess_schema_compliance
 
 
 TASK = TaskSpec.model_validate({

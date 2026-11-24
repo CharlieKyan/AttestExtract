@@ -7,16 +7,16 @@ import re
 import pytest
 from pydantic import ValidationError
 
-from attestextract import ExecutionOptions, extract
-from attestextract.archive import create_archive
-from attestextract.backends import ReplayBackend
-from attestextract.chunking import chunk_document
-from attestextract.decision_bundle import prepare_decision_bundle
-from attestextract.decision_ledger import (
+from niceextract import ExecutionOptions, extract
+from niceextract.archive import create_archive
+from niceextract.backends import ReplayBackend
+from niceextract.chunking import chunk_document
+from niceextract.decision_bundle import prepare_decision_bundle
+from niceextract.decision_ledger import (
     DecisionLedger, check_decisions, decision_ledger_summary,
     load_decision_responses, save_decision_ledger,
 )
-from attestextract.diagnostics import RunTrace
+from niceextract.diagnostics import RunTrace
 
 
 def make_bundle(tmp_path, *, missing=False, unlocated=False, measurement=False):

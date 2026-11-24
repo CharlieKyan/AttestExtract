@@ -22,8 +22,8 @@ DASHSCOPE_API_KEY=your-qwen-beijing-key
 ```
 
 ```powershell
-attestextract models
-attestextract extract --model-id deepseek:deepseek-flash --env-file .env --input source.txt --task task.json --output result.json
+niceextract models
+niceextract extract --model-id deepseek:deepseek-flash --env-file .env --input source.txt --task task.json --output result.json
 ```
 
 Change `--model-id` to `qwen:qwen3.8-27b` to use Qwen with the same task and input.
@@ -31,7 +31,7 @@ Change `--model-id` to `qwen:qwen3.8-27b` to use Qwen with the same task and inp
 it is not a live model-discovery command. In Python:
 
 ```python
-from attestextract import extract, load_task
+from niceextract import extract, load_task
 
 result = extract(
     "Lamp A uses 8 W.", load_task("task.json"),
@@ -72,7 +72,7 @@ combined with `--model`, `--adapter`, `--config` or `--profile`.
 
 The merged environment follows process environment > explicitly loaded `.env`.
 Loading a file never changes the process environment. The model selector always
-determines the model: legacy `ATTESTEXTRACT_*` values and dedicated `*_MODEL`
+determines the model: legacy `NICEEXTRACT_*` values and dedicated `*_MODEL`
 variables do not influence the shortcut.
 
 | Provider/key selection | Associated address variable |
@@ -134,23 +134,29 @@ Credentials belong in environment variables or an explicitly selected `.env`,
 never in TOML. No configuration file is auto-discovered.
 
 ```powershell
-attestextract extract --config examples/backends.toml --profile deepseek --env-file .env --input source.txt --task task.json --output result.json --report review.md --log-dir ../research/attestextract/runs/my-new-run/diagnostics
+niceextract extract --config examples/backends.toml --profile deepseek --env-file .env --input source.txt --task task.json --output result.json --report review.md --log-dir ../research/niceextract/runs/my-new-run/diagnostics
 ```
 
 Switching compatible models needs only `--profile qwen` or a new profile. Full
 profiles contain `base_url` and `model`; incomplete or unknown fields fail before
 any model request. Explicit CLI values override the selected profile; omitted
 values retain profile values, then defaults. Profile mode ignores old
-`ATTESTEXTRACT_BASE_URL` / `ATTESTEXTRACT_MODEL` variables. Without a profile,
+`NICEEXTRACT_BASE_URL` / `NICEEXTRACT_MODEL` variables. Without a profile,
 explicit CLI > process environment > explicitly loaded `.env` remains unchanged.
 Credentials use the selected `api_key_env`, with process environment > `.env`.
 An existing empty environment value does not fall back to the file.
+
+When migrating an existing environment, rename the three connection variables together:
+`NICEEXTRACT_BASE_URL`, `NICEEXTRACT_MODEL` and `NICEEXTRACT_API_KEY`.
+If any of these is set, the new namespace is selected for the connection.
+An environment with only the old `ATTESTEXTRACT_*` names can still be used.
+An explicit `--api-key-env` selects the variable you name.
 
 | Setting | Advanced profile default / behavior |
 | --- | --- |
 | `adapter` | `openai-compatible`; must be registered by application code |
 | `base_url`, `model` | Required; compatible adapter appends `/chat/completions` |
-| `api_key_env` | `ATTESTEXTRACT_API_KEY`; local unauthenticated services remain possible |
+| `api_key_env` | `NICEEXTRACT_API_KEY`; local unauthenticated services remain possible |
 | `timeout` | Omitted: connect/read/write/pool 15/180/30/15 seconds; explicit value overrides all phases, range `(0, 600]` |
 | `read_timeout` | Optional read-phase override, range `(0, 600]`; never unlimited |
 | `max_attempts` | 1 HTTP attempt per generation; explicit overrides retain bounded retry classification |
@@ -203,10 +209,10 @@ response metadata rather than treating a configured model alias as a snapshot.
 ## Python and registration
 
 ```python
-from attestextract import (
+from niceextract import (
     BackendRegistry, default_registry, resolve_backend_config, extract, load_task,
 )
-from attestextract.envconfig import load_env_file
+from niceextract.envconfig import load_env_file
 
 environment = load_env_file(".env")
 config = resolve_backend_config(
@@ -231,8 +237,8 @@ must be pure: no network, response consumption or request mutation. The traced
 path calls it for preview and the adapter may call it again when sending.
 
 ```python
-from attestextract import default_registry
-from attestextract.cli import main
+from niceextract import default_registry
+from niceextract.cli import main
 
 registry = default_registry()
 registry.register("my-native-adapter", my_factory)
@@ -244,7 +250,7 @@ raise SystemExit(main(registry=registry))
 There is no dynamic Python import from TOML, plugin auto-discovery or global
 mutable registry. Duplicate and unknown names fail explicitly. Each application
 bootstrap registers its adapters and invokes the same CLI. The standard
-`attestextract` command includes only the compatible production adapter.
+`niceextract` command includes only the compatible production adapter.
 
 `adapter_examples.SyntheticEnvelopeBackend` is a deliberately simulated second
 protocol. It maps `deployment` / `input` and `output.text` / `metrics` / `status`
@@ -282,13 +288,13 @@ text and belong outside the public repository.
 From the checkout, run the synthetic heterogeneous protocol acceptance:
 
 ```powershell
-python scripts/d2_acceptance.py --mode mock --output-dir ../research/attestextract/runs/d2-mock-new
+python scripts/d2_acceptance.py --mode mock --output-dir ../research/niceextract/runs/d2-mock-new
 ```
 
 After configuring both official keys and explicitly authorizing model charges:
 
 ```powershell
-python scripts/d2_acceptance.py --mode live --config examples/backends.toml --env-file .env --profiles deepseek qwen --output-dir ../research/attestextract/runs/d2-live-new
+python scripts/d2_acceptance.py --mode live --config examples/backends.toml --env-file .env --profiles deepseek qwen --output-dir ../research/niceextract/runs/d2-live-new
 ```
 
 The runner uses exactly the three small synthetic D1 sources/tasks per selected

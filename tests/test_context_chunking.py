@@ -4,17 +4,17 @@ import json
 
 import pytest
 
-from attestextract import ContextOptions, Document, ExecutionOptions, extract
-from attestextract.archive import create_archive
-from attestextract.backends import ReplayBackend
-from attestextract.chunking import chunk_document
-from attestextract.contextual_chunking import coverage_report, enrich_chunk
-from attestextract.diagnostics import RunTrace
-from attestextract.evidence import ground_quote
-from attestextract.models import DocumentChunk, SourceSpan, TaskSpec
-from attestextract.planning import split_chunk
-from attestextract.prompting import build_messages
-from attestextract.structure import build_structure
+from niceextract import ContextOptions, Document, ExecutionOptions, extract
+from niceextract.archive import create_archive
+from niceextract.backends import ReplayBackend
+from niceextract.chunking import chunk_document
+from niceextract.contextual_chunking import coverage_report, enrich_chunk
+from niceextract.diagnostics import RunTrace
+from niceextract.evidence import ground_quote
+from niceextract.models import DocumentChunk, SourceSpan, TaskSpec
+from niceextract.planning import split_chunk
+from niceextract.prompting import build_messages
+from niceextract.structure import build_structure
 
 
 TASK = TaskSpec.model_validate({"name": "Synthetic measurement", "record_types": {"reading": {

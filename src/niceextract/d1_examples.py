@@ -63,7 +63,7 @@ def load_d1_example(name: str) -> ExtractionArchive:
     """
     if name not in _NAMES:
         raise ValueError(f"Unknown D1 example; choose one of {', '.join(_NAMES)}")
-    resources = files("attestextract").joinpath("examples", "d1", name)
+    resources = files("niceextract").joinpath("examples", "d1", name)
     # Decode bytes directly: evidence offsets refer to this exact source string.
     text = resources.joinpath("source.txt").read_bytes().decode("utf-8")
     task = TaskSpec.model_validate_json(resources.joinpath("task.json").read_text(encoding="utf-8"))

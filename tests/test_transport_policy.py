@@ -6,12 +6,12 @@ import ssl
 import httpx
 import pytest
 
-from attestextract.backends import OpenAICompatibleBackend
-from attestextract.diagnostics import RunTrace
-from attestextract.errors import BackendError, ConfigurationError
-from attestextract.models import ExtractionRequest
-from attestextract.responses_backend import DeepSeekResponsesBackend
-from attestextract.transport import tls_context, tls_fallback_allowed, tls_fallback_reason
+from niceextract.backends import OpenAICompatibleBackend
+from niceextract.diagnostics import RunTrace
+from niceextract.errors import BackendError, ConfigurationError
+from niceextract.models import ExtractionRequest
+from niceextract.responses_backend import DeepSeekResponsesBackend
+from niceextract.transport import tls_context, tls_fallback_allowed, tls_fallback_reason
 
 
 def request():
@@ -242,7 +242,7 @@ def test_proxy_or_endpoint_change_invalidates_probe_cache(tls_mode, monkeypatch)
 @pytest.mark.parametrize("tls_mode", ["auto_fallback", "tls12_fallback"])
 def test_ca_file_change_invalidates_selection_and_keeps_values_private(tls_mode, monkeypatch, tmp_path):
     # Context creation is isolated here; certificate validity is checked in the TLS1.2 test.
-    monkeypatch.setattr("attestextract.backends.tls_context", lambda mode: True)
+    monkeypatch.setattr("niceextract.backends.tls_context", lambda mode: True)
     ca = tmp_path / "synthetic-ca.pem"
     ca.write_text("synthetic certificate")
     monkeypatch.setenv("SSL_CERT_FILE", str(ca))

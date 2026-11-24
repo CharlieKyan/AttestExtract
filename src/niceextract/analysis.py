@@ -177,7 +177,7 @@ def _backend_route(backend, result, backend_identity):
             raise ConfigurationError("Analysis route does not match the successful extraction route snapshot.")
         route_id, identity, backend = route.route_id, digest(route.snapshot()), route.backend
     else:
-        builtin = backend.__class__.__module__ in {"attestextract.backends", "attestextract.responses_backend"}
+        builtin = backend.__class__.__module__ in {"niceextract.backends", "niceextract.responses_backend"}
         if not builtin and not backend_identity:
             raise ConfigurationError("Analysis with a custom backend requires backend_identity binding its model and configuration.")
         identity = backend_identity or digest({name: getattr(backend, name, None) for name in (

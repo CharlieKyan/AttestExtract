@@ -4,9 +4,9 @@ import json
 
 import pytest
 
-from attestextract import extract, cli
-from attestextract.errors import ConfigurationError
-from attestextract.models import BackendResponse
+from niceextract import extract, cli
+from niceextract.errors import ConfigurationError
+from niceextract.models import BackendResponse
 
 
 TEXT = "Specimen A has mass 17 g."
@@ -48,8 +48,8 @@ def test_invalid_analysis_options_fail_before_any_generation(kwargs):
 
 
 def test_long_document_passes_analysis_precheck_without_truncation():
-    from attestextract.pipeline import validate_analysis_request
-    from attestextract.task_input import resolve_task
+    from niceextract.pipeline import validate_analysis_request
+    from niceextract.task_input import resolve_task
 
     # New policy bounds each request rather than refusing the whole source.
     source = "Original source paragraph.\n\n" * 3000
@@ -67,7 +67,7 @@ def test_hidden_http_retry_rejected_before_extraction():
 
 
 def test_analysis_opt_in_is_not_serialized_into_legacy_result(tmp_path, monkeypatch):
-    from attestextract import analysis
+    from niceextract import analysis
 
     def proposed(text, result, **kwargs):
         assert text == TEXT and result.candidates[0].fields["value"].value == "17"
@@ -86,7 +86,7 @@ def test_analysis_opt_in_is_not_serialized_into_legacy_result(tmp_path, monkeypa
 
 
 def test_failed_analysis_keeps_extraction_and_marks_manifest(tmp_path, monkeypatch):
-    from attestextract import analysis, analysis_export
+    from niceextract import analysis, analysis_export
 
     failed = {"analysis_version": "0.1", "status": "failed", "error_code": "transport_error"}
     monkeypatch.setattr(analysis, "build_analysis", lambda *a, **k: failed)
@@ -111,7 +111,7 @@ def test_cli_check_shows_additional_budget_without_network(tmp_path, monkeypatch
     import httpx
 
     monkeypatch.setattr(httpx.Client, "send", lambda *a, **k: pytest.fail("offline check attempted HTTP"))
-    monkeypatch.setenv("ATTESTEXTRACT_API_KEY", "synthetic-check-key")
+    monkeypatch.setenv("NICEEXTRACT_API_KEY", "synthetic-check-key")
     source, task = tmp_path / "source.txt", tmp_path / "task.json"
     source.write_text(TEXT)
     task.write_text(json.dumps(TASK))
@@ -132,7 +132,7 @@ def test_cli_check_shows_additional_budget_without_network(tmp_path, monkeypatch
 def test_cli_check_rejects_retries_from_profile_before_network(tmp_path, monkeypatch, capsys):
     import httpx
     monkeypatch.setattr(httpx.Client, "send", lambda *a, **k: pytest.fail("offline check attempted HTTP"))
-    monkeypatch.setenv("ATTESTEXTRACT_API_KEY", "synthetic-check-key")
+    monkeypatch.setenv("NICEEXTRACT_API_KEY", "synthetic-check-key")
     source, task, config = tmp_path / "source.txt", tmp_path / "task.json", tmp_path / "models.toml"
     source.write_text(TEXT)
     task.write_text(json.dumps(TASK))
@@ -147,7 +147,7 @@ def test_cli_long_source_check_is_offline_and_retains_source_size(tmp_path, monk
     import httpx
 
     monkeypatch.setattr(httpx.Client, "send", lambda *a, **k: pytest.fail("offline check attempted HTTP"))
-    monkeypatch.setenv("ATTESTEXTRACT_API_KEY", "synthetic-check-key")
+    monkeypatch.setenv("NICEEXTRACT_API_KEY", "synthetic-check-key")
     text = (TEXT + "\n\n") * 3000
     source, task = tmp_path / "long.txt", tmp_path / "task.json"
     source.write_text(text, encoding="utf-8", newline="")
@@ -164,7 +164,7 @@ def test_cli_long_source_check_is_offline_and_retains_source_size(tmp_path, monk
 
 def test_verification_console_distinguishes_model_steps_and_local_tools():
     import io
-    from attestextract.progress import ConsoleProgress
+    from niceextract.progress import ConsoleProgress
 
     stream = io.StringIO()
     console = ConsoleProgress(stream=stream)
@@ -187,7 +187,7 @@ def test_verification_console_distinguishes_model_steps_and_local_tools():
 
 def test_verification_console_explains_known_rejection_without_echoing_provider_text():
     import io
-    from attestextract.progress import ConsoleProgress
+    from niceextract.progress import ConsoleProgress
 
     stream = io.StringIO()
     console = ConsoleProgress(stream=stream)
@@ -205,7 +205,7 @@ def test_verification_console_explains_known_rejection_without_echoing_provider_
 
 def test_verification_console_reports_scope_counts_without_echoing_response_ids():
     import io
-    from attestextract.progress import ConsoleProgress
+    from niceextract.progress import ConsoleProgress
 
     stream = io.StringIO()
     console = ConsoleProgress(stream=stream)
@@ -233,7 +233,7 @@ def test_verification_console_reports_scope_counts_without_echoing_response_ids(
 ])
 def test_verification_console_keeps_internal_and_response_failures_distinct(category, code, expected):
     import io
-    from attestextract.progress import ConsoleProgress
+    from niceextract.progress import ConsoleProgress
 
     stream = io.StringIO()
     console = ConsoleProgress(stream=stream)
@@ -248,7 +248,7 @@ def test_verification_console_keeps_internal_and_response_failures_distinct(cate
 
 def test_verification_console_does_not_echo_invalid_count_values():
     import io
-    from attestextract.progress import ConsoleProgress
+    from niceextract.progress import ConsoleProgress
 
     stream = io.StringIO()
     console = ConsoleProgress(stream=stream)
@@ -270,7 +270,7 @@ def review_only_analysis():
 
 @pytest.mark.parametrize("change", [None, "pending", "limited", "failed", "format", "version", "groups", "foreign", "code"])
 def test_batch_continuation_distinguishes_review_from_unfinished_or_failed_work(change):
-    from attestextract.analysis import is_review_only_partial
+    from niceextract.analysis import is_review_only_partial
     data = review_only_analysis()
     if change in {"pending", "limited", "failed"}:
         data["jobs"][1]["status"] = change
@@ -295,14 +295,14 @@ def test_batch_continuation_distinguishes_review_from_unfinished_or_failed_work(
 def test_cli_review_continuation_never_overrides_incomplete_extraction(
         tmp_path, monkeypatch, capsys, format_status, expected_code, manifest_status):
     import httpx
-    from attestextract import analysis_export
+    from niceextract import analysis_export
     monkeypatch.setattr(httpx.Client, "send", lambda *a, **k: pytest.fail("Unexpected network"))
     result = extract(TEXT, TASK, backend=Backend())
     result = result.model_copy(update={"schema_version": "0.6", "format_status": format_status,
                                        "analysis": review_only_analysis()})
     monkeypatch.setattr(cli, "extract", lambda *a, **k: result)
     monkeypatch.setattr(analysis_export, "save_analysis", lambda *a, **k: None)
-    monkeypatch.setenv("ATTESTEXTRACT_API_KEY", "synthetic-check-key")
+    monkeypatch.setenv("NICEEXTRACT_API_KEY", "synthetic-check-key")
     source, task, output = tmp_path / "source.txt", tmp_path / "task.json", tmp_path / "run"
     source.write_text(TEXT, encoding="utf-8")
     task.write_text(json.dumps(TASK), encoding="utf-8")

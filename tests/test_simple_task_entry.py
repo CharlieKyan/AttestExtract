@@ -7,13 +7,13 @@ import warnings
 import httpx
 import pytest
 
-from attestextract import cli, extract, ExecutionOptions, load_task, RunTrace
-from attestextract.backends import ReplayBackend, OpenAICompatibleBackend
-from attestextract.errors import ConfigurationError, TaskValidationError
-from attestextract.models import BackendResponse
-from attestextract.registry import BackendRegistry
-from attestextract.reporting import render_markdown_report
-from attestextract.task_input import resolve_task, TaskInputWarning
+from niceextract import cli, extract, ExecutionOptions, load_task, RunTrace
+from niceextract.backends import ReplayBackend, OpenAICompatibleBackend
+from niceextract.errors import ConfigurationError, TaskValidationError
+from niceextract.models import BackendResponse
+from niceextract.registry import BackendRegistry
+from niceextract.reporting import render_markdown_report
+from niceextract.task_input import resolve_task, TaskInputWarning
 
 
 SOURCE = "Sample A has mass 17 g."
@@ -39,9 +39,11 @@ def no_network_or_ambient_model(monkeypatch, tmp_path):
         return original_send(client, *args, **kwargs)
 
     monkeypatch.setattr(httpx.Client, "send", mock_only)
-    for key in ("ATTESTEXTRACT_MODEL", "ATTESTEXTRACT_BASE_URL", "ATTESTEXTRACT_API_KEY", "DEEPSEEK_API_KEY"):
-        monkeypatch.delenv(key, raising=False)
-    monkeypatch.setenv("ATTESTEXTRACT_MODEL_CACHE_DIR", str(tmp_path / "model-cache"))
+    for prefix in ("NICEEXTRACT", "ATTESTEXTRACT"):
+        for suffix in ("BASE_URL", "MODEL", "API_KEY"):
+            monkeypatch.delenv(f"{prefix}_{suffix}", raising=False)
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.setenv("NICEEXTRACT_MODEL_CACHE_DIR", str(tmp_path / "model-cache"))
 
 
 def test_python_keywords_and_task_file_agree(tmp_path):
@@ -73,7 +75,7 @@ def test_empty_response_value_retained_but_not_counted_as_valued_observation(val
 
 
 def test_bad_examples_are_rejected_before_backend_selection(monkeypatch):
-    import attestextract.pipeline as pipeline
+    import niceextract.pipeline as pipeline
     monkeypatch.setattr(pipeline, "_selected_backend", lambda *a, **k: pytest.fail("backend configured"))
     bad = deepcopy(TASK)
     bad["examples"][0]["extractions"][0]["quote"] = "Not in the example."
@@ -196,7 +198,7 @@ def test_transport_change_reuses_simple_task_cache_with_preset(tmp_path, monkeyp
         return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(RESPONSE)},
                                                      "finish_reason": "stop"}]})
 
-    monkeypatch.setattr("attestextract.backends.OpenAICompatibleBackend", lambda **kw:
+    monkeypatch.setattr("niceextract.backends.OpenAICompatibleBackend", lambda **kw:
                         OpenAICompatibleBackend(**kw, transport=httpx.MockTransport(respond)))
     options = {"model": "deepseek:deepseek-flash", "api_key": "synthetic-key",
                "execution": ExecutionOptions(max_model_calls=1)}

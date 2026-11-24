@@ -23,16 +23,16 @@ import httpcore
 import certifi
 import pydantic
 
-import attestextract
-from attestextract.config import BackendConfig
-from attestextract.documents import Document
-from attestextract.errors import ConfigurationError
-from attestextract.models import ContextOptions, DocumentChunk, ExecutionOptions, ExtractionRequest, GenerationOptions, TaskSpec
-from attestextract.pipeline import _request
-from attestextract.planning import plan_chunks
-from attestextract.providers import resolve_model_config
-from attestextract.registry import default_registry
-from attestextract.storage import _reject_constant, _unique_object
+import niceextract
+from niceextract.config import BackendConfig
+from niceextract.documents import Document
+from niceextract.errors import ConfigurationError
+from niceextract.models import ContextOptions, DocumentChunk, ExecutionOptions, ExtractionRequest, GenerationOptions, TaskSpec
+from niceextract.pipeline import _request
+from niceextract.planning import plan_chunks
+from niceextract.providers import resolve_model_config
+from niceextract.registry import default_registry
+from niceextract.storage import _reject_constant, _unique_object
 
 from provider_experiment_compat import runtime_compatibility
 
@@ -73,12 +73,12 @@ def _safe_file(root: Path, name: str) -> Path:
 
 def runtime_identity() -> dict:
     """Bind installed engine and experiment code without storing local paths."""
-    package = Path(attestextract.__file__).resolve().parent
+    package = Path(niceextract.__file__).resolve().parent
     package_files = {p.relative_to(package).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
                      for p in sorted(package.rglob("*.py"))}
     scripts = {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
                for p in sorted(Path(__file__).resolve().parent.glob("provider_experiment*.py"))}
-    return {"package_version": attestextract.__version__, "python": platform.python_version(),
+    return {"package_version": niceextract.__version__, "python": platform.python_version(),
             "system": platform.system(), "openssl": ssl.OPENSSL_VERSION, "httpx": httpx.__version__,
             "httpcore": httpcore.__version__, "pydantic": pydantic.__version__,
             "certifi": certifi.__version__,
@@ -260,7 +260,7 @@ def prepare_bundle(output: Path, source: Path, task: Path, environment: Mapping[
         cases[case_id] = {"source_id": "paper", "task_id": "paper", "chunk_id": case_id, "gold_id": None}
     for name in D1_NAMES:
         case_id = f"d1-{name}"
-        resource = files("attestextract").joinpath("examples", "d1", name)
+        resource = files("niceextract").joinpath("examples", "d1", name)
         short_text = resource.joinpath("source.txt").read_bytes().decode("utf-8")
         short_task = TaskSpec.model_validate_json(resource.joinpath("task.json").read_text(encoding="utf-8"))
         short_generation = GenerationOptions(temperature=0, max_output_tokens=2048)
@@ -283,7 +283,7 @@ def prepare_bundle(output: Path, source: Path, task: Path, environment: Mapping[
     extraction = {"source_name": source.name, "representation": document.representation,
                   "max_chunk_chars": 6000, "table_rows_per_chunk": 12, "context": context.model_dump(),
                   "options": options.model_dump(), "generation": generation.model_dump()}
-    manifest = {"bundle_version": "0.1", "package_version": attestextract.__version__, "private": True,
+    manifest = {"bundle_version": "0.1", "package_version": niceextract.__version__, "private": True,
                 "output_protocol": "flat-v1", "result_schema_version": "0.4", "network_calls": 0,
                 "expected_paper_chunks": 16, "stage_limits": {"A": 16, "B": 36, "C": 24, "D": 32},
                 "max_model_calls": 108, "max_output_tokens_total": sum(

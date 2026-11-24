@@ -1,4 +1,4 @@
-"""Public exceptions raised by AttestExtract."""
+"""Public exceptions raised by NICEExtract."""
 
 from typing import Any
 
@@ -16,15 +16,15 @@ _BACKEND_HINTS = {
 }
 
 
-class AttestExtractError(Exception):
+class NICEExtractError(Exception):
     """Base class for expected, user-facing failures."""
 
 
-class ConfigurationError(AttestExtractError):
+class ConfigurationError(NICEExtractError):
     """The task or model connection is not configured correctly."""
 
 
-class BackendError(AttestExtractError):
+class BackendError(NICEExtractError):
     """A model request failed without producing a usable response."""
 
     def __init__(
@@ -65,5 +65,5 @@ class InvalidResponseError(BackendError):
         self.response_metadata = response_metadata
 
 
-class TaskValidationError(AttestExtractError):
+class TaskValidationError(NICEExtractError):
     """A task definition or extracted record does not satisfy its schema."""

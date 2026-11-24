@@ -20,9 +20,9 @@ from .responses_backend import DeepSeekResponsesBackend
 from .capabilities import check_structured_output
 from .config import resolve_backend_config
 from .d1_examples import d1_example_names, load_d1_example
-from .diagnostics import RunTrace, redact_text
-from .envconfig import load_env_file
-from .errors import AttestExtractError, ConfigurationError, InvalidResponseError
+from .diagnostics import RunTrace
+from .envconfig import connection_env_prefix, load_env_file
+from .errors import NICEExtractError, ConfigurationError, InvalidResponseError
 from .execution import _read_state, check_resume_paths, digest, prepare_execution
 from .models import ContextOptions, ExecutionOptions, ExtractionResult, TaskSpec
 from .documents import Document
@@ -52,7 +52,7 @@ def _output_token_limit(value: str) -> int | str:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="attestextract",
+        prog="niceextract",
         description="Schema-driven extraction with source-linked evidence (early prototype).",
     )
     parser.add_argument("--version", action="version", version=__version__)
@@ -89,14 +89,14 @@ def _parser() -> argparse.ArgumentParser:
     live.add_argument("--output-dir", type=Path,
                       help="Exact new or empty run directory for result.json, report.md and diagnostics; cannot combine with --output, --report or --log-dir")
     live.add_argument("--report", type=Path, help="Also write a readable Markdown review of candidates and evidence")
-    live.add_argument("--base-url", help="OpenAI-compatible API base URL, or ATTESTEXTRACT_BASE_URL")
-    live.add_argument("--model", help="Model name, or ATTESTEXTRACT_MODEL")
-    live.add_argument("--model-id", help="Select a built-in provider:model preset; see 'attestextract models'")
+    live.add_argument("--base-url", help="OpenAI-compatible API base URL, or NICEEXTRACT_BASE_URL")
+    live.add_argument("--model", help="Model name, or NICEEXTRACT_MODEL")
+    live.add_argument("--model-id", help="Select a built-in provider:model preset; see 'niceextract models'")
     live.add_argument("--region", help="Region for --model-id (Qwen: beijing; other regions use a profile)")
     live.add_argument("--config", type=Path, help="TOML file containing named backend profiles")
     live.add_argument("--profile", help="Profile name in --config; explicit CLI values override it")
     live.add_argument("--adapter", help="Registered backend name (default: openai-compatible)")
-    live.add_argument("--api-key-env", help="Environment variable containing the API key (default: ATTESTEXTRACT_API_KEY)")
+    live.add_argument("--api-key-env", help="Environment variable containing the API key (default: NICEEXTRACT_API_KEY)")
     live.add_argument("--fallback-base-url", help="Optional explicitly chosen backup API address")
     live.add_argument("--fallback-model", help="Optional backup model's raw name")
     live.add_argument("--fallback-api-key-env", help="Environment variable holding the backup's own key")
@@ -177,7 +177,7 @@ def _export_review(args: argparse.Namespace) -> int:
 
 
 def _demo(example: str) -> dict:
-    resources = files("attestextract").joinpath("examples")
+    resources = files("niceextract").joinpath("examples")
     task = TaskSpec.model_validate_json(resources.joinpath(f"{example}.task.json").read_text(encoding="utf-8"))
     extension = "txt" if example == "ccus" else "md"
     source_name = f"{example}.{extension}"
@@ -253,7 +253,7 @@ def _resume_command(args: argparse.Namespace, checkpoint: Path) -> str:
     """Quote local arguments for the host shell; never embed credential values."""
     import shlex
 
-    command = [str(Path(sys.executable).resolve()), "-m", "attestextract", "extract"]
+    command = [str(Path(sys.executable).resolve()), "-m", "niceextract", "extract"]
     omitted = {"command", "output", "output_dir", "report", "log_dir", "resume", "check"}
     for name, value in vars(args).items():
         if name in omitted or value is None:
@@ -344,7 +344,7 @@ def _show_resume(args: argparse.Namespace, trace: RunTrace | None,
         return
     checkpoint = trace.directory / "execution/checkpoint.json"
     if checkpoint.is_file():
-        print(f"Resume checkpoint: {checkpoint}", file=sys.stderr)
+        print(trace._mask_text(f"Resume checkpoint: {checkpoint}"), file=sys.stderr)
         if isinstance(exc, InvalidResponseError) and (
                 exc.validation_details is not None or exc.code == "format_retry_exhausted"):
             status, budget = _format_resume_state(checkpoint, exc)
@@ -489,13 +489,12 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
         execution = ExecutionOptions(adaptive_chunking=args.chunking == "adaptive",
                                      max_model_calls=args.max_model_calls, max_split_depth=args.max_split_depth)
         progress = ConsoleProgress(args.progress)
-        api_key = os.environ.get(args.api_key_env or "ATTESTEXTRACT_API_KEY")
-        trace = RunTrace(args.log_dir, secrets=[api_key] if api_key else [], on_event=progress)
+        trace = RunTrace(args.log_dir, on_event=progress)
+        key_names = (args.api_key_env, args.fallback_api_key_env)
+        trace.add_env_secrets(os.environ, *key_names)
         trace.event("configuration", "started")
-        trace.event("configuration", "task_validation_started")
-        task = load_task(args.task)
-        trace.write_json("task.json", task.model_dump(mode="json"))
         environment = load_env_file(args.env_file) if args.env_file else os.environ
+        trace.add_env_secrets(environment, *key_names)
         overrides = {name: getattr(args, name) for name in (
             "adapter", "base_url", "model", "api_key_env", "timeout", "read_timeout", "tls_mode", "max_attempts",
             "structured_output", "format_retries", "temperature", "max_output_tokens",
@@ -505,6 +504,18 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
             # None would mean "no override" to the existing config resolver.
             overrides.pop("max_output_tokens")
             overrides["generation"] = {"max_output_tokens": None}
+        if args.model_id is not None and any(value is not None for value in (
+            args.config, args.profile, args.model, args.adapter,
+        )):
+            raise ConfigurationError("--model-id cannot be combined with --config, --profile, --model or --adapter.")
+        profile_config = None
+        if args.config is not None or args.profile is not None:
+            profile_config = resolve_backend_config(overrides=overrides, environment=environment,
+                                                    config_path=args.config, profile=args.profile)
+            trace.add_secrets(environment.get(profile_config.api_key_env))
+        trace.event("configuration", "task_validation_started")
+        task = load_task(args.task)
+        trace.write_json("task.json", task.model_dump(mode="json"))
         automatic_backend = None
         automatic = (registry is None and args.base_url is not None and args.model is not None
                      and args.config is None and args.adapter is None and args.model_id is None
@@ -517,7 +528,7 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
         if automatic:
             if args.region is not None:
                 raise ConfigurationError("Use the explicit API address for a region on the automatic entry point.")
-            key_name = args.api_key_env or "ATTESTEXTRACT_API_KEY"
+            key_name = args.api_key_env or f"{connection_env_prefix(environment)}_API_KEY"
             api_key = environment.get(key_name)
             if api_key is None and not args.check and sys.stdin.isatty():
                 try:
@@ -526,6 +537,7 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
                         api_key = getpass.getpass("API key (hidden): ")
                 except (EOFError, getpass.GetPassWarning):
                     raise ConfigurationError(f"No credential supplied; set {key_name} or enter a key in an interactive terminal.") from None
+            trace.add_secrets(api_key)
             primary = ModelConnection(base_url=args.base_url, model=args.model,
                                       api_key=api_key if api_key is not None else "offline-check" if args.check else None,
                                       api_key_env=key_name)
@@ -549,23 +561,19 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
             config = automatic_backend.routes[automatic_backend.preferred_route_id].config.model_copy(
                 update={"format_retries": args.format_retries or 0})
         elif args.model_id is not None:
-            if any(value is not None for value in (args.config, args.profile, args.model, args.adapter)):
-                raise ConfigurationError("--model-id cannot be combined with --config, --profile, --model or --adapter.")
             config = resolve_model_config(args.model_id, environment=environment,
                                           overrides=overrides, region=args.region)
             api_key = resolve_model_credentials(config, environment)
         else:
             if args.region is not None:
                 raise ConfigurationError("--region requires --model-id; advanced profiles declare their full endpoint.")
-            config = resolve_backend_config(overrides=overrides, environment=environment,
-                                            config_path=args.config, profile=args.profile)
+            config = profile_config or resolve_backend_config(overrides=overrides, environment=environment)
             api_key = environment.get(config.api_key_env)
+        trace.add_secrets(api_key)
         capability = check_structured_output(
             config.base_url, config.model, config.structured_output,
             provider_options=config.provider_options, adapter=config.adapter,
         )
-        if trace is not None and api_key:
-            trace.add_secrets(api_key)
         if args.input.suffix.lower() not in {".txt", ".md"}:
             raise ValueError("Input must be a UTF-8 .txt or .md file; convert PDFs externally first")
         if trace is not None:
@@ -699,7 +707,7 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
                 if analysis_check is not None:
                     plan["analysis"]["resume"] = analysis_check
             trace.checked(plan)
-            print(json.dumps(plan, ensure_ascii=False, indent=2))
+            print(json.dumps(trace._mask(plan), ensure_ascii=False, indent=2))
             return 0
         result = extract(document, task, backend=backend, source_name=args.input.name, trace=trace,
                          format_retries=config.format_retries, generation=config.generation,
@@ -714,17 +722,19 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
                 and args.report.resolve() == (default_directory / "report.md").resolve()):
             save_run_result(result, default_directory.resolve(), trace)
             if args.progress != "quiet":
-                print(f"Wrote {args.output}", file=sys.stderr)
-                print(f"Wrote {args.report}", file=sys.stderr)
+                print(trace._mask_text(f"Wrote {args.output}"), file=sys.stderr)
+                print(trace._mask_text(f"Wrote {args.report}"), file=sys.stderr)
         else:
             if trace is not None:
                 trace.event("output", "started")
-            _write(payload, args.output, announce=args.progress != "quiet")
+            _write(payload, args.output, announce=False)
+            if args.progress != "quiet":
+                print(trace._mask_text(f"Wrote {args.output}"), file=sys.stderr)
             if args.report is not None:
-                report = render_markdown_report(result, secrets=[api_key] if api_key else [])
+                report = render_markdown_report(result, secrets=trace._secrets)
                 args.report.write_bytes(report.encode("utf-8"))
                 if args.progress != "quiet":
-                    print(f"Wrote {args.report}", file=sys.stderr)
+                    print(trace._mask_text(f"Wrote {args.report}"), file=sys.stderr)
             if default_directory is not None:
                 from .expert_review import save_expert_review
                 save_expert_review(result, default_directory.resolve(), secrets=trace._secrets)
@@ -735,47 +745,47 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
                 trace.finish(payload, analysis=result.analysis)
         if trace is not None:
             if trace.directory is not None and args.progress != "quiet":
-                print(f"Run diagnostics: {trace.directory}", file=sys.stderr)
-                print(f"Resume checkpoint: {trace.directory / 'execution/checkpoint.json'}", file=sys.stderr)
+                print(trace._mask_text(f"Run diagnostics: {trace.directory}"), file=sys.stderr)
+                print(trace._mask_text(f"Resume checkpoint: {trace.directory / 'execution/checkpoint.json'}"), file=sys.stderr)
         if result.format_status != "complete":
-            print("attestextract: " + result.format_status + "; legal records saved; inspect table_results.rejections.", file=sys.stderr)
+            print("niceextract: " + result.format_status + "; legal records saved; inspect table_results.rejections.", file=sys.stderr)
             return 2
         if result.analysis is not None and result.analysis["status"] != "complete":
             from .analysis import is_review_only_partial
             if is_review_only_partial(result.analysis):
-                print("attestextract: analysis partial; all groups processed, with isolated proposals requiring review. "
+                print("niceextract: analysis partial; all groups processed, with isolated proposals requiring review. "
                       "Exit code 3 permits explicit batch continuation; it does not mean full acceptance. "
                       "Inspect analysis/analysis.md and analysis/review_groups.json.", file=sys.stderr)
                 return 3
-            print("attestextract: extraction saved; analysis incomplete; inspect analysis/analysis.md and diagnostics/analysis/checkpoint.json.", file=sys.stderr)
+            print("niceextract: extraction saved; analysis incomplete; inspect analysis/analysis.md and diagnostics/analysis/checkpoint.json.", file=sys.stderr)
             _show_analysis_retry(args, trace, result.analysis)
             return 130 if any(job.get("error_code") == "interrupted" for job in result.analysis.get("jobs", [])) else 2
         return 0
     except KeyboardInterrupt as exc:
         if trace is not None:
             trace.fail(exc)
-        print("attestextract: interrupted; any in-flight call keeps its budget reservation.", file=sys.stderr)
+        print("niceextract: interrupted; any in-flight call keeps its budget reservation.", file=sys.stderr)
         if trace is not None and trace.directory is not None and (trace.directory / "execution/checkpoint.json").is_file():
             _show_resume(args, trace)
         else:
             print("No execution checkpoint was saved yet.", file=sys.stderr)
         return 130
-    except (AttestExtractError, OSError, ValueError) as exc:
+    except (NICEExtractError, OSError, ValueError) as exc:
         if trace is not None:
             trace.fail(exc)
-        message = redact_text(str(exc), [api_key] if api_key else [])
-        print(f"attestextract: {message}", file=sys.stderr)
+        message = trace._mask_text(str(exc)) if trace is not None else str(exc)
+        print(f"niceextract: {message}", file=sys.stderr)
         if trace is not None and trace.directory is not None:
-            print(f"Run diagnostics: {trace.directory}", file=sys.stderr)
+            print(trace._mask_text(f"Run diagnostics: {trace.directory}"), file=sys.stderr)
             if (trace.directory / "execution/checkpoint.json").is_file():
                 _show_resume(args, trace, exc)
             if getattr(exc, "http_details", None):
-                print(f"HTTP diagnostics: {trace.directory / exc.http_details}", file=sys.stderr)
+                print(trace._mask_text(f"HTTP diagnostics: {trace.directory / exc.http_details}"), file=sys.stderr)
             artifact = getattr(exc, "validation_artifact", None)
             if artifact:
                 stem = Path(artifact).name.removesuffix(".errors.json")
-                print(f"Original model output: {trace.directory / 'responses' / (stem + '.txt')}", file=sys.stderr)
-                print(f"Validation details: {trace.directory / artifact}", file=sys.stderr)
+                print(trace._mask_text(f"Original model output: {trace.directory / 'responses' / (stem + '.txt')}"), file=sys.stderr)
+                print(trace._mask_text(f"Validation details: {trace.directory / artifact}"), file=sys.stderr)
         return 1
     finally:
         if progress is not None:

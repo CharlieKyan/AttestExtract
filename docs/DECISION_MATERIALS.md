@@ -11,7 +11,7 @@ dev19 兼容说明：决策材料继续使用 bundle 0.1，同时支持结果 sc
 PowerShell 示例使用自选的成功运行目录；`--output` 可以省略，默认创建新的同级目录。无需服务地址、密钥或 `.env`。
 
 ```powershell
-python -m attestextract prepare-decisions --run "C:\Work\research\outputs\successful-run"
+python -m niceextract prepare-decisions --run "C:\Work\research\outputs\successful-run"
 ```
 
 终端返回 `output_directory` 和覆盖统计，目录内保存：
@@ -51,7 +51,7 @@ JSON 中的原文位于 `document.text`，原文校验值在文档及 `extractio
 `reject/review` 不得指定非空 `candidate_id`。空块不能 select 或 reject。每个任务至多回传一次；重复回传的所有条目均拒绝，不采用“最后一个覆盖前面”的规则。
 
 ```powershell
-python -m attestextract check-decisions `
+python -m niceextract check-decisions `
   --bundle "C:\Work\research\outputs\materials\decision-input.json" `
   --responses "C:\Work\research\responses.json"
 ```
@@ -87,4 +87,4 @@ python scripts/decision_bundle_smoke.py --output-dir outputs/decision-materials-
 
 使用新目录。相关测试还覆盖未知任务、跨任务候选、非法动作、源文/块/检查点损坏、恢复和细分、缺文件与不支持的版本。软件验收不证明决策准确性、召回改善或成本优势；这些需要未来真实 Jev 与人工标签对照。
 
-Python 调用入口：`attestextract.decision_bundle` 中的 `prepare_decision_bundle`、`save_decision_bundle`、`load_decision_bundle`；`attestextract.decision_ledger` 中的 `load_decision_responses`、`check_decisions`、`save_decision_ledger`。它们不会触发模型调用。
+Python 调用入口：`niceextract.decision_bundle` 中的 `prepare_decision_bundle`、`save_decision_bundle`、`load_decision_bundle`；`niceextract.decision_ledger` 中的 `load_decision_responses`、`check_decisions`、`save_decision_ledger`。它们不会触发模型调用。

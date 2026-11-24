@@ -14,12 +14,12 @@ import os
 from pathlib import Path
 from unittest.mock import patch
 
-import attestextract
-from attestextract import ExecutionOptions, RunTrace, cli, extract
-from attestextract.errors import BackendError
-from attestextract.models import BackendResponse
-from attestextract.registry import BackendRegistry
-from attestextract.reporting import render_markdown_report
+import niceextract
+from niceextract import ExecutionOptions, RunTrace, cli, extract
+from niceextract.errors import BackendError
+from niceextract.models import BackendResponse
+from niceextract.registry import BackendRegistry
+from niceextract.reporting import render_markdown_report
 
 
 HTML = '<table><tr><th>Sample</th><th>Mass (g)</th></tr><tr><td>A</td><td>17</td></tr></table>'
@@ -161,14 +161,14 @@ def main() -> int:
         network_attempts.append(True)
         raise AssertionError('Network access is forbidden in unified-entry acceptance')
 
-    environment = {key: value for key, value in os.environ.items() if not key.startswith('ATTESTEXTRACT_')}
+    environment = {key: value for key, value in os.environ.items() if not key.startswith(('NICEEXTRACT_', 'ATTESTEXTRACT_'))}
     with patch.dict(os.environ, environment, clear=True), patch('socket.socket.connect', blocked), \
             patch('socket.socket.connect_ex', blocked), patch('socket.create_connection', blocked), \
             patch('socket.getaddrinfo', blocked):
         details = accept(root)
     assert not network_attempts
-    summary = {'passed': True, 'package_version': attestextract.__version__,
-               'module_path': str(Path(attestextract.__file__).resolve()),
+    summary = {'passed': True, 'package_version': niceextract.__version__,
+               'module_path': str(Path(niceextract.__file__).resolve()),
                'network_attempts': 0, 'real_model_calls': 0, **details,
                'notice': 'Synthetic offline installed-package acceptance; no new API or scientific verification.'}
     write_json(root / 'summary.json', summary)

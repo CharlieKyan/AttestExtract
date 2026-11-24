@@ -6,10 +6,10 @@ import json
 
 import pytest
 
-from attestextract import extract
-from attestextract.backends import ReplayBackend
-from attestextract.models import DocumentChunk, SourceSpan, TaskSpec
-from attestextract.prompting import build_example, build_messages, build_output_schema
+from niceextract import extract
+from niceextract.backends import ReplayBackend
+from niceextract.models import DocumentChunk, SourceSpan, TaskSpec
+from niceextract.prompting import build_example, build_messages, build_output_schema
 
 
 @pytest.fixture

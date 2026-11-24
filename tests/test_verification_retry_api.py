@@ -4,9 +4,9 @@ import json
 
 import pytest
 
-from attestextract import cli, extract
-from attestextract.errors import ConfigurationError
-from attestextract.models import BackendResponse
+from niceextract import cli, extract
+from niceextract.errors import ConfigurationError
+from niceextract.models import BackendResponse
 
 
 TEXT = "Sample A weighs 7 g."
@@ -38,7 +38,7 @@ def test_invalid_or_unanchored_selection_never_generates(selection):
 
 
 def test_analysis_receives_the_existing_format_policy(monkeypatch):
-    from attestextract import analysis
+    from niceextract import analysis
 
     def proposed(text, result, **kwargs):
         assert kwargs["format_retries"] == 1
@@ -51,7 +51,7 @@ def test_analysis_receives_the_existing_format_policy(monkeypatch):
 
 
 def test_missing_analysis_checkpoint_is_not_treated_as_a_new_job(tmp_path):
-    from attestextract.pipeline import check_analysis_resume
+    from niceextract.pipeline import check_analysis_resume
 
     backend = Backend()
     saved = extract(TEXT, TASK, backend=backend, backend_identity="synthetic-retry-v1",

@@ -6,11 +6,11 @@ import json
 import httpx
 import pytest
 
-from attestextract import cli, extract, RunTrace
-from attestextract.backends import OpenAICompatibleBackend
-from attestextract.errors import ConfigurationError, InvalidResponseError
-from attestextract.models import BackendResponse
-from attestextract.progress import ConsoleProgress
+from niceextract import cli, extract, RunTrace
+from niceextract.backends import OpenAICompatibleBackend
+from niceextract.errors import ConfigurationError, InvalidResponseError
+from niceextract.models import BackendResponse
+from niceextract.progress import ConsoleProgress
 
 
 SOURCE = "Sample A has mass 17 g."
@@ -47,7 +47,7 @@ def only_mock_http(monkeypatch, tmp_path):
         return original(client, *args, **kwargs)
 
     monkeypatch.setattr(httpx.Client, "send", send)
-    monkeypatch.setenv("ATTESTEXTRACT_MODEL_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setenv("NICEEXTRACT_MODEL_CACHE_DIR", str(tmp_path / "cache"))
 
 
 def read(path):
@@ -101,7 +101,7 @@ def test_bad_output_options_fail_before_backend_selection(tmp_path, monkeypatch,
     def forbidden(*args, **kwargs):
         pytest.fail("must validate output options before backend or credentials")
 
-    monkeypatch.setattr("attestextract.pipeline._selected_backend", forbidden)
+    monkeypatch.setattr("niceextract.pipeline._selected_backend", forbidden)
     with pytest.raises(ConfigurationError):
         extract(SOURCE, model="deepseek:deepseek-flash", **TASK, **kwargs)
 
@@ -155,7 +155,7 @@ def test_invalid_response_is_saved_and_not_presented_as_success(tmp_path):
 
 
 def test_output_write_error_marks_trace_failed(tmp_path, monkeypatch):
-    from attestextract import run_output
+    from niceextract import run_output
 
     def forbidden(*args, **kwargs):
         raise OSError("synthetic disk failure")
@@ -208,7 +208,7 @@ def test_preset_prose_defaults_match_cli_without_execution_options(tmp_path, mon
         return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(RESPONSE)},
                                                      "finish_reason": "stop"}]})
 
-    monkeypatch.setattr("attestextract.backends.OpenAICompatibleBackend", lambda **kw:
+    monkeypatch.setattr("niceextract.backends.OpenAICompatibleBackend", lambda **kw:
                         OpenAICompatibleBackend(**kw, transport=httpx.MockTransport(respond)))
     monkeypatch.setenv("DEEPSEEK_API_KEY", "synthetic-only")
     directory = tmp_path / "python"
@@ -252,7 +252,7 @@ def test_model_key_is_redacted_from_saved_output_report_and_console(tmp_path, mo
         return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(response)},
                                                      "finish_reason": "stop"}]})
 
-    monkeypatch.setattr("attestextract.backends.OpenAICompatibleBackend", lambda **kw:
+    monkeypatch.setattr("niceextract.backends.OpenAICompatibleBackend", lambda **kw:
                         OpenAICompatibleBackend(**kw, transport=httpx.MockTransport(respond)))
     directory = tmp_path / key
     extract(source, model="deepseek:deepseek-flash", api_key=key, output_dir=directory, **TASK)

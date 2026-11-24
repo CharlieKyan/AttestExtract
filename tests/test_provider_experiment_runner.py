@@ -7,9 +7,9 @@ import sys
 import httpx
 import pytest
 
-from attestextract.errors import ConfigurationError
-from attestextract.registry import default_registry
-from attestextract.models import ExtractionRequest
+from niceextract.errors import ConfigurationError
+from niceextract.registry import default_registry
+from niceextract.models import ExtractionRequest
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
 import provider_experiment_bundle as bundle

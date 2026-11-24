@@ -10,9 +10,9 @@ import socket
 
 import pytest
 
-from attestextract import cli
-from attestextract.models import BackendResponse
-from attestextract.registry import BackendRegistry
+from niceextract import cli
+from niceextract.models import BackendResponse
+from niceextract.registry import BackendRegistry
 
 
 SOURCE = "Sample A has mass 17 g."
@@ -30,8 +30,9 @@ def offline_only(monkeypatch):
 
     monkeypatch.setattr(socket.socket, "connect", forbidden)
     monkeypatch.setattr(socket, "getaddrinfo", forbidden)
-    for key in ("ATTESTEXTRACT_BASE_URL", "ATTESTEXTRACT_MODEL", "ATTESTEXTRACT_API_KEY"):
-        monkeypatch.delenv(key, raising=False)
+    for prefix in ("NICEEXTRACT", "ATTESTEXTRACT"):
+        for suffix in ("BASE_URL", "MODEL", "API_KEY"):
+            monkeypatch.delenv(f"{prefix}_{suffix}", raising=False)
 
 
 def setup_cli(tmp_path, *, source=SOURCE, response=None):

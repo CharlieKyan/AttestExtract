@@ -14,8 +14,8 @@ import sys
 
 import httpx
 
-import attestextract
-from attestextract.errors import ConfigurationError
+import niceextract
+from niceextract.errors import ConfigurationError
 from provider_experiment_bundle import load_bundle, prepare_bundle
 from provider_experiment_runner import (attach_review, inspect_experiment,
                                         load_results, read_record, run_stage)
@@ -187,8 +187,8 @@ def main(argv=None):
     execute(bundle, environment, "D", clock, factory)
     assert len(observed) == 108
     assert not any(name == "langextract" or name.startswith("langextract.") for name in sys.modules)
-    summary = {"passed": True, "package_version": attestextract.__version__,
-               "module_path": attestextract.__file__, "real_endpoint_calls": 0,
+    summary = {"passed": True, "package_version": niceextract.__version__,
+               "module_path": niceextract.__file__, "real_endpoint_calls": 0,
                "mock_network_calls": 108, "attach_review_new_calls": 0,
                "D_new_calls": 32, "repeat_D_new_calls": 0,
                "historical_artifacts_unchanged": True, "strict_scores_preserved": True,

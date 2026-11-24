@@ -4,8 +4,8 @@ import json
 
 import pytest
 
-from attestextract.json_validation import JSONValidationError, load_json
-from attestextract.verification_protocol import Step, VerificationValidationError, parse_step
+from niceextract.json_validation import JSONValidationError, load_json
+from niceextract.verification_protocol import Step, VerificationValidationError, parse_step
 
 
 def rejected(text):

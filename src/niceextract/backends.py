@@ -201,7 +201,7 @@ class OpenAICompatibleBackend:
             payload["response_format"] = {
                 "type": "json_schema",
                 "json_schema": {
-                    "name": "attestextract_records",
+                    "name": "niceextract_records",
                     "strict": True,
                     "schema": deepcopy(request.output_schema),
                 },

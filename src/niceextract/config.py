@@ -9,6 +9,7 @@ from typing import Any, Literal
 
 from pydantic import Field, ValidationError
 
+from .envconfig import connection_env_prefix
 from .errors import ConfigurationError
 from .models import ContractModel, GenerationOptions
 
@@ -17,7 +18,7 @@ class BackendConfig(ContractModel):
     adapter: str = Field(default="openai-compatible", pattern=r"^[a-z][a-z0-9_-]*$")
     base_url: str = Field(min_length=1, repr=False)
     model: str = Field(min_length=1)
-    api_key_env: str = Field(default="ATTESTEXTRACT_API_KEY", pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+    api_key_env: str = Field(default="NICEEXTRACT_API_KEY", pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
     # None selects finite phase defaults; it never means unlimited waiting.
     timeout: float | None = Field(default=None, gt=0, le=600)
     read_timeout: float | None = Field(default=None, gt=0, le=600)
@@ -68,10 +69,12 @@ def resolve_backend_config(
     """
     if (config_path is None) != (profile is None):
         raise ConfigurationError("--config and --profile must be supplied together.")
+    prefix = connection_env_prefix(environment)
     values = load_profile(config_path, profile) if config_path is not None else {
-        "base_url": environment.get("ATTESTEXTRACT_BASE_URL"),
-        "model": environment.get("ATTESTEXTRACT_MODEL"),
+        "base_url": environment.get(f"{prefix}_BASE_URL"),
+        "model": environment.get(f"{prefix}_MODEL"),
     }
+    values.setdefault("api_key_env", f"{prefix}_API_KEY")
     # An explicit uniform timeout must not retain a lower-priority read limit.
     if overrides.get("timeout") is not None and overrides.get("read_timeout") is None:
         values.pop("read_timeout", None)
@@ -89,6 +92,6 @@ def resolve_backend_config(
             else:
                 values[key] = value
     if not values.get("base_url") or not values.get("model"):
-        raise ConfigurationError("Configure --base-url and --model, or ATTESTEXTRACT_BASE_URL and ATTESTEXTRACT_MODEL, or a named profile.")
+        raise ConfigurationError("Configure --base-url and --model, or NICEEXTRACT_BASE_URL and NICEEXTRACT_MODEL, or a named profile.")
     values["generation"] = generation
     return _validate(values)

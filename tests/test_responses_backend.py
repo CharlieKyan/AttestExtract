@@ -6,12 +6,12 @@ from copy import deepcopy
 import httpx
 import pytest
 
-from attestextract.backends import OpenAICompatibleBackend
-from attestextract import ExecutionOptions, extract
-from attestextract.diagnostics import RunTrace
-from attestextract.errors import BackendError, ConfigurationError, InvalidResponseError
-from attestextract.models import ExtractionRequest, GenerationOptions
-from attestextract.responses_backend import DeepSeekResponsesBackend
+from niceextract.backends import OpenAICompatibleBackend
+from niceextract import ExecutionOptions, extract
+from niceextract.diagnostics import RunTrace
+from niceextract.errors import BackendError, ConfigurationError, InvalidResponseError
+from niceextract.models import ExtractionRequest, GenerationOptions
+from niceextract.responses_backend import DeepSeekResponsesBackend
 
 
 SCHEMA = {
@@ -62,7 +62,7 @@ def test_schema_wire_contract_auth_and_normalized_response(prefix):
             "model": "deepseek-flash",
             "input": [{"type": "message", "role": "user", "content": "Return synthetic JSON records."}],
             "reasoning": {"effort": "none"}, "temperature": 0, "max_output_tokens": 128,
-            "text": {"format": {"type": "json_schema", "name": "attestextract_records", "schema": SCHEMA}},
+            "text": {"format": {"type": "json_schema", "name": "niceextract_records", "schema": SCHEMA}},
         }
         return httpx.Response(200, json=completion(), headers={"x-request-id": "synthetic-request"})
 

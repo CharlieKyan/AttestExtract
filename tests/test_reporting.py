@@ -5,10 +5,10 @@ from __future__ import annotations
 import re
 from html.parser import HTMLParser
 
-from attestextract import extract
-from attestextract.backends import ReplayBackend
-from attestextract.models import CandidateLink, EvidenceRef, MeasurementEvidence, ReviewItem
-from attestextract.reporting import render_markdown_report
+from niceextract import extract
+from niceextract.backends import ReplayBackend
+from niceextract.models import CandidateLink, EvidenceRef, MeasurementEvidence, ReviewItem
+from niceextract.reporting import render_markdown_report
 
 
 TASK = {"name": "合成审阅任务", "record_types": {"measurement": {"fields": {

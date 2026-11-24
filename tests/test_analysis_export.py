@@ -7,7 +7,7 @@ import sqlite3
 
 import pytest
 
-from attestextract.analysis_export import save_analysis
+from niceextract.analysis_export import save_analysis
 
 
 def sample():

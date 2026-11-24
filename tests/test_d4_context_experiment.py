@@ -95,9 +95,9 @@ def test_real_context_probes_measure_both_benefit_and_new_ambiguity():
 
 
 def test_live_executes_frozen_requests_once_and_retains_parse_failure_usage(tmp_path, monkeypatch):
-    from attestextract import envconfig, registry
-    from attestextract.errors import BackendError
-    from attestextract.models import BackendResponse
+    from niceextract import envconfig, registry
+    from niceextract.errors import BackendError
+    from niceextract.models import BackendResponse
 
     cases = experiment.synthetic_cases()[:3]
     rows = [experiment.worker(case, arm) for case in cases for arm in experiment.ARMS]
@@ -141,8 +141,8 @@ def test_live_executes_frozen_requests_once_and_retains_parse_failure_usage(tmp_
 def test_adapter_truncation_keeps_usage_and_separate_partial_response_traces(tmp_path, monkeypatch):
     import httpx
 
-    from attestextract import envconfig, registry
-    from attestextract.responses_backend import DeepSeekResponsesBackend
+    from niceextract import envconfig, registry
+    from niceextract.responses_backend import DeepSeekResponsesBackend
 
     cases = experiment.synthetic_cases()[:3]
     rows = [experiment.worker(case, arm) for case in cases for arm in experiment.ARMS]

@@ -45,7 +45,7 @@ def _save(value: T, path: str | Path, model: type[T]) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary: str | None = None
     try:
-        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", newline="\n", dir=target.parent, prefix=".attestextract-", suffix=".tmp", delete=False) as stream:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", newline="\n", dir=target.parent, prefix=".niceextract-", suffix=".tmp", delete=False) as stream:
             temporary = stream.name
             stream.write(checked.model_dump_json(indent=2) + "\n")
         os.replace(temporary, target)

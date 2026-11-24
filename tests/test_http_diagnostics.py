@@ -7,11 +7,11 @@ import json
 import httpx
 import pytest
 
-from attestextract import cli, extract
-from attestextract.automatic import ModelConnection
-from attestextract.backends import OpenAICompatibleBackend
-from attestextract.diagnostics import RunTrace
-from attestextract.errors import BackendError
+from niceextract import cli, extract
+from niceextract.automatic import ModelConnection
+from niceextract.backends import OpenAICompatibleBackend
+from niceextract.diagnostics import RunTrace
+from niceextract.errors import BackendError
 
 
 TASK = {
@@ -396,7 +396,7 @@ def test_cli_error_links_to_http_diagnostics_without_echoing_provider_message(tm
     directory = tmp_path / "cli"
     source.write_text("Synthetic source only.", encoding="utf-8")
     task.write_text(json.dumps(TASK), encoding="utf-8")
-    monkeypatch.setenv("ATTESTEXTRACT_API_KEY", "synthetic-cli-http-secret")
+    monkeypatch.setenv("NICEEXTRACT_API_KEY", "synthetic-cli-http-secret")
 
     def endpoint(request):
         return httpx.Response(401, headers={"x-request-id": "synthetic-cli-request"}, json={"error": {
@@ -406,7 +406,7 @@ def test_cli_error_links_to_http_diagnostics_without_echoing_provider_message(tm
     def backend(**kwargs):
         return OpenAICompatibleBackend(**kwargs, transport=httpx.MockTransport(endpoint), sleep_fn=lambda _: None)
 
-    monkeypatch.setattr("attestextract.backends.OpenAICompatibleBackend", backend)
+    monkeypatch.setattr("niceextract.backends.OpenAICompatibleBackend", backend)
     status = cli.main([
         "extract", "--input", str(source), "--task", str(task), "--output", str(output),
         "--base-url", "https://example.invalid/v1", "--model", "synthetic-model", "--log-dir", str(directory),
@@ -429,7 +429,7 @@ def test_cli_json_prompt_error_explains_requirement_without_echoing_server_tail(
     source, task, directory = tmp_path / "source.txt", tmp_path / "task.json", tmp_path / "cli"
     source.write_text("Synthetic source only.", encoding="utf-8")
     task.write_text(json.dumps(TASK), encoding="utf-8")
-    monkeypatch.setenv("ATTESTEXTRACT_API_KEY", "synthetic-cli-json-secret")
+    monkeypatch.setenv("NICEEXTRACT_API_KEY", "synthetic-cli-json-secret")
     calls = []
 
     def endpoint(request):
@@ -441,7 +441,7 @@ def test_cli_json_prompt_error_explains_requirement_without_echoing_server_tail(
     def backend(**kwargs):
         return OpenAICompatibleBackend(**kwargs, transport=httpx.MockTransport(endpoint), sleep_fn=lambda _: None)
 
-    monkeypatch.setattr("attestextract.backends.OpenAICompatibleBackend", backend)
+    monkeypatch.setattr("niceextract.backends.OpenAICompatibleBackend", backend)
     status = cli.main([
         "extract", "--input", str(source), "--task", str(task),
         "--base-url", "https://example.invalid/v1", "--model", "synthetic-model",
@@ -460,7 +460,7 @@ def test_cli_json_prompt_error_explains_requirement_without_echoing_server_tail(
 
 @pytest.mark.parametrize("provider_code", ["invalid_request_error", "unsupported_value"])
 def test_public_automatic_prompt_rejection_keeps_mode_and_credentials(tmp_path, monkeypatch, provider_code):
-    monkeypatch.setenv("ATTESTEXTRACT_MODEL_CACHE_DIR", str(tmp_path / "model-cache"))
+    monkeypatch.setenv("NICEEXTRACT_MODEL_CACHE_DIR", str(tmp_path / "model-cache"))
     original_client = httpx.Client
     calls = []
 

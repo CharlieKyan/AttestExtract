@@ -9,18 +9,18 @@ import hashlib
 import json
 from pathlib import Path
 
-import attestextract
-from attestextract import (
+import niceextract
+from niceextract import (
     ContextOptions, Document, ExecutionOptions, create_archive, extract,
     load_archive, save_archive,
 )
-from attestextract.archive import CandidateReview
-from attestextract.backends import ReplayBackend
-from attestextract.chunking import chunk_document
-from attestextract.contextual_chunking import coverage_report
-from attestextract.diagnostics import RunTrace
-from attestextract.models import BackendResponse
-from attestextract.structure import build_structure
+from niceextract.archive import CandidateReview
+from niceextract.backends import ReplayBackend
+from niceextract.chunking import chunk_document
+from niceextract.contextual_chunking import coverage_report
+from niceextract.diagnostics import RunTrace
+from niceextract.models import BackendResponse
+from niceextract.structure import build_structure
 
 
 SIMPLE_TASK = {"name": "Synthetic D4 reading", "record_types": {"reading": {
@@ -160,8 +160,8 @@ def main(argv=None):
     table_case(root, "escaped-pipe", r"| Sample \| ID | Distance (cm) | Temperature (K) |" + "\n"
                "| --- | --- | --- |\n" + r"| Q \| R | 7 | 290 |", "Distance (cm)")
     calls = recovery_case(root)
-    summary = {"passed": True, "package_version": attestextract.__version__,
-               "module_path": str(Path(attestextract.__file__).resolve()), "real_endpoint_calls": 0,
+    summary = {"passed": True, "package_version": niceextract.__version__,
+               "module_path": str(Path(niceextract.__file__).resolve()), "real_endpoint_calls": 0,
                "mock_http_calls": 0, "offline_replay_calls": 3, "synthetic_backend_generate_calls": calls,
                "resume_additional_calls": 0, "cases": ["normalized-review", "html-binding",
                                                           "escaped-pipe-binding", "context-truncation-resume"]}

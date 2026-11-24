@@ -6,14 +6,14 @@ import json
 
 import pytest
 
-from attestextract import extract
-from attestextract.backends import ReplayBackend
-from attestextract.models import DocumentChunk, SourceSpan, TaskSpec
-from attestextract.prompting import build_messages, build_output_schema
-from attestextract.table_routes import (
+from niceextract import extract
+from niceextract.backends import ReplayBackend
+from niceextract.models import DocumentChunk, SourceSpan, TaskSpec
+from niceextract.prompting import build_messages, build_output_schema
+from niceextract.table_routes import (
     _build_legacy_route_request, build_route_request, build_table_input, evaluate_route,
 )
-from attestextract.task_input import resolve_task
+from niceextract.task_input import resolve_task
 
 
 EXAMPLE_SOURCE = "Sample Z at 20 C has conductivity 12 mS."

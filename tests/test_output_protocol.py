@@ -5,14 +5,14 @@ import json
 import httpx
 import pytest
 
-from attestextract import ExecutionOptions, extract
-from attestextract.backends import OpenAICompatibleBackend, ReplayBackend
-from attestextract.diagnostics import RunTrace
-from attestextract.errors import ConfigurationError, InvalidResponseError
-from attestextract.models import BackendResponse
-from attestextract.pipeline import _format_feedback, _parse_response
-from attestextract.models import TaskSpec
-from attestextract.responses_backend import DeepSeekResponsesBackend
+from niceextract import ExecutionOptions, extract
+from niceextract.backends import OpenAICompatibleBackend, ReplayBackend
+from niceextract.diagnostics import RunTrace
+from niceextract.errors import ConfigurationError, InvalidResponseError
+from niceextract.models import BackendResponse
+from niceextract.pipeline import _format_feedback, _parse_response
+from niceextract.models import TaskSpec
+from niceextract.responses_backend import DeepSeekResponsesBackend
 
 
 SOURCE = "Sample A: amount 12."

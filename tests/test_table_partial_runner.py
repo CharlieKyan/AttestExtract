@@ -7,9 +7,9 @@ import sys
 
 import pytest
 
-from attestextract.errors import ConfigurationError
-from attestextract.models import BackendResponse
-from attestextract.table_routes import build_table_input
+from niceextract.errors import ConfigurationError
+from niceextract.models import BackendResponse
+from niceextract.table_routes import build_table_input
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
 import table_route_runner as runner
@@ -132,7 +132,7 @@ def test_import_preserves_truncation_even_when_saved_text_is_valid_json(tmp_path
 
 
 def test_import_reuses_exact_model_visible_index_without_rebuilding(tmp_path, monkeypatch):
-    import attestextract.table_routes as core
+    import niceextract.table_routes as core
     case, _ = material()
     old, new = tmp_path / "old", tmp_path / "new"
     runner.prepare_bundle(old, [case])

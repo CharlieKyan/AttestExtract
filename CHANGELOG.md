@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.0a1
+
+- The framework previously published as AttestExtract is now **NICEExtract**. Install the new distribution and use `niceextract` for the CLI and Python imports. In scripts that catch the base exception by name, use `NICEExtractError`.
+- Custom connections now use `NICEEXTRACT_*` environment variables. Legacy-only configurations still work. The default route preference cache starts in `~/.niceextract/cache`; an explicitly configured legacy cache directory is still honored. Existing result files and supported checkpoints keep their original formats. [Connection settings](docs/BACKENDS.md)
+- The English and Chinese homepages now walk through a synthetic example, from a reported measurement to its source quotation, and show how to extract your own fields into JSON.
+
 ## 0.1.0.dev41
 
 - Extend explicit `format_retries=1` to bounded verification: one fresh generation per job for a complete response with JSON syntax or structural-contract errors. It consumes the existing step and cumulative call limits; unknown transport outcomes, truncation, scope and evidence failures do not qualify.

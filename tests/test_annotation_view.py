@@ -4,10 +4,10 @@ import json
 
 import pytest
 
-from attestextract import extract
-from attestextract.annotation_view import build_annotation, render_annotation, save_annotation
-from attestextract.backends import ReplayBackend
-from attestextract.models import BackendResponse, CandidateLink, CheckResult
+from niceextract import extract
+from niceextract.annotation_view import build_annotation, render_annotation, save_annotation
+from niceextract.backends import ReplayBackend
+from niceextract.models import BackendResponse, CandidateLink, CheckResult
 
 
 TEXT = "Sample A has mass 3~5 g, mean 4 g, and density 2 g/mL."

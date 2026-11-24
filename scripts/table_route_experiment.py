@@ -6,8 +6,8 @@ import argparse
 import json
 from pathlib import Path
 
-from attestextract.envconfig import load_env_file
-from attestextract.errors import AttestExtractError
+from niceextract.envconfig import load_env_file
+from niceextract.errors import NICEExtractError
 from table_route_runner import (fork_replay, inspect_bundle, prepare_bundle, read_json,
                                 run_bundle, summarize_bundle, write_report)
 
@@ -56,7 +56,7 @@ def main(argv=None) -> int:
             result["report"] = str(write_report(args.bundle))
         print(json.dumps(result, ensure_ascii=False))
         return 0
-    except AttestExtractError as error:
+    except NICEExtractError as error:
         print(f"Table experiment: {error}")
         return 1
     except (OSError, ValueError, TypeError, KeyError):

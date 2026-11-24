@@ -19,8 +19,10 @@ d1-results.json
 d1-archives.json
 pending-archive.json
 .attestextract-*.tmp
+.niceextract-*.tmp
 logs/
 run-logs/
 *.log
 attestextract-runs/
+niceextract-runs/
 outputs/

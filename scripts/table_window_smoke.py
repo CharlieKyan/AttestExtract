@@ -15,10 +15,10 @@ import os
 from pathlib import Path
 from unittest.mock import patch
 
-import attestextract
-from attestextract import ExecutionOptions, cli, extract
-from attestextract.errors import BackendError
-from attestextract.models import BackendResponse
+import niceextract
+from niceextract import ExecutionOptions, cli, extract
+from niceextract.errors import BackendError
+from niceextract.models import BackendResponse
 
 
 SOURCE = ("<table><tr><th>Sample</th><th>Mass (g)</th></tr>"
@@ -162,15 +162,15 @@ def main():
         attempts.append(True)
         raise AssertionError("Networking is forbidden in table window acceptance")
 
-    environment = {k: v for k, v in os.environ.items() if not k.startswith("ATTESTEXTRACT_")
+    environment = {k: v for k, v in os.environ.items() if not k.startswith(("NICEEXTRACT_", "ATTESTEXTRACT_"))
                    and k not in {"DEEPSEEK_API_KEY", "DASHSCOPE_API_KEY", "VLM_API_KEY", "OPENAI_API_KEY"}}
     with patch.dict(os.environ, environment, clear=True), patch("socket.socket.connect", blocked), \
             patch("socket.socket.connect_ex", blocked), patch("socket.create_connection", blocked), \
             patch("socket.getaddrinfo", blocked):
         details = accept(root)
     assert not attempts
-    summary = {"passed": True, "package_version": attestextract.__version__,
-               "module_path": str(Path(attestextract.__file__).resolve()),
+    summary = {"passed": True, "package_version": niceextract.__version__,
+               "module_path": str(Path(niceextract.__file__).resolve()),
                "network_attempts": 0, "real_model_calls": 0, **details,
                "notice": "Synthetic offline acceptance, not real endpoint or scientific quality validation."}
     write(root / "summary.json", summary)

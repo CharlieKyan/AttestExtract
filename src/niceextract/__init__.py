@@ -1,4 +1,4 @@
-"""AttestExtract: schema-driven extraction with source-linked evidence."""
+"""NICEExtract: schema-driven extraction with source-linked evidence."""
 
 from .decisions import DecisionBackend, DecisionResult, DecisionTask, validate_decision
 from .models import (
@@ -17,7 +17,7 @@ from .registry import BackendRegistry, default_registry
 from .providers import available_models, resolve_model_config
 from .automatic import ModelConnection
 
-__version__ = "0.1.0.dev41"
+__version__ = "0.1.0a1"
 
 __all__ = [
     "__version__", "extract", "load_task", "TaskSpec", "RecordSpec", "FieldSpec",

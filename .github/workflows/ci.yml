@@ -40,7 +40,7 @@ jobs:
           import venv
 
           expected_version = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
-          wheel = next(Path("dist").glob("attestextract-*.whl")).resolve()
+          wheel = next(Path("dist").glob(f"niceextract-{expected_version}-*.whl")).resolve()
           acceptance_script = Path("scripts/d2_acceptance.py").resolve()
           selection_script = Path("scripts/model_selection_smoke.py").resolve()
           minimal_script = Path("scripts/minimal_api_smoke.py").resolve()
@@ -51,7 +51,7 @@ jobs:
           decision_script = Path("scripts/decision_bundle_smoke.py").resolve()
           d4_script = Path("scripts/d4_evidence_smoke.py").resolve()
           transport_script = Path("scripts/transport_recovery_smoke.py").resolve()
-          source_archive = next(Path("dist").glob("attestextract-*.tar.gz")).resolve()
+          source_archive = Path("dist", f"niceextract-{expected_version}.tar.gz").resolve()
           provider_names = (
               "provider_experiment.py", "provider_experiment_bundle.py",
               "provider_experiment_runner.py", "provider_experiment_reporting.py",
@@ -86,8 +86,8 @@ jobs:
                   assert len(members) == 1, f"Source distribution must contain {relative}"
                   tls_sources[relative] = archive.extractfile(members[0]).read()
                   assert tls_sources[relative] == Path(relative).read_bytes()
-          with tempfile.TemporaryDirectory(prefix="attestextract-smoke-") as directory:
-              root = Path(directory)
+          with tempfile.TemporaryDirectory(prefix="niceextract-smoke-") as directory:
+              root = Path(directory).resolve(strict=True)
               environment = root / "venv"
               venv.EnvBuilder(with_pip=True).create(environment)
               python = environment / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
@@ -95,8 +95,15 @@ jobs:
               env.pop("PYTHONPATH", None)
               env.pop("PYTHONHOME", None)
               subprocess.run([str(python), "-m", "pip", "install", str(wheel)], check=True, cwd=root, env=env)
+              def assert_installed_module(summary):
+                  module_path = Path(summary["module_path"]).resolve(strict=True)
+                  assert module_path.is_relative_to(environment), (module_path, environment)
+
               output = root / "results.json"
-              subprocess.run([str(python), "-m", "attestextract", "demo", "--output", str(output)], check=True, cwd=root, env=env)
+              cli = python.with_name("niceextract.exe" if os.name == "nt" else "niceextract")
+              installed_version = subprocess.check_output([str(cli), "--version"], cwd=root, env=env, text=True)
+              assert installed_version.strip() == expected_version
+              subprocess.run([str(cli), "demo", "--output", str(output)], check=True, cwd=root, env=env)
               examples = json.loads(output.read_text(encoding="utf-8"))["examples"]
               assert set(examples) == {"ccus", "procurement"}
               for name, count in (("ccus", 2), ("procurement", 3)):
@@ -106,7 +113,7 @@ jobs:
                   assert len(result["candidates"]) == count
                   assert result["review"] == []
               d1_output = root / "d1-results.json"
-              subprocess.run([str(python), "-m", "attestextract", "d1", "--output", str(d1_output)], check=True, cwd=root, env=env)
+              subprocess.run([str(python), "-m", "niceextract", "d1", "--output", str(d1_output)], check=True, cwd=root, env=env)
               archives = json.loads(d1_output.read_text(encoding="utf-8"))["examples"]
               assert set(archives) == {"attribute", "observation", "relation"}
               for name, candidate_count, record_count in (("attribute", 2, 1), ("observation", 2, 2), ("relation", 1, 1)):
@@ -137,7 +144,7 @@ jobs:
               minimal = json.loads((minimal_output / "summary.json").read_text(encoding="utf-8"))
               assert minimal["passed"] and minimal["real_endpoint_calls"] == 0
               assert minimal["mock_model_posts"] == 15
-              assert Path(minimal["module_path"]).is_relative_to(environment)
+              assert_installed_module(minimal)
               selection_copy = scripts / "model_selection_smoke.py"
               shutil.copyfile(selection_script, selection_copy)
               selection_output = root / "model-selection"
@@ -146,7 +153,7 @@ jobs:
               selection = json.loads((selection_output / "summary.json").read_text(encoding="utf-8"))
               assert selection["passed"] and selection["real_endpoint_calls"] == 0
               assert selection["mock_http_calls"] == 7
-              assert Path(selection["module_path"]).is_relative_to(environment)
+              assert_installed_module(selection)
               execution_copy = scripts / "execution_smoke.py"
               shutil.copyfile(execution_script, execution_copy)
               execution_output = root / "execution"
@@ -155,7 +162,7 @@ jobs:
               execution = json.loads((execution_output / "summary.json").read_text(encoding="utf-8"))
               assert execution["passed"] and execution["real_endpoint_calls"] == 0
               assert execution["mock_http_calls"] == 4 and execution["completed_resume_new_calls"] == 0
-              assert Path(execution["module_path"]).is_relative_to(environment)
+              assert_installed_module(execution)
               format_copy = scripts / "format_recovery_smoke.py"
               shutil.copyfile(format_script, format_copy)
               format_output = root / "format-recovery"
@@ -169,7 +176,7 @@ jobs:
                   assert case["reused_chunks"] == 3 and case["resume_new_calls"] == 1
                   assert case["completed_resume_new_calls"] == case["exhausted_resume_new_calls"] == 0
                   assert case["legacy_feedback_removed_from_prompt"] and case["previous_runs_unchanged"]
-              assert Path(recovery["module_path"]).is_relative_to(environment)
+              assert_installed_module(recovery)
               structured_copy = scripts / "structured_output_smoke.py"
               shutil.copyfile(structured_script, structured_copy)
               structured_output = root / "structured-output"
@@ -178,7 +185,7 @@ jobs:
               structured = json.loads((structured_output / "summary.json").read_text(encoding="utf-8"))
               assert structured["passed"] and structured["real_endpoint_calls"] == 0
               assert structured["mock_http_calls"] == 4 and structured["completed_resume_new_calls"] == 0
-              assert Path(structured["module_path"]).is_relative_to(environment)
+              assert_installed_module(structured)
               protocol_copy = scripts / "protocol_evidence_smoke.py"
               shutil.copyfile(protocol_script, protocol_copy)
               protocol_output = root / "protocol-evidence"
@@ -186,7 +193,7 @@ jobs:
                              check=True, cwd=root, env=env)
               protocol = json.loads((protocol_output / "summary.json").read_text(encoding="utf-8"))
               assert protocol["passed"] and protocol["real_endpoint_calls"] == 0
-              assert Path(protocol["module_path"]).is_relative_to(environment)
+              assert_installed_module(protocol)
               decision_copy = scripts / "decision_bundle_smoke.py"
               shutil.copyfile(decision_script, decision_copy)
               decision_output = root / "decisions"
@@ -195,7 +202,7 @@ jobs:
               decision = json.loads((decision_output / "summary.json").read_text(encoding="utf-8"))
               assert decision["passed"] and decision["real_endpoint_calls"] == 0
               assert decision["decision_model_calls"] == 0 and decision["created_final_records"] == 0
-              assert Path(decision["module_path"]).is_relative_to(environment)
+              assert_installed_module(decision)
               d4_copy = scripts / "d4_evidence_smoke.py"
               shutil.copyfile(d4_script, d4_copy)
               d4_output = root / "d4-evidence"
@@ -203,7 +210,7 @@ jobs:
                              check=True, cwd=root, env=env)
               d4 = json.loads((d4_output / "summary.json").read_text(encoding="utf-8"))
               assert d4["passed"] and d4["real_endpoint_calls"] == 0
-              assert Path(d4["module_path"]).is_relative_to(environment)
+              assert_installed_module(d4)
               transport_copy = scripts / "transport_recovery_smoke.py"
               shutil.copyfile(transport_script, transport_copy)
               transport_output = root / "transport-recovery"
@@ -212,7 +219,7 @@ jobs:
               transport = json.loads((transport_output / "summary.json").read_text(encoding="utf-8"))
               assert transport["passed"] and transport["real_endpoint_calls"] == 0
               assert transport["mock_http_calls"] == 17 and transport["resume_new_calls"] == 5
-              assert Path(transport["module_path"]).is_relative_to(environment)
+              assert_installed_module(transport)
               for relative, content in tls_sources.items():
                   target = root / "runner" / relative
                   target.parent.mkdir(parents=True, exist_ok=True)
@@ -225,7 +232,8 @@ jobs:
               assert tls["passed"] and tls["real_endpoint_calls"] == 0 and tls["loopback_only"]
               assert tls["package_version"] == expected_version
               assert tls["local_model_posts"] == 4 and tls["probe_attempts"] == 4
-              assert tls["environment_restored"] and Path(tls["module_path"]).is_relative_to(environment)
+              assert tls["environment_restored"]
+              assert_installed_module(tls)
               assert [case.get("actual_tls_version") for case in tls["cases"][:2]] == ["TLSv1.2", "TLSv1.3"]
               assert tls["cases"][2]["model_posts"] == 0 and not tls["cases"][2]["fallback"]
               for name, content in provider_sources.items():
@@ -236,7 +244,7 @@ jobs:
               providers = json.loads((provider_output / "summary.json").read_text(encoding="utf-8"))
               assert providers["passed"] and providers["real_endpoint_calls"] == 0
               assert providers["mock_network_calls"] == 108
-              assert Path(providers["module_path"]).is_relative_to(environment)
+              assert_installed_module(providers)
               reviewed_output = root / "provider-review"
               subprocess.run([str(python), str(scripts / "provider_review_smoke.py"),
                               "--output-dir", str(reviewed_output)], check=True, cwd=root, env=env)
@@ -245,7 +253,7 @@ jobs:
               assert reviewed["D_new_calls"] == 32 and reviewed["repeat_D_new_calls"] == 0
               assert reviewed["attach_review_new_calls"] == 0
               assert reviewed["historical_artifacts_unchanged"] and reviewed["strict_scores_preserved"]
-              assert Path(reviewed["module_path"]).is_relative_to(environment)
+              assert_installed_module(reviewed)
               for name, content in table_sources.items():
                   (scripts / name).write_bytes(content)
               table_output = root / "table-results"
@@ -256,7 +264,7 @@ jobs:
               assert tables["network_attempts"] == 0 and tables["planned_slots"] == 12
               assert tables["completed_resume_new_calls"] == 0
               assert tables["package_version"] == expected_version
-              assert Path(tables["module_path"]).is_relative_to(environment)
+              assert_installed_module(tables)
               entry_output = root / "table-entry"
               subprocess.run([str(python), str(scripts / "table_entry_smoke.py"),
                               "--output-dir", str(entry_output)], check=True, cwd=root, env=env)
@@ -266,7 +274,7 @@ jobs:
               assert entry["resume_new_calls"] == 2 and entry["completed_resume_new_calls"] == 0
               assert entry["cli_exit_status"] == 2 and entry["historical_artifacts_unchanged"]
               assert entry["package_version"] == expected_version
-              assert Path(entry["module_path"]).is_relative_to(environment)
+              assert_installed_module(entry)
               simple_output = root / "simple-task"
               subprocess.run([str(python), str(scripts / "simple_task_smoke.py"),
                               "--output-dir", str(simple_output)], check=True, cwd=root, env=env)
@@ -278,7 +286,7 @@ jobs:
               assert simple["cli_exit_status"] == 0 and simple["synthetic_backend_generate_calls"] == 4
               assert simple["historical_artifacts_unchanged"] and simple["report_includes_unobserved_target"]
               assert simple["package_version"] == entry["package_version"]
-              assert Path(simple["module_path"]).is_relative_to(environment)
+              assert_installed_module(simple)
               user_output = root / "user-entry"
               subprocess.run([str(python), str(scripts / "user_entry_smoke.py"),
                               "--output-dir", str(user_output)], check=True, cwd=root, env=env)
@@ -288,7 +296,7 @@ jobs:
               assert user["completed_resume_new_calls"] == 0 and user["failure_checkpoint_saved"]
               assert user["python_cli_candidates_equal"] and user["historical_artifacts_unchanged"]
               assert user["package_version"] == expected_version
-              assert Path(user["module_path"]).is_relative_to(environment)
+              assert_installed_module(user)
               window_output = root / "table-windows"
               subprocess.run([str(python), str(scripts / "table_window_smoke.py"),
                               "--output-dir", str(window_output)], check=True, cwd=root, env=env)
@@ -299,7 +307,7 @@ jobs:
               assert windows["completed_replay_new_calls"] == 0 and windows["historical_artifacts_unchanged"]
               assert windows["child_scoped_annotation_ids_unique"] and windows["cli_offline_check_exit_status"] == 0
               assert windows["package_version"] == expected_version
-              assert Path(windows["module_path"]).is_relative_to(environment)
+              assert_installed_module(windows)
               recovery_output = root / "verification-recovery"
               subprocess.run([str(python), str(scripts / "verification_recovery_smoke.py"),
                               "--output-dir", str(recovery_output)], check=True, cwd=root, env=env)
@@ -307,7 +315,7 @@ jobs:
               assert recovery["passed"] and recovery["real_model_calls"] == recovery["network_attempts"] == 0
               assert recovery["mock_http_calls"] == 14
               assert recovery["package_version"] == expected_version
-              assert Path(recovery["module_path"]).is_relative_to(environment)
+              assert_installed_module(recovery)
               analysis_output = root / "bounded-analysis"
               subprocess.run([str(python), str(scripts / "analysis_smoke.py"),
                               "--output", str(analysis_output)], check=True, cwd=root, env=env)
@@ -347,4 +355,4 @@ jobs:
                           assert partial["cli_exit_status"] == 3
               assert analysis["modes"]["json_object"]["json_object_prompt_gate"]
               assert analysis["package_version"] == expected_version
-              assert Path(analysis["module_path"]).is_relative_to(environment)
+              assert_installed_module(analysis)

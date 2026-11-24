@@ -14,7 +14,7 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
-import attestextract
+import niceextract
 from table_route_runner import prepare_bundle, read_json, run_bundle, write_report
 
 
@@ -82,7 +82,7 @@ def main() -> int:
     args = parser.parse_args()
     root = args.output_dir.resolve()
     root.mkdir(parents=True, exist_ok=False)
-    examples = Path(attestextract.__file__).resolve().parent / "examples" / "table_routes"
+    examples = Path(niceextract.__file__).resolve().parent / "examples" / "table_routes"
     groups = {name: read_json(examples / f"{name}.json")
               for name in ("cases", "edge_cases", "failure_cases")}
     assert sum(len(cases) for cases in groups.values()) == 11
@@ -106,8 +106,8 @@ def main() -> int:
         runs = [_run(root / name, cases) for name, cases in groups.items()]
         runs.append(_run(root / "partial-format", [partial], partial=True))
     assert not network_attempts
-    summary = {"passed": True, "package_version": attestextract.__version__,
-               "module_path": str(Path(attestextract.__file__).resolve()),
+    summary = {"passed": True, "package_version": niceextract.__version__,
+               "module_path": str(Path(niceextract.__file__).resolve()),
                "real_model_calls": 0, "network_attempts": 0,
                "planned_slots": sum(run["slots"] for run in runs),
                "completed_resume_new_calls": 0, "runs": runs,

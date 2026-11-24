@@ -4,10 +4,10 @@ import json
 
 import pytest
 
-from attestextract import ContextOptions, ExecutionOptions, cli, extract
-from attestextract.decision_bundle import prepare_decision_bundle
-from attestextract.diagnostics import RunTrace
-from attestextract.models import BackendResponse
+from niceextract import ContextOptions, ExecutionOptions, cli, extract
+from niceextract.decision_bundle import prepare_decision_bundle
+from niceextract.diagnostics import RunTrace
+from niceextract.models import BackendResponse
 
 
 TASK = {"name": "Synthetic observation", "record_types": {"reading": {"fields": {"value": {"type": "string"}}}}}
@@ -52,8 +52,8 @@ def test_cli_context_mineru_preflight_and_protected_sidecar(tmp_path, monkeypatc
     mineru.write_text(json.dumps([{"type": "table", "table_body": table, "page_idx": 0}]), encoding="utf-8")
     hints = tmp_path / "hints.json"
     hints.write_text(json.dumps({"tables": {"table-0001": {"header_rows": [0], "row_header_columns": [0]}}}), encoding="utf-8")
-    monkeypatch.setenv("ATTESTEXTRACT_BASE_URL", "https://example.invalid/v1")
-    monkeypatch.setenv("ATTESTEXTRACT_MODEL", "synthetic")
+    monkeypatch.setenv("NICEEXTRACT_BASE_URL", "https://example.invalid/v1")
+    monkeypatch.setenv("NICEEXTRACT_MODEL", "synthetic")
     args = ["extract", "--input", str(source), "--task", str(task), "--context", "neighbors", "--check",
             "--mineru-content-list", str(mineru), "--structure-hints", str(hints)]
     assert cli.main([*args, "--output", str(tmp_path / "result.json")]) == 0

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from datetime import datetime, timezone
 import json
 import os
@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from .errors import AttestExtractError, BackendError, ConfigurationError
+from .errors import NICEExtractError, BackendError, ConfigurationError
 
 
 def _now() -> str:
@@ -71,7 +71,17 @@ class RunTrace:
             raise ConfigurationError("Log directory is already in use; choose a new directory.") from None
 
     def add_secrets(self, *secrets: str) -> None:
-        self._secrets.update(secret for secret in secrets if isinstance(secret, str) and secret)
+        for secret in secrets:
+            if isinstance(secret, str) and secret:
+                self._secrets.add(secret)
+                if secret.strip():
+                    self._secrets.add(secret.strip())
+
+    def add_env_secrets(self, environment: Mapping[str, str], *custom_names: str | None) -> None:
+        """Register supported credential values solely for masking, without selecting an account."""
+        names = ("NICEEXTRACT_API_KEY", "ATTESTEXTRACT_API_KEY", "DEEPSEEK_API_KEY",
+                 "QWEN_API_KEY", "DASHSCOPE_API_KEY", "VLM_API_KEY", *custom_names)
+        self.add_secrets(*(environment[name] for name in names if isinstance(name, str) and name in environment))
 
     def describe_artifact(self, relative: str, role: str) -> None:
         self._manifest["artifact_roles"][relative] = role
@@ -177,7 +187,7 @@ class RunTrace:
             return
         failure_stage = stage or self.stage
         error: dict[str, Any] = {"stage": failure_stage, "error_type": type(exc).__name__}
-        if isinstance(exc, AttestExtractError):
+        if isinstance(exc, NICEExtractError):
             error["message"] = str(exc)
         elif isinstance(exc, OSError):
             error.update(message=exc.strerror or "Could not read or write a local file.", errno=exc.errno)

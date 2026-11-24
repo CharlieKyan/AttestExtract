@@ -17,11 +17,11 @@ from unittest.mock import patch
 
 import httpx
 
-import attestextract
-from attestextract import ExecutionOptions, GenerationOptions, cli, extract
-from attestextract.backends import OpenAICompatibleBackend
-from attestextract.errors import ConfigurationError
-from attestextract.registry import BackendRegistry
+import niceextract
+from niceextract import ExecutionOptions, GenerationOptions, cli, extract
+from niceextract.backends import OpenAICompatibleBackend
+from niceextract.errors import ConfigurationError
+from niceextract.registry import BackendRegistry
 
 
 CLAIMS = tuple((f"Reactor {'A' if n <= 6 else 'B' if n <= 12 else 'C'} has mass {n} g under condition {n}.",
@@ -147,7 +147,7 @@ class Entry:
         self.task.write_text(json.dumps(TASK), encoding="utf-8")
         self.config.write_text('[profiles.synthetic]\nbase_url = "https://synthetic.invalid/v1"\n'
             'model = "synthetic-verification"\nstructured_output = "json_object"\n'
-            'api_key_env = "ATTESTEXTRACT_TEST_API_KEY"\nmax_attempts = 1\n'
+            'api_key_env = "NICEEXTRACT_TEST_API_KEY"\nmax_attempts = 1\n'
             '[profiles.synthetic.generation]\nmax_output_tokens = 2048\n', encoding="utf-8")
 
     def invoke(self, name, *, retries=0, resume=None, selected=None, invalid=False):
@@ -263,11 +263,11 @@ def offline_only():
     def blocked(*args, **kwargs):
         raise AssertionError("Network and credential files are forbidden in this synthetic acceptance.")
     env = {key: value for key, value in os.environ.items() if not key.startswith(
-        ("ATTESTEXTRACT_", "DEEPSEEK_", "QWEN_", "DASHSCOPE_", "VLM_", "OPENAI_"))}
-    env["ATTESTEXTRACT_TEST_API_KEY"] = "synthetic-install-secret"
+        ("NICEEXTRACT_", "ATTESTEXTRACT_", "DEEPSEEK_", "QWEN_", "DASHSCOPE_", "VLM_", "OPENAI_"))}
+    env["NICEEXTRACT_TEST_API_KEY"] = "synthetic-install-secret"
     with patch.dict(os.environ, env, clear=True), patch("socket.socket.connect", blocked), \
          patch("socket.socket.connect_ex", blocked), patch("socket.create_connection", blocked), \
-         patch("socket.getaddrinfo", blocked), patch("attestextract.envconfig.load_env_file", blocked), \
+         patch("socket.getaddrinfo", blocked), patch("niceextract.envconfig.load_env_file", blocked), \
          patch.object(cli, "load_env_file", blocked):
         yield
 
@@ -279,7 +279,7 @@ def main(argv=None):
     root.mkdir(parents=True, exist_ok=False)
     with offline_only():
         cases = {entry: accept(root / entry[:2], entry) for entry in ("python", "cli")}
-    summary = {"passed": True, "package_version": attestextract.__version__, "module_path": attestextract.__file__,
+    summary = {"passed": True, "package_version": niceextract.__version__, "module_path": niceextract.__file__,
                "real_model_calls": 0, "network_attempts": 0, "mock_http_calls": sum(c["mock_http_calls"] for c in cases.values()),
                "entries": cases}
     (root / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")

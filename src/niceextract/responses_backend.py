@@ -177,7 +177,7 @@ class DeepSeekResponsesBackend(OpenAICompatibleBackend):
             if request.output_schema is None:
                 raise ConfigurationError("json_schema structured output requires a request output_schema.")
             payload["text"] = {"format": {
-                "type": "json_schema", "name": "attestextract_records",
+                "type": "json_schema", "name": "niceextract_records",
                 "schema": deepcopy(request.output_schema),
             }}
         elif self.structured_output == "json_object":

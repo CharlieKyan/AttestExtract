@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from attestextract.table_routes import (
+from niceextract.table_routes import (
     build_route_request, build_table_input, evaluate_route, parse_route_response,
     reconcile_results,
 )

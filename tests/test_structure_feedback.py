@@ -5,12 +5,12 @@ import json
 
 import pytest
 
-from attestextract import ExecutionOptions, extract
-from attestextract.diagnostics import RunTrace
-from attestextract.errors import BackendError, InvalidResponseError
-from attestextract.models import BackendResponse
-from attestextract.pipeline import _parse_response, _regeneration_request
-from attestextract.progress import ConsoleProgress
+from niceextract import ExecutionOptions, extract
+from niceextract.diagnostics import RunTrace
+from niceextract.errors import BackendError, InvalidResponseError
+from niceextract.models import BackendResponse
+from niceextract.pipeline import _parse_response, _regeneration_request
+from niceextract.progress import ConsoleProgress
 
 
 TEXT = "Sample A reads 12."

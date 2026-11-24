@@ -10,13 +10,13 @@ from pathlib import Path
 
 import pytest
 
-from attestextract.table_routes import (
+from niceextract.table_routes import (
     build_route_request, build_table_input, evaluate_route,
     parse_route_response, reconcile_results,
 )
 
 
-EXAMPLES = Path(__file__).resolve().parents[1] / "src/attestextract/examples/table_routes"
+EXAMPLES = Path(__file__).resolve().parents[1] / "src/niceextract/examples/table_routes"
 CASES = [case for name in ("cases.json", "edge_cases.json")
          for case in json.loads((EXAMPLES / name).read_text(encoding="utf-8"))]
 FAULT_CASES = json.loads((EXAMPLES / "failure_cases.json").read_text(encoding="utf-8"))

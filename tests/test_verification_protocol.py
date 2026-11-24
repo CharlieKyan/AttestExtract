@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from attestextract.verification_protocol import (Step, VerificationValidationError,
+from niceextract.verification_protocol import (Step, VerificationValidationError,
                                                 apply_decision, parse_step)
 
 

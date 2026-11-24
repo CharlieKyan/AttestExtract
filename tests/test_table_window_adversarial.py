@@ -4,12 +4,12 @@ from copy import deepcopy
 
 import pytest
 
-from attestextract.document_routing import table_input_for_chunk
-from attestextract.models import DocumentChunk
-from attestextract.structure import build_structure
-from attestextract.table_routes import evaluate_route
-from attestextract.table_windows import filter_window_records, split_table_chunk, window_owned_refs
-from attestextract.task_input import compile_task
+from niceextract.document_routing import table_input_for_chunk
+from niceextract.models import DocumentChunk
+from niceextract.structure import build_structure
+from niceextract.table_routes import evaluate_route
+from niceextract.table_windows import filter_window_records, split_table_chunk, window_owned_refs
+from niceextract.task_input import compile_task
 
 
 SOURCE = ("<table><tr><th>Sample</th><th>Mass/g</th></tr>"

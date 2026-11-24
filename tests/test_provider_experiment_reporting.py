@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from attestextract.models import DocumentChunk, ExtractionRequest, SourceSpan
+from niceextract.models import DocumentChunk, ExtractionRequest, SourceSpan
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -17,7 +17,7 @@ SPEC.loader.exec_module(reporting)
 
 
 def fixture(name):
-    path = ROOT / "src/attestextract/examples/d1" / name
+    path = ROOT / "src/niceextract/examples/d1" / name
     source = (path / "source.txt").read_bytes().decode("utf-8")
     task = json.loads((path / "task.json").read_text(encoding="utf-8"))
     gold = json.loads((path / "expected.json").read_text(encoding="utf-8"))["records"]
