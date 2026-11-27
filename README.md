@@ -12,14 +12,16 @@ NiceExtract is a Python framework that uses language models to extract observati
 
 ## Quick start
 
-Download and unpack the [NiceExtract preview source ZIP](https://github.com/CharlieKyan/NiceExtract/archive/5b19b8f25b987771beca119c0b7251dd199c6123.zip). This earlier snapshot runs the demo and extraction examples below. The dev60 CSV workflow is awaiting release. Use Python 3.11 or newer and run these commands in the extracted directory containing `pyproject.toml`.
+With Python 3.11 or newer, run these commands in the folder where you want to save the result. The first downloads and installs the public preview from GitHub. The second runs two bundled examples offline, without an API key or a local checkout.
 
 ```sh
-python -m pip install .
+python -m pip install "https://github.com/CharlieKyan/NiceExtract/archive/5b19b8f25b987771beca119c0b7251dd199c6123.zip"
 niceextract demo --output result.json
 ```
 
-Open `result.json` to see the results for two synthetic documents. In the research example, sample A has the same pressure, 12 bar, at 25 °C and 50 °C. The result contains two candidates, each with its own temperature and source sentence. The demo replays fixed responses offline and needs no API key. [Source passage](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/src/niceextract/examples/ccus.txt) · [Saved research example](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/examples/ccus-result.json)
+Open `result.json` in the current folder. The demo replays fixed responses for a research excerpt and a purchase request. In the research example, sample A has the same pressure, 12 bar, at 25 °C and 50 °C. Each candidate keeps its temperature and source sentence. [Source passage](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/src/niceextract/examples/ccus.txt) · [Saved research example](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/examples/ccus-result.json)
+
+The public preview above predates the dev60 CSV workflow. If you already have the dev60 wheel, activate a fresh virtual environment and install it from its download folder with `python -m pip install ./niceextract-0.1.0a1-py3-none-any.whl`. You can then run the same demo from any writable folder.
 
 ## Why NiceExtract?
 
@@ -156,10 +158,10 @@ print(result.model_dump_json(indent=2))
 niceextract extract --input paper.md --task task.json --env-file .env --base-url https://gateway.example/v1 --model lab-model --api-key-env LAB_MODEL_KEY --output gateway.json
 ```
 
-**Named configurations.** If your team shares endpoints, timeouts or generation settings, store them as named profiles in a TOML file. Select a profile by name and keep its key in your environment or private `.env`. The bundled `qwen` profile reads `DASHSCOPE_API_KEY`. [Example configuration](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/examples/backends.toml) · [Provider and profile guide](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/docs/BACKENDS.md)
+**Named configurations.** If your team shares endpoints, timeouts or generation settings, store them as named profiles in a TOML file. For this example, save the linked configuration as `backends.toml` alongside `task.json`. Its `qwen` profile reads `DASHSCOPE_API_KEY` from your environment or private `.env`. [Download example configuration](https://raw.githubusercontent.com/CharlieKyan/NiceExtract/5b19b8f25b987771beca119c0b7251dd199c6123/examples/backends.toml) · [Provider and profile guide](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/docs/BACKENDS.md)
 
 ```sh
-niceextract extract --input paper.md --task task.json --env-file .env --config examples/backends.toml --profile qwen --output profile-result.json
+niceextract extract --input paper.md --task task.json --env-file .env --config backends.toml --profile qwen --output profile-result.json
 ```
 
 ## Prepare one task for several papers
@@ -193,13 +195,15 @@ For a second opinion on pending observations, `niceextract review-dataset` write
 
 ## Review a result
 
-Open a saved extraction JSON to inspect its candidates, evidence and warnings. For a more readable view, run the following in the unpacked preview ZIP, which contains the single-document example. It runs offline and writes the review to a new directory.
+To inspect candidates and their evidence side by side, run the research example on its own. From your working folder, save its result in `demo-run` and export the review to a separate folder. Both steps run offline.
 
 ```sh
-niceextract export-review --input examples/ccus-result.json --output-dir review-example
+mkdir demo-run
+niceextract demo --example ccus --output demo-run/ccus-result.json
+niceextract export-review --input demo-run/ccus-result.json --output-dir review-example
 ```
 
-Open `review-example/annotation.md` to read fields alongside their values, conditions and quotations. Use `annotation.json` for the same review in structured form. You can run this command on your own `deepseek.json` or `qwen.json` with a fresh output directory. [Guide to reviewing results (in Chinese)](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/docs/EXPERT_REVIEW.md)
+Open `review-example/annotation.md` to read fields alongside their values, conditions and quotations. Use `annotation.json` for the same review in structured form. To review your own `deepseek.json` or `qwen.json`, choose a new output folder outside the directory containing that JSON file. [Guide to reviewing results (in Chinese)](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/docs/EXPERT_REVIEW.md)
 
 ## License
 

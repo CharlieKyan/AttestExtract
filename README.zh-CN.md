@@ -12,14 +12,16 @@ NiceExtract 是一个用语言模型从论文正文和表格中提取观测记�
 
 ## 快速开始
 
-下载并解压 [NiceExtract 预览版源码 ZIP](https://github.com/CharlieKyan/NiceExtract/archive/5b19b8f25b987771beca119c0b7251dd199c6123.zip)。这份较早的源码可以运行下文的演示和抽取示例。dev60 的 CSV 组表功能将在后续版本发布。在解压后含有 `pyproject.toml` 的目录，用 Python 3.11 或更高版本运行以下命令。
+使用 Python 3.11 或更高版本，在想保存结果的文件夹里运行下面两条命令。第一条直接从 GitHub 下载并安装公开预览版，第二条离线运行两个随包示例。无需克隆仓库、手动解压或配置 API 密钥。
 
 ```sh
-python -m pip install .
+python -m pip install "https://github.com/CharlieKyan/NiceExtract/archive/5b19b8f25b987771beca119c0b7251dd199c6123.zip"
 niceextract demo --output result.json
 ```
 
-打开 `result.json`，查看两份合成材料的结果。在科研示例里，样品 A 在 25 °C 和 50 °C 下的压力都是 12 bar。结果保留两条候选，每条都能查到对应温度和原句。这个演示在本地回放预设回答，无需 API 密钥。[示例原文](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/src/niceextract/examples/ccus.txt) · [科研示例 JSON](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/examples/ccus-result.json)
+打开当前文件夹中的 `result.json`。演示用科研片段和采购需求两份合成材料回放预设回答。科研示例里，样品 A 在 25 °C 和 50 °C 下的压力都是 12 bar，结果中的两条候选各自保留了对应温度和原句。[示例原文](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/src/niceextract/examples/ccus.txt) · [科研示例 JSON](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/examples/ccus-result.json)
+
+dev60 新增的 CSV 组表功能将在后续版本公开。如果你手头已有 dev60 的 wheel 安装包，可以激活一个新的虚拟环境，在安装包所在目录运行 `python -m pip install ./niceextract-0.1.0a1-py3-none-any.whl`，然后在任意可写目录运行同一条演示命令。
 
 ## 为什么选择 NiceExtract？
 
@@ -156,10 +158,10 @@ print(result.model_dump_json(indent=2))
 niceextract extract --input paper.md --task task.json --env-file .env --base-url https://gateway.example/v1 --model lab-model --api-key-env LAB_MODEL_KEY --output gateway.json
 ```
 
-**团队共用配置。** 如果要共用端点、超时或生成参数，可以把它们存成 TOML 文件里的命名配置，运行时按名字选择。密钥各自保存在环境变量或私有 `.env` 中。下面示例里的 `qwen` 配置读取 `DASHSCOPE_API_KEY`。[配置文件示例](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/examples/backends.toml) · [模型与配置指南](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/docs/BACKENDS.md)
+**团队共用配置。** 如果要共用端点、超时或生成参数，可以把它们存成 TOML 文件里的命名配置。要运行下面的示例，请把链接中的配置文件保存为 `backends.toml`，与 `task.json` 放在同一目录。其中的 `qwen` 配置从环境变量或私有 `.env` 中读取 `DASHSCOPE_API_KEY`。[下载配置文件示例](https://raw.githubusercontent.com/CharlieKyan/NiceExtract/5b19b8f25b987771beca119c0b7251dd199c6123/examples/backends.toml) · [模型与配置指南](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/docs/BACKENDS.md)
 
 ```sh
-niceextract extract --input paper.md --task task.json --env-file .env --config examples/backends.toml --profile qwen --output profile-result.json
+niceextract extract --input paper.md --task task.json --env-file .env --config backends.toml --profile qwen --output profile-result.json
 ```
 
 ## 多篇文献共用一份字段定义
@@ -193,13 +195,15 @@ niceextract extract --input paper.md --task prepared/task.json --env-file .env -
 
 ## 核对抽取结果
 
-打开已保存的抽取 JSON，可以查看候选记录、证据和警告。如果想用更方便阅读的格式逐条核对，可以在预览版源码 ZIP 的解压目录中，对随包提供的单篇示例结果运行以下命令。它会离线生成一份审阅材料，写入新目录。
+要逐条对照候选记录与原文证据，可以单独运行科研示例。在工作目录里新建 `demo-run` 保存单篇结果，再把审阅文件导出到并列目录。这两步都可以离线完成。
 
 ```sh
-niceextract export-review --input examples/ccus-result.json --output-dir review-example
+mkdir demo-run
+niceextract demo --example ccus --output demo-run/ccus-result.json
+niceextract export-review --input demo-run/ccus-result.json --output-dir review-example
 ```
 
-打开 `review-example/annotation.md`，即可一起阅读字段、原值、条件和原文引句。同一份内容也会保存为 `annotation.json`。换成自己的 `deepseek.json` 或 `qwen.json` 时，请选一个新的输出目录。[结果复核指南](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/docs/EXPERT_REVIEW.md)
+打开 `review-example/annotation.md`，即可一起阅读字段、原值、条件和原文引句。同一份内容也会保存为 `annotation.json`。复核自己的 `deepseek.json` 或 `qwen.json` 时，请在输入 JSON 所在目录之外选择新的输出目录。[结果复核指南](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/docs/EXPERT_REVIEW.md)
 
 ## 许可证
 
