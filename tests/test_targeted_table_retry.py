@@ -5,13 +5,13 @@ import json
 import httpx
 import pytest
 
-import attestextract
-from attestextract import ExecutionOptions, GenerationOptions, RunTrace, extract
-from attestextract.backends import OpenAICompatibleBackend
-from attestextract.errors import BackendError, ConfigurationError
-from attestextract.execution import prepare_execution
-from attestextract.models import TaskSpec
-from attestextract import document_routing, table_routes
+import niceextract
+from niceextract import ExecutionOptions, GenerationOptions, RunTrace, extract
+from niceextract.backends import OpenAICompatibleBackend
+from niceextract.errors import BackendError, ConfigurationError
+from niceextract.execution import prepare_execution
+from niceextract.models import TaskSpec
+from niceextract import document_routing, table_routes
 
 
 TEXT = "Sample B length is 5 m.\n\n| Sample | Value/m |\n| --- | --- |\n| A | 3 |\n\nAnother table.\n\n| Sample | Value/m |\n| --- | --- |\n| A | 3 |\n"
@@ -78,7 +78,7 @@ def run(path, calls, *, resume=None, retry=False, budget=10, **backend_options):
 
 def old_run(monkeypatch, path):
     with monkeypatch.context() as patch:
-        patch.setattr(attestextract, "__version__", "0.1.0.dev30")
+        patch.setattr(niceextract, "__version__", "0.1.0.dev30")
         patch.setattr(document_routing, "ROUTING_REVISION", "dev29-table-a-2")
         patch.setattr(table_routes, "build_route_request", lambda stage, task, table, **kwargs:
                       table_routes._build_legacy_route_request(task, table, **kwargs))

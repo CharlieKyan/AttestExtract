@@ -3,7 +3,7 @@
 from copy import deepcopy
 import json
 
-from attestextract.table_reporting import render_table_report, summarize_table_bundle
+from niceextract.table_reporting import render_table_report, summarize_table_bundle
 
 
 def write(path, value):

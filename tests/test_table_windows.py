@@ -5,12 +5,12 @@ import json
 
 import pytest
 
-from attestextract.document_routing import is_table_chunk, table_input_for_chunk
-from attestextract.errors import ConfigurationError
-from attestextract.models import ContextOptions, DocumentChunk, SourceSpan
-from attestextract.structure import build_structure
-from attestextract.table_routes import build_route_request, evaluate_route
-from attestextract.table_windows import (
+from niceextract.document_routing import is_table_chunk, table_input_for_chunk
+from niceextract.errors import ConfigurationError
+from niceextract.models import ContextOptions, DocumentChunk, SourceSpan
+from niceextract.structure import build_structure
+from niceextract.table_routes import build_route_request, evaluate_route
+from niceextract.table_windows import (
     add_table_window, filter_window_records, split_table_chunk, window_owned_refs,
 )
 

@@ -6,8 +6,8 @@ import sys
 
 import pytest
 
-from attestextract.errors import BackendError, ConfigurationError
-from attestextract.models import BackendResponse
+from niceextract.errors import BackendError, ConfigurationError
+from niceextract.models import BackendResponse
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
 import table_route_runner as runner
@@ -100,7 +100,7 @@ def test_invalid_a_is_not_retried_or_reallocated(prepared):
 
 
 def test_runner_passes_frozen_table_input_to_reconciliation(prepared, monkeypatch):
-    import attestextract.table_routes as core
+    import niceextract.table_routes as core
     original = core.reconcile_results
     received = []
     def reconcile(*args, **kwargs):
@@ -202,7 +202,7 @@ def test_previous_a_manifests_are_readonly_but_can_import_saved_responses(prepar
 
 def test_new_runner_results_are_v3_with_original_fields_and_no_strict_view(tmp_path, monkeypatch):
     monkeypatch.setattr(runner, "runtime_identity", lambda: {"test": "stable"})
-    examples = Path(__file__).parents[1] / "src/attestextract/examples/table_routes/cases.json"
+    examples = Path(__file__).parents[1] / "src/niceextract/examples/table_routes/cases.json"
     item = json.loads(examples.read_text(encoding="utf-8"))[0]
     root = tmp_path / "observe"
     runner.prepare_bundle(root, [item])

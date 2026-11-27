@@ -7,8 +7,8 @@ from pathlib import Path
 
 import httpx
 
-import attestextract
-from attestextract import backends, cli, extract
+import niceextract
+from niceextract import backends, cli, extract
 
 
 def main():
@@ -18,7 +18,7 @@ def main():
     output.mkdir(parents=True, exist_ok=False)
     # This executable smoke test uses only synthetic keys and MockTransport.
     for key in list(os.environ):
-        if key.startswith(("ATTESTEXTRACT_", "DEEPSEEK_", "QWEN_", "DASHSCOPE_", "VLM_")):
+        if key.startswith(("NICEEXTRACT_", "ATTESTEXTRACT_", "DEEPSEEK_", "QWEN_", "DASHSCOPE_", "VLM_")):
             del os.environ[key]
     os.environ.update(DEEPSEEK_API_KEY="synthetic-deepseek-key", VLM_API_KEY="synthetic-qwen-key")
     text = "Lamp A uses 8 W."
@@ -93,7 +93,7 @@ def main():
     finally:
         backends.OpenAICompatibleBackend = original
     assert len(observed) == 7
-    summary = {"package_version": attestextract.__version__, "module_path": attestextract.__file__,
+    summary = {"package_version": niceextract.__version__, "module_path": niceextract.__file__,
                "real_endpoint_calls": 0, "mock_http_calls": len(observed), "passed": True, "cases": results}
     (output / "summary.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(summary))

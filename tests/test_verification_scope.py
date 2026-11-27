@@ -7,8 +7,8 @@ from pathlib import Path
 import httpx
 import pytest
 
-from attestextract import ExecutionOptions, extract
-from attestextract.backends import OpenAICompatibleBackend
+from niceextract import ExecutionOptions, extract
+from niceextract.backends import OpenAICompatibleBackend
 
 
 _SPEC = importlib.util.spec_from_file_location(

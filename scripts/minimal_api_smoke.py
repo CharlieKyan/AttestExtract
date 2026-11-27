@@ -11,9 +11,9 @@ from unittest.mock import patch
 
 import httpx
 
-import attestextract
-from attestextract import ModelConnection, RunTrace, cli, extract
-from attestextract.errors import BackendError
+import niceextract
+from niceextract import ModelConnection, RunTrace, cli, extract
+from niceextract.errors import BackendError
 
 
 SOURCE = "Lamp A uses 8 W."
@@ -65,7 +65,7 @@ def main() -> None:
         ("unregistered", "https://new-service.example/v1", "unlisted:research", "json_schema"),
         ("mode-fallback", "https://new-service.example/v1", "schema-reject", "json_object"),
     ]
-    with patch.dict(os.environ, {"ATTESTEXTRACT_MODEL_CACHE_DIR": str(root / "cache")}), patch.object(httpx, "Client", offline_client):
+    with patch.dict(os.environ, {"NICEEXTRACT_MODEL_CACHE_DIR": str(root / "cache")}), patch.object(httpx, "Client", offline_client):
         for name, address, model, expected_mode in services:
             result = extract(SOURCE, TASK, base_url=address, api_key="synthetic-key", model=model,
                              trace=RunTrace(root / name))
@@ -93,8 +93,8 @@ def main() -> None:
         task_path = root / "task.json"
         source_path.write_text(SOURCE, encoding="utf-8")
         task_path.write_text(json.dumps(TASK), encoding="utf-8")
-        with patch.dict(os.environ, {"ATTESTEXTRACT_API_KEY": "synthetic-cli-key",
-                                   "ATTESTEXTRACT_MODEL_CACHE_DIR": str(root / "cli-cache")}):
+        with patch.dict(os.environ, {"NICEEXTRACT_API_KEY": "synthetic-cli-key",
+                                   "NICEEXTRACT_MODEL_CACHE_DIR": str(root / "cli-cache")}):
             for name, address, model, expected_mode in services[:5]:
                 output = root / f"cli-{name}.json"
                 arguments = ["extract", "--base-url", address, "--model", model,
@@ -114,8 +114,8 @@ def main() -> None:
                 cases.append({"name": f"cli-{name}", "calls": 1, "passed": True})
     assert len(observed) == 15
     assert importlib.util.find_spec("langextract") is None
-    summary = {"passed": True, "package_version": attestextract.__version__,
-               "module_path": attestextract.__file__, "real_endpoint_calls": 0,
+    summary = {"passed": True, "package_version": niceextract.__version__,
+               "module_path": niceextract.__file__, "real_endpoint_calls": 0,
                "mock_model_posts": len(observed), "cases": cases,
                "backup_calls": 2, "timeout_calls": 1, "observed": observed}
     (root / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")

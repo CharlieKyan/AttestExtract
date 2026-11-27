@@ -15,9 +15,9 @@ dev28 起，向普通 `extract` 入口提供论文原文和任务即可使用表
 `--check` 不调用接口、不验证密钥、端点可用性或模型效果，也不产生抽取结果。
 
 ```powershell
-attestextract extract `
-  --input src/attestextract/examples/procurement.md `
-  --task src/attestextract/examples/procurement.task.json `
+niceextract extract `
+  --input src/niceextract/examples/procurement.md `
+  --task src/niceextract/examples/procurement.task.json `
   --base-url https://example.invalid/v1 --model offline-plan `
   --check
 ```
@@ -40,7 +40,7 @@ dev33起，服务明确返回长度截断时可以在累计预算和深度上限
 先配置好私有 `.env`，并按前面的计划选择请求总预算；此处的8只是示例上限。
 
 ```powershell
-attestextract extract `
+niceextract extract `
   --input paper.md --task task.json `
   --model-id deepseek:deepseek-flash --env-file .env `
   --max-model-calls 8
@@ -59,7 +59,7 @@ Python 同样使用已有入口。下面示例也会调用模型：
 
 ```python
 from pathlib import Path
-from attestextract import ExecutionOptions, RunTrace, extract, load_task
+from niceextract import ExecutionOptions, RunTrace, extract, load_task
 
 run_dir = Path("private-output/run-01")  # 使用新目录，避免覆盖历史运行
 trace = RunTrace(run_dir / "diagnostics")

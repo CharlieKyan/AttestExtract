@@ -1,5 +1,7 @@
 # 专家审阅与表格定向恢复
 
+分享抽取结果前，请检查任务示例、原文引句和表格回答。`result.json` 保留这些研究材料；首页链接的示例使用专门编写的合成原文和固定回放回答。
+
 dev32 起普通用户先看 `annotation.md` 或 `annotation.json`。同一对象的
 字段、原值、单位、各自条件和完整引文放在一起；不同表格出处仍逐条显示，
 缺失条件不自动解释成同一情景。JSON 不展示模型、块编号、位置偏移或
@@ -39,7 +41,7 @@ dev31 的普通 Python `output_dir`、CLI `--output-dir` 及 CLI 默认运行目
 已有结果无需重新调用模型：
 
 ```powershell
-python -m attestextract export-review --input '.\old-run\result.json' --output-dir '.\expert-review'
+python -m niceextract export-review --input '.\old-run\result.json' --output-dir '.\expert-review'
 ```
 
 不指定输出目录时创建新的同级目录。输出不得覆盖原运行或其子目录。
@@ -61,7 +63,7 @@ dev31 的请求明确要求有值或有引用的 Binding 声明来源关系，�
 普通恢复复用兼容检查通过的已缓存完整表格响应，不会再次生成。固定配置入口可显式用：
 
 ```powershell
-python -m attestextract extract --input '.\paper.md' --task '.\task.json' --model-id 'deepseek:deepseek-flash' --env-file '.env' --resume '.\old-run\diagnostics\execution\checkpoint.json' --retry-tables --max-model-calls 11 --max-attempts 1 --output-dir '.\new-run'
+python -m niceextract extract --input '.\paper.md' --task '.\task.json' --model-id 'deepseek:deepseek-flash' --env-file '.env' --resume '.\old-run\diagnostics\execution\checkpoint.json' --retry-tables --max-model-calls 11 --max-attempts 1 --output-dir '.\new-run'
 ```
 
 这里的 `11` 是示例累计上限：若旧运行用了 9 次，选择两张隔离表格时最多

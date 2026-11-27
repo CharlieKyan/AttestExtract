@@ -1,6 +1,6 @@
 """Installed-package analysis acceptance with synthetic HTTP and no network.
 
-Run from any directory with an installed attestextract wheel. This script never
+Run from any directory with an installed niceextract wheel. This script never
 imports repository tests or inserts the checkout into Python's import path.
 """
 
@@ -19,10 +19,10 @@ from unittest.mock import patch
 
 import httpx
 
-import attestextract
-from attestextract import ExecutionOptions, GenerationOptions, cli, extract
-from attestextract.backends import OpenAICompatibleBackend
-from attestextract.registry import BackendRegistry
+import niceextract
+from niceextract import ExecutionOptions, GenerationOptions, cli, extract
+from niceextract.backends import OpenAICompatibleBackend
+from niceextract.registry import BackendRegistry
 
 
 EAST = "East site contains reactor R."
@@ -38,6 +38,13 @@ SOURCE = "\n\n".join([EAST, *(claim[0] for claim in CLAIMS),
     WEST, SAMPLE])
 TASK = {"prompt_description": "Extract each directly reported yield, preserving its owner and temperature.",
         "field_list": {"yield": "Reported yield of each object", "mass": "Reported mass, if present"}}
+
+
+def owns_quote(payload, quote):
+    source = payload["source"]
+    if isinstance(source, str):
+        return quote in source
+    return any(part["role"] == "body" and quote in part["text"] for part in source)
 
 
 def read(path):
@@ -75,7 +82,7 @@ class Service:
             self.calls.append("extraction")
             records = []
             for quote, entity, value, conditions in CLAIMS:
-                if quote not in payload["source"]:
+                if not owns_quote(payload, quote):
                     continue
                 values = {"entity": entity, "value": value, "unit": "%", "conditions": conditions}
                 records.append({"record_type": "yield", "values": values,
@@ -118,7 +125,7 @@ class Service:
                 {"object_id": "east", "name": "R", "kind": "instance", "scope": "East",
                  "is_table_subject": True, "mentions": [cite(EAST)]},
                 {"object_id": "west", "name": "R", "kind": "instance", "scope": "West",
-                 "is_table_subject": True, "mentions": [cite(WEST)]},
+                 "is_table_subject": True, "mentions": [cite(WEST), cite("West reactor R")]},
                 {"object_id": "sample", "name": "S1", "kind": "sample", "scope": "West sample",
                  "is_table_subject": False, "mentions": [cite(SAMPLE)]},
         ]
@@ -207,7 +214,7 @@ def accept_cli(root, mode):
     task.write_text(json.dumps(TASK), encoding="utf-8")
     config.write_text('[profiles.synthetic]\nbase_url = "https://synthetic.invalid/v1"\n'
                       f'model = "synthetic-analysis"\nstructured_output = "{mode}"\n'
-                      'api_key_env = "ATTESTEXTRACT_TEST_API_KEY"\n'
+                      'api_key_env = "NICEEXTRACT_TEST_API_KEY"\n'
                       'max_attempts = 1\nformat_retries = 0\n'
                       '[profiles.synthetic.generation]\nmax_output_tokens = 2048\n', encoding="utf-8")
     service = Service(mode=mode)
@@ -225,7 +232,7 @@ def accept_cli(root, mode):
                  "--table-subject", "one reactor occurrence in its original site", "--max-analysis-calls", "3",
                  "--analysis-max-steps", "4", "--analysis-input-budget", "48000"]
     captured = io.StringIO()
-    credentials = {"ATTESTEXTRACT_TEST_API_KEY": "synthetic-install-secret",
+    credentials = {"NICEEXTRACT_TEST_API_KEY": "synthetic-install-secret",
                    "DEEPSEEK_API_KEY": "unselected-synthetic-account"}
     with patch.dict(os.environ, credentials), redirect_stdout(captured):
         assert cli.main([*arguments, "--output-dir", str(root / "cli-check"), "--check"], registry=registry) == 0
@@ -293,7 +300,7 @@ class ScopeService(Service):
             self.calls.append("extraction")
             records = []
             for quote, entity, value in SCOPE_CLAIMS:
-                if quote not in payload["source"]:
+                if not owns_quote(payload, quote):
                     continue
                 values = {"entity": entity, "value": value, "unit": "g", "conditions": None}
                 records.append({"record_type": "mass", "values": values,
@@ -397,7 +404,7 @@ def accept_scope(root, mode, entry):
         task.write_text(json.dumps(SCOPE_TASK), encoding="utf-8")
         config.write_text('[profiles.synthetic]\nbase_url = "https://synthetic.invalid/v1"\n'
             f'model = "synthetic-scope-model"\nstructured_output = "{mode}"\n'
-            'api_key_env = "ATTESTEXTRACT_TEST_API_KEY"\nmax_attempts = 1\nformat_retries = 0\n', encoding="utf-8")
+            'api_key_env = "NICEEXTRACT_TEST_API_KEY"\nmax_attempts = 1\nformat_retries = 0\n', encoding="utf-8")
         registry = BackendRegistry()
 
         def factory(*, config, api_key, trace):
@@ -412,7 +419,7 @@ def accept_scope(root, mode, entry):
 
         def invoke(destination, resume=None):
             extra = ["--resume", str(resume)] if resume else []
-            with patch.dict(os.environ, {"ATTESTEXTRACT_TEST_API_KEY": "synthetic-install-secret"}), redirect_stdout(io.StringIO()):
+            with patch.dict(os.environ, {"NICEEXTRACT_TEST_API_KEY": "synthetic-install-secret"}), redirect_stdout(io.StringIO()):
                 return cli.main([*arguments, *extra, "--output-dir", str(destination)], registry=registry)
 
         assert invoke(first) == 0
@@ -475,7 +482,7 @@ class AmbiguityService(Service):
             self.calls.append("extraction")
             records = []
             for quote, entity, value in AMBIGUITY_CLAIMS:
-                assert quote in payload["source"]
+                assert owns_quote(payload, quote)
                 values = {"entity": entity, "value": value, "unit": "g", "conditions": None}
                 records.append({"record_type": "mass", "values": values,
                                 "quotes": {key: quote if val is not None else "" for key, val in values.items()}})
@@ -550,7 +557,7 @@ def ambiguity_entry(root, mode, entry, *, service=None, max_calls=2):
         task.write_text(json.dumps(SCOPE_TASK), encoding="utf-8")
         config.write_text('[profiles.synthetic]\nbase_url = "https://synthetic.invalid/v1"\n'
             f'model = "synthetic-ambiguity-model"\nstructured_output = "{mode}"\n'
-            'api_key_env = "ATTESTEXTRACT_TEST_API_KEY"\nmax_attempts = 1\nformat_retries = 0\n', encoding="utf-8")
+            'api_key_env = "NICEEXTRACT_TEST_API_KEY"\nmax_attempts = 1\nformat_retries = 0\n', encoding="utf-8")
         registry = BackendRegistry()
 
         def factory(*, config, api_key, trace):
@@ -565,7 +572,7 @@ def ambiguity_entry(root, mode, entry, *, service=None, max_calls=2):
 
         def invoke(destination, resume=None):
             extra = ["--resume", str(resume)] if resume else []
-            with patch.dict(os.environ, {"ATTESTEXTRACT_TEST_API_KEY": "synthetic-install-secret"}), redirect_stdout(io.StringIO()):
+            with patch.dict(os.environ, {"NICEEXTRACT_TEST_API_KEY": "synthetic-install-secret"}), redirect_stdout(io.StringIO()):
                 return cli.main([*arguments, *extra, "--output-dir", str(destination)], registry=registry)
     return service, invoke
 
@@ -703,7 +710,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
     root = parser.parse_args().output.resolve()
-    module_path = Path(attestextract.__file__).resolve()
+    module_path = Path(niceextract.__file__).resolve()
     assert any(part in {"site-packages", "dist-packages"} for part in module_path.parts), \
         "Run this acceptance with a normally installed wheel, not an editable/source checkout"
     root.mkdir(parents=True, exist_ok=False)
@@ -730,7 +737,7 @@ def main():
             modes[mode]["partial_acceptance"] = {entry: accept_partial(directory / ("partial-" + entry), mode, entry)
                                                   for entry in ("python", "cli")}
     assert not network_attempts
-    summary = {"passed": True, "package_version": attestextract.__version__,
+    summary = {"passed": True, "package_version": niceextract.__version__,
                "module_path": str(module_path), "installed_package_verified": True,
                "network_attempts": 0, "real_model_calls": 0, "modes": modes,
                "synthetic_http_calls": sum(item["synthetic_http_calls"] + item["cli_synthetic_http_calls"] +

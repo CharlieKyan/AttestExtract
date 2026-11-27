@@ -18,13 +18,13 @@ dev15 可显式选择 `--model-id deepseek-responses:deepseek-flash`，通过独
 论文发到接口。此命令会调用你配置的真实模型，按服务商规则计费。
 
 ```powershell
-$root = Join-Path (Split-Path $PWD) "research\attestextract"
+$root = Join-Path (Split-Path $PWD) "research\niceextract"
 $probe = Join-Path $root "runs\schema-probe\$(Get-Date -Format 'yyyyMMdd-HHmmss-fff')"
 New-Item -ItemType Directory -Force -Path $probe | Out-Null
-.\.venv\Scripts\python.exe -m attestextract extract `
+.\.venv\Scripts\python.exe -m niceextract extract `
   --env-file .env --structured-output json_schema --format-retries 0 `
-  --input src/attestextract/examples/measurements.txt `
-  --task src/attestextract/examples/measurements.task.json `
+  --input src/niceextract/examples/measurements.txt `
+  --task src/niceextract/examples/measurements.task.json `
   --output "$probe\extraction.json" --report "$probe\review.md" `
   --log-dir "$probe\diagnostics"
 ```

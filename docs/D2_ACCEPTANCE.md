@@ -24,7 +24,7 @@ D2 的目标是完成统一模型通道、扩展方式和首批真实接入，�
 ## 模型选择的范围
 
 ```python
-from attestextract import extract
+from niceextract import extract
 
 result = extract(text, task, model="deepseek:deepseek-flash", env_file=".env")
 # 下次只改变 model：
@@ -54,8 +54,8 @@ dev9 本轮新增真实调用为 **0**。旧的余额不足失败记录也保留
 安装后在源码检出目录运行，输出目录必须是新目录：
 
 ```powershell
-python scripts/model_selection_smoke.py --output-dir ../research/attestextract/runs/dev9-switch-example
-python scripts/d2_acceptance.py --mode mock --output-dir ../research/attestextract/runs/dev9-envelope-example
+python scripts/model_selection_smoke.py --output-dir ../research/niceextract/runs/dev9-switch-example
+python scripts/d2_acceptance.py --mode mock --output-dir ../research/niceextract/runs/dev9-envelope-example
 python -m pytest -q
 ```
 

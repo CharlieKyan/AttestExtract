@@ -11,16 +11,16 @@ import sys
 
 import pytest
 
-from attestextract import cli
-from attestextract.models import BackendResponse
-from attestextract.errors import BackendError
+from niceextract import cli
+from niceextract.models import BackendResponse
+from niceextract.errors import BackendError
 
 
 def run_cli(*args: str, cwd: Path) -> subprocess.CompletedProcess:
-    env = {key: value for key, value in os.environ.items() if not key.startswith("ATTESTEXTRACT_")}
+    env = {key: value for key, value in os.environ.items() if not key.startswith(("NICEEXTRACT_", "ATTESTEXTRACT_"))}
     env["PYTHONUTF8"] = "1"
     return subprocess.run(
-        [sys.executable, "-m", "attestextract", *args],
+        [sys.executable, "-m", "niceextract", *args],
         cwd=cwd,
         env=env,
         capture_output=True,
@@ -103,10 +103,10 @@ def test_extract_reads_utf8_and_uses_the_configured_backend(extension, newline, 
                 "records": [{"record_type": "purchase", "values": {"amount": 120}, "quotes": {"amount": "120"}}]
             }))
 
-    monkeypatch.setattr("attestextract.backends.OpenAICompatibleBackend", FakeBackend)
-    monkeypatch.setenv("ATTESTEXTRACT_BASE_URL", "https://example.invalid/v1")
-    monkeypatch.setenv("ATTESTEXTRACT_MODEL", "synthetic-test-model")
-    monkeypatch.delenv("ATTESTEXTRACT_API_KEY", raising=False)
+    monkeypatch.setattr("niceextract.backends.OpenAICompatibleBackend", FakeBackend)
+    monkeypatch.setenv("NICEEXTRACT_BASE_URL", "https://example.invalid/v1")
+    monkeypatch.setenv("NICEEXTRACT_MODEL", "synthetic-test-model")
+    monkeypatch.delenv("NICEEXTRACT_API_KEY", raising=False)
     status = cli.main(["extract", "--input", str(source), "--task", str(task), "--output", str(output)])
 
     assert status == 0
@@ -141,7 +141,7 @@ def test_backend_failure_is_reported_and_does_not_create_success_output(monkeypa
         def generate(self, request):
             raise BackendError("Synthetic endpoint unavailable")
 
-    monkeypatch.setattr("attestextract.backends.OpenAICompatibleBackend", FailingBackend)
+    monkeypatch.setattr("niceextract.backends.OpenAICompatibleBackend", FailingBackend)
     status = cli.main([
         "extract", "--input", str(source), "--task", str(task), "--output", str(output),
         "--base-url", "https://example.invalid/v1", "--model", "synthetic-test-model",

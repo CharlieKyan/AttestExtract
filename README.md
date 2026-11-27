@@ -4,32 +4,32 @@
 
 # NiceExtract
 
-[简体中文](README.zh-CN.md) · [Quick start](#quick-start) · [Tasks and examples](#define-a-task-and-label-examples) · [API setup](#configure-the-api-and-switch-models) · [Multi-paper CSV (dev60 preview)](#prepare-one-task-for-several-papers)
+[简体中文](README.zh-CN.md) · [Quick start](#quick-start) · [Tasks and examples](#define-a-task-and-label-examples) · [API setup](#configure-the-api-and-switch-models) · [Multi-paper tasks and CSV](#prepare-one-task-for-several-papers)
 
 ## Introduction
 
-NiceExtract is a Python framework that uses language models to extract observations from research papers and keep the source evidence for each candidate. Define your fields once and use the Python API or CLI to read prose and tables. The upcoming dev60 release adds a dataset workflow. When you specify what each row represents, you can also produce a CSV for each paper and trace a cell back to its reported value, unit and source.
+NiceExtract is a Python framework that uses language models to extract observations from research papers and keep the source evidence for each candidate. Define your fields once and use the Python API or CLI to read prose and tables. When you specify what each row represents, you can also produce a CSV for each paper and trace a cell back to its reported value, unit and source.
 
 ## Quick start
 
-With Python 3.11 or newer, run these commands in the folder where you want to save the result. The first downloads and installs the public preview from GitHub. The second runs two bundled examples offline, without an API key or a local checkout.
+Activate a fresh Python 3.11 or newer virtual environment. In the folder where you want to save the result, install the NiceExtract 0.1.0a1 wheel from GitHub and run the two bundled examples. The demo runs offline without an API key or a local checkout.
 
 ```sh
-python -m pip install "https://github.com/CharlieKyan/NiceExtract/archive/5b19b8f25b987771beca119c0b7251dd199c6123.zip"
+python -m pip install "https://github.com/CharlieKyan/NiceExtract/releases/download/v0.1.0a1/niceextract-0.1.0a1-py3-none-any.whl"
 niceextract demo --output result.json
 ```
 
-Open `result.json` in the current folder. The demo replays fixed responses for a research excerpt and a purchase request. In the research example, sample A has the same pressure, 12 bar, at 25 °C and 50 °C. Each candidate keeps its temperature and source sentence. [Source passage](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/src/niceextract/examples/ccus.txt) · [Saved research example](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/examples/ccus-result.json)
+Open `result.json` in the current folder. The demo replays fixed responses for a research excerpt and a purchase request. In the research example, sample A has the same pressure, 12 bar, at 25 °C and 50 °C. Each candidate keeps its temperature and source sentence. [Source passage](https://github.com/CharlieKyan/NiceExtract/blob/v0.1.0a1/src/niceextract/examples/ccus.txt) · [Saved research example](https://github.com/CharlieKyan/NiceExtract/blob/v0.1.0a1/examples/ccus-result.json)
 
-The public preview above predates the dev60 CSV workflow. If you already have the dev60 wheel, activate a fresh virtual environment and install it from its download folder with `python -m pip install ./niceextract-0.1.0a1-py3-none-any.whl`. You can then run the same demo from any writable folder.
+If you already downloaded the wheel, run `python -m pip install ./niceextract-0.1.0a1-py3-none-any.whl` in its download folder. The release also includes the source distribution and SHA-256 checksums. [Release files](https://github.com/CharlieKyan/NiceExtract/releases/tag/v0.1.0a1)
 
 ## Why NiceExtract?
 
-- **Reuse field definitions across papers.** In the dev60 preview, declare which fields accept text or numbers and save the definitions with `prepare-task`. A grade code such as `003` can keep its leading zeros. A concentration field can distinguish a single value such as `5 ppm`, a range such as `2–5 ppm`, and a lower bound such as `≥5 ppm`.
+- **Reuse field definitions across papers.** Declare which fields accept text or numbers and save the definitions with `prepare-task`. A grade code such as `003` can keep its leading zeros. A concentration field can distinguish a single value such as `5 ppm`, a range such as `2–5 ppm`, and a lower bound such as `≥5 ppm`.
 - **Check a result against the source.** For text fields, inspect the quotation and its location when a match is found. Missing quotations and ambiguous matches are flagged so you can decide where to look more closely.
 - **Read prose and tables together.** Process a document containing Markdown or HTML tables in one run. The JSON includes both sets of results, with cell references for tracing table observations back to their rows and columns.
 - **Keep the context that gives a value meaning.** Review a reported value alongside the object it describes, its unit and its conditions. Observations made under different conditions can be kept separate even when their values are identical.
-- **Resume work on a long document.** Set a limit on model calls and save the run. If it stops partway through, you can reuse completed chunks when you resume. [Run and resume guide (in Chinese)](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/docs/EXECUTION.md)
+- **Resume work on a long document.** Set a limit on model calls and save the run. If it stops partway through, you can reuse completed chunks when you resume. [Run and resume guide (in Chinese)](https://github.com/CharlieKyan/NiceExtract/blob/v0.1.0a1/docs/EXECUTION.md)
 
 ## From a text match to a research record
 
@@ -37,10 +37,10 @@ LangExtract can highlight where an extraction appears in a document. In its v1.7
 
 | Question during review | What you can inspect in NiceExtract |
 | --- | --- |
-| **Which occurrence supports this field?** | Each quoted text field has its own match status. When the wording occurs more than once in the search range, you can inspect the possible locations. If spacing or punctuation differs, a normalized match keeps both the model's quotation and the original source text for review. [Evidence guide (in Chinese)](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/docs/D4_EVIDENCE.md) |
-| **Does this unit apply to this table value?** | Follow cell references from a reported value to the header, unit or footnote cited for it. The result distinguishes finding the quoted text from checking its row or column relationship. That gives you the original cells to consult when a header spans several columns. [Table checks (in Chinese)](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/docs/TABLE_EXTRACTION.md) |
-| **Does a bearing temperature belong in a column for the whole motor?** | In the dev60 preview, suppose a paper says that bearing B7 in motor M4 reached 60 °C. If the field accepts component temperatures, you can find that observation under M4 with B7 recorded as the measured object. If the field requires the mean for the whole motor and the component reading is judged inapplicable, the cell stays empty. The observation still records the bearing’s 60 °C and its quotation. With `--table-subject`, the model can reread passages within a verification budget, and ambiguous ownership can remain pending. [Preview the CSV workflow](#prepare-one-task-for-several-papers) |
-| **What if the model's output cuts off halfway through a table?** | When the service reports an output-length limit, NiceExtract can split the work by row and, if needed, by cell. Each retry still sees the original table and its headers. The retries share the run's call budget, and the incomplete response stays out of the results. [Table recovery (in Chinese)](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/docs/TABLE_EXTRACTION.md#预算格式错误与恢复) |
+| **Which occurrence supports this field?** | Each quoted text field has its own match status. When the wording occurs more than once in the search range, you can inspect the possible locations. If spacing or punctuation differs, a normalized match keeps both the model's quotation and the original source text for review. [Evidence guide (in Chinese)](https://github.com/CharlieKyan/NiceExtract/blob/v0.1.0a1/docs/D4_EVIDENCE.md) |
+| **Does this unit apply to this table value?** | Follow cell references from a reported value to the header, unit or footnote cited for it. The result distinguishes finding the quoted text from checking its row or column relationship. That gives you the original cells to consult when a header spans several columns. [Table checks (in Chinese)](https://github.com/CharlieKyan/NiceExtract/blob/v0.1.0a1/docs/TABLE_EXTRACTION.md) |
+| **Does a bearing temperature belong in a column for the whole motor?** | Suppose a paper says that bearing B7 in motor M4 reached 60 °C. If the field accepts component temperatures, you can find that observation under M4 with B7 recorded as the measured object. If the field requires the mean for the whole motor and the component reading is judged inapplicable, the cell stays empty. The observation still records the bearing’s 60 °C and its quotation. With `--table-subject`, the model can reread passages within a verification budget, and ambiguous ownership can remain pending. [Dataset and query examples (in Chinese)](https://github.com/CharlieKyan/NiceExtract/blob/v0.1.0a1/docs/dataset-assembly.md) |
+| **What if the model's output cuts off halfway through a table?** | When the service reports an output-length limit, NiceExtract can split the work by row and, if needed, by cell. Each retry still sees the original table and its headers. The retries share the run's call budget, and the incomplete response stays out of the results. [Table recovery (in Chinese)](https://github.com/CharlieKyan/NiceExtract/blob/v0.1.0a1/docs/TABLE_EXTRACTION.md#预算格式错误与恢复) |
 
 ## Explore the examples
 
@@ -48,13 +48,13 @@ These synthetic examples show how the choice of task changes what you extract. Y
 
 | What do you want to collect? | What to look at |
 | --- | --- |
-| Measurements and their conditions | Compare a [research excerpt](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/src/niceextract/examples/ccus.txt) with its [saved JSON result](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/examples/ccus-result.json) to see how two measurements of the same sample are recorded. |
-| Items, quantities and delivery terms | Read a [purchase request](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/src/niceextract/examples/procurement.md) alongside its [task definition](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/src/niceextract/examples/procurement.task.json) to see how the same framework handles a different vocabulary. |
-| A relationship stated in the text | Compare a [source sentence](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/src/niceextract/examples/d1/relation/source.txt) with its [handwritten expected record](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/src/niceextract/examples/d1/relation/expected.json) to see who supplies what. |
+| Measurements and their conditions | Compare a [research excerpt](https://github.com/CharlieKyan/NiceExtract/blob/v0.1.0a1/src/niceextract/examples/ccus.txt) with its [saved JSON result](https://github.com/CharlieKyan/NiceExtract/blob/v0.1.0a1/examples/ccus-result.json) to see how two measurements of the same sample are recorded. |
+| Items, quantities and delivery terms | Read a [purchase request](https://github.com/CharlieKyan/NiceExtract/blob/v0.1.0a1/src/niceextract/examples/procurement.md) alongside its [task definition](https://github.com/CharlieKyan/NiceExtract/blob/v0.1.0a1/src/niceextract/examples/procurement.task.json) to see how the same framework handles a different vocabulary. |
+| A relationship stated in the text | Compare a [source sentence](https://github.com/CharlieKyan/NiceExtract/blob/v0.1.0a1/src/niceextract/examples/d1/relation/source.txt) with its [handwritten expected record](https://github.com/CharlieKyan/NiceExtract/blob/v0.1.0a1/src/niceextract/examples/d1/relation/expected.json) to see who supplies what. |
 
 ## Use your own documents
 
-Keep two files side by side. `paper.md` contains the document you want to process, saved as UTF-8 text or Markdown. `task.json` describes what to collect and can be reused across papers. If you start from a PDF, convert it first and check that the tables you need are preserved as Markdown or HTML tables. [Table extraction guide (in Chinese)](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/docs/TABLE_EXTRACTION.md)
+Keep two files side by side. `paper.md` contains the document you want to process, saved as UTF-8 text or Markdown. `task.json` describes what to collect and can be reused across papers. If you start from a PDF, convert it first and check that the tables you need are preserved as Markdown or HTML tables. [Table extraction guide (in Chinese)](https://github.com/CharlieKyan/NiceExtract/blob/v0.1.0a1/docs/TABLE_EXTRACTION.md)
 
 ### Define a task and label examples
 
@@ -68,6 +68,10 @@ Save this complete example as `task.json`. It asks for two properties and shows 
   "field_list": {
     "dry_mass": "Mass measured after drying. Exclude measurements taken before drying.",
     "thickness": "Reported specimen thickness at the stated measurement conditions."
+  },
+  "field_types": {
+    "dry_mass": {"kind": "numeric"},
+    "thickness": {"kind": "numeric"}
   },
   "examples": [
     {
@@ -100,7 +104,7 @@ After installation you can check the task locally without a model or API key. Ru
 python -c "from niceextract import load_task; print(list(load_task('task.json').record_types))"
 ```
 
-For the example above, this prints `['dry_mass', 'thickness']`. An undeclared field or a quotation the loader cannot find raises an error identifying the offending entry. You still decide whether the passage supports your label. For custom record shapes such as subject–relation–object, see the relation task. [Another task covering mass and length](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/src/niceextract/examples/observations.task.json) · [Relation task](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/src/niceextract/examples/d1/relation/task.json) · [Task guide (in Chinese)](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/docs/SIMPLE_TASKS.md)
+For the example above, this prints `['dry_mass', 'thickness']`. An undeclared field or a quotation the loader cannot find raises an error identifying the offending entry. You still decide whether the passage supports your label. For custom record shapes such as subject–relation–object, see the relation task. [Another task covering mass and length](https://github.com/CharlieKyan/NiceExtract/blob/v0.1.0a1/src/niceextract/examples/observations.task.json) · [Relation task](https://github.com/CharlieKyan/NiceExtract/blob/v0.1.0a1/src/niceextract/examples/d1/relation/task.json) · [Task guide (in Chinese)](https://github.com/CharlieKyan/NiceExtract/blob/v0.1.0a1/docs/SIMPLE_TASKS.md)
 
 ## Configure the API and switch models
 
@@ -110,7 +114,7 @@ A live run sends document content and task examples to the chosen provider and m
 
 Set the key for the provider you want to use. You can either set an environment variable or put it in a private `.env` file. The examples below explicitly load that file. If you use environment variables only, omit `--env-file .env` in the CLI and `env_file=".env"` in Python. An existing environment variable takes precedence over the file.
 
-| Connection in this preview | Model ID | Key variable |
+| Built-in connection | Model ID | Key variable |
 | --- | --- | --- |
 | DeepSeek Chat | `deepseek:deepseek-flash` | `DEEPSEEK_API_KEY` |
 | DeepSeek Responses | `deepseek-responses:deepseek-flash` | `DEEPSEEK_API_KEY` |
@@ -152,13 +156,13 @@ print(result.model_dump_json(indent=2))
 
 ### Connect a lab gateway or reuse a team configuration
 
-**Compatible API.** For a service offering a non-streaming OpenAI-compatible Chat Completions API with a bearer key, use its base URL and its own model name. Replace the example address and model below, and set `LAB_MODEL_KEY` to the key for that endpoint. In Python, pass `base_url`, the raw `model` name and `api_key_env="LAB_MODEL_KEY"` to the same `extract()` call. [Connection guide (in Chinese)](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/docs/MINIMAL_API.md)
+**Compatible API.** For a service offering a non-streaming OpenAI-compatible Chat Completions API with a bearer key, use its base URL and its own model name. Replace the example address and model below, and set `LAB_MODEL_KEY` to the key for that endpoint. In Python, pass `base_url`, the raw `model` name and `api_key_env="LAB_MODEL_KEY"` to the same `extract()` call. [Connection guide (in Chinese)](https://github.com/CharlieKyan/NiceExtract/blob/v0.1.0a1/docs/MINIMAL_API.md)
 
 ```sh
 niceextract extract --input paper.md --task task.json --env-file .env --base-url https://gateway.example/v1 --model lab-model --api-key-env LAB_MODEL_KEY --output gateway.json
 ```
 
-**Named configurations.** If your team shares endpoints, timeouts or generation settings, store them as named profiles in a TOML file. For this example, save the linked configuration as `backends.toml` alongside `task.json`. Its `qwen` profile reads `DASHSCOPE_API_KEY` from your environment or private `.env`. [Download example configuration](https://raw.githubusercontent.com/CharlieKyan/NiceExtract/5b19b8f25b987771beca119c0b7251dd199c6123/examples/backends.toml) · [Provider and profile guide](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/docs/BACKENDS.md)
+**Named configurations.** If your team shares endpoints, timeouts or generation settings, store them as named profiles in a TOML file. For this example, save the linked configuration as `backends.toml` alongside `task.json`. Its `qwen` profile reads `DASHSCOPE_API_KEY` from your environment or private `.env`. [Download example configuration](https://raw.githubusercontent.com/CharlieKyan/NiceExtract/v0.1.0a1/examples/backends.toml) · [Provider and profile guide](https://github.com/CharlieKyan/NiceExtract/blob/v0.1.0a1/docs/BACKENDS.md)
 
 ```sh
 niceextract extract --input paper.md --task task.json --env-file .env --config backends.toml --profile qwen --output profile-result.json
@@ -166,16 +170,7 @@ niceextract extract --input paper.md --task task.json --env-file .env --config b
 
 ## Prepare one task for several papers
 
-**dev60 preview.** These commands apply once dev60 is available. To use this workflow, add a top-level `field_types` entry to the task above. With both fields declared numeric as shown here, the shared task can be prepared offline. By default numeric fields accept single values, ranges and one-sided bounds.
-
-```json
-{
-  "field_types": {
-    "dry_mass": {"kind": "numeric"},
-    "thickness": {"kind": "numeric"}
-  }
-}
-```
+The task above uses `field_types` to declare dry mass and thickness as numeric. Numeric fields accept single values, ranges and one-sided bounds by default. To restrict a field to single values, add `"shapes": ["scalar"]` to its type declaration. With every field declared, you can prepare a shared task offline.
 
 ```sh
 niceextract prepare-task --task task.json --output-dir prepared
@@ -191,7 +186,7 @@ Use the same `prepared/task.json` to extract each paper into its own output dire
 
 In `run/dataset/`, open `main.csv` for the field values, their basis and their citation status. To check one cell, take the matching data row in `lineage.json` (`rows` follows the CSV data-row order). Its `cells` entry for that field lists the observation IDs. Look up those IDs in `observations.csv` or `dataset.json` for the original value, unit, measured object and evidence. A located citation tells you where the wording occurs. Read the passage to judge whether it supports the interpretation.
 
-For a second opinion on pending observations, `niceextract review-dataset` writes a local model’s decisions to a separate directory. This optional adapter requires a separately obtained, trusted Intern-Decision-4B checkpoint, its inference code and a compatible environment.
+For a second opinion on pending observations, `niceextract review-dataset` writes a local model’s decisions to a separate directory. This optional adapter requires a separately obtained, trusted Intern-Decision-4B checkpoint, its inference code and a compatible environment. [Dataset and local review guide (in Chinese)](https://github.com/CharlieKyan/NiceExtract/blob/v0.1.0a1/docs/dataset-assembly.md)
 
 ## Review a result
 
@@ -203,8 +198,8 @@ niceextract demo --example ccus --output demo-run/ccus-result.json
 niceextract export-review --input demo-run/ccus-result.json --output-dir review-example
 ```
 
-Open `review-example/annotation.md` to read fields alongside their values, conditions and quotations. Use `annotation.json` for the same review in structured form. To review your own `deepseek.json` or `qwen.json`, choose a new output folder outside the directory containing that JSON file. [Guide to reviewing results (in Chinese)](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/docs/EXPERT_REVIEW.md)
+Open `review-example/annotation.md` to read fields alongside their values, conditions and quotations. Use `annotation.json` for the same review in structured form. To review your own `deepseek.json` or `qwen.json`, choose a new output folder outside the directory containing that JSON file. [Guide to reviewing results (in Chinese)](https://github.com/CharlieKyan/NiceExtract/blob/v0.1.0a1/docs/EXPERT_REVIEW.md)
 
 ## License
 
-The linked preview source is distributed under the Apache License 2.0. Copyright 2026 Yuzhi Kuang. [Apache License 2.0](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/LICENSE) · [Attribution](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/NOTICE)
+Copyright 2026 Yuzhi Kuang. [Apache License 2.0](https://github.com/CharlieKyan/NiceExtract/blob/v0.1.0a1/LICENSE) · [Attribution](https://github.com/CharlieKyan/NiceExtract/blob/v0.1.0a1/NOTICE)

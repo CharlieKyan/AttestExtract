@@ -5,16 +5,16 @@ import json
 import httpx
 import pytest
 
-from attestextract.automatic import (
+from niceextract.automatic import (
     ModelConnection, build_automatic_backend, public_route_snapshot, rejection_reason,
 )
-from attestextract.errors import BackendError, ConfigurationError, InvalidResponseError
-from attestextract.models import ExtractionRequest
+from niceextract.errors import BackendError, ConfigurationError, InvalidResponseError
+from niceextract.models import ExtractionRequest
 
 
 @pytest.fixture(autouse=True)
 def offline(monkeypatch, tmp_path):
-    monkeypatch.setenv("ATTESTEXTRACT_MODEL_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setenv("NICEEXTRACT_MODEL_CACHE_DIR", str(tmp_path / "cache"))
     def reject_network(*args, **kwargs):
         pytest.fail("Configuration must not contact a service")
     monkeypatch.setattr(httpx.Client, "send", reject_network)
@@ -187,7 +187,7 @@ def test_unknown_not_found_does_not_guess_model_or_interface():
 
 @pytest.mark.parametrize("provider_code", ["unsupported_endpoint", "unsupported_api", "unsupported_operation"])
 def test_explicit_501_interface_rejection_precedes_generic_server_error(provider_code):
-    from attestextract.backends import _http_error_code
+    from niceextract.backends import _http_error_code
 
     plan = build_automatic_backend(connection("https://api.deepseek.com", "deepseek-flash"),
                                    fallback=connection(model="backup"), environment={})
@@ -227,7 +227,7 @@ def test_credentials_are_explicit_isolated_and_never_serialized():
 def test_fallback_does_not_inherit_primary_global_credential():
     fallback = ModelConnection(base_url="https://other.example/v1", model="other")
     with pytest.raises(ConfigurationError, match="explicit"):
-        build_automatic_backend(connection(), fallback=fallback, environment={"ATTESTEXTRACT_API_KEY": "primary-secret"})
+        build_automatic_backend(connection(), fallback=fallback, environment={"NICEEXTRACT_API_KEY": "primary-secret"})
 
 
 def test_public_provenance_omits_service_configuration():

@@ -13,5 +13,6 @@ def test_user_entry_acceptance_runner(tmp_path):
                             cwd=tmp_path, capture_output=True, text=True, timeout=60)
     assert result.returncode == 0, result.stdout + result.stderr
     summary = json.loads((output / "summary.json").read_text(encoding="utf-8"))
-    assert summary["passed"] and summary["mock_model_posts"] == 3
+    assert summary["passed"] and summary["mock_model_posts"] == 6
+    assert summary["mock_extraction_posts"] == summary["mock_planning_posts"] == 3
     assert summary["network_attempts"] == summary["real_model_calls"] == 0

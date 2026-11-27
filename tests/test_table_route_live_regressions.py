@@ -8,7 +8,7 @@ from copy import deepcopy
 
 import pytest
 
-from attestextract.table_routes import build_table_input, evaluate_route
+from niceextract.table_routes import build_table_input, evaluate_route
 
 
 def sample(header="Pressure/MPa", unit="MPa", reading="17", object_name="S1"):

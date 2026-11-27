@@ -6,13 +6,13 @@ import json
 
 import pytest
 
-from attestextract import cli, extract
-from attestextract.backends import ReplayBackend
-from attestextract.diagnostics import RunTrace
-from attestextract.errors import InvalidResponseError
-from attestextract.models import BackendResponse
+from niceextract import cli, extract
+from niceextract.backends import ReplayBackend
+from niceextract.diagnostics import RunTrace
+from niceextract.errors import InvalidResponseError
+from niceextract.models import BackendResponse
 from functools import partial
-from attestextract.pipeline import _parse_response as _parser
+from niceextract.pipeline import _parse_response as _parser
 
 _parse_response = partial(_parser, output_protocol="native-v1")
 
@@ -215,7 +215,7 @@ def test_union_diagnostics_report_the_whole_inner_object_without_branch_name_pat
 
 def test_cli_masks_raw_and_json_escaped_secrets_in_error_paths_and_every_trace_artifact(tmp_path, monkeypatch, capsys):
     secret = 'synthetic-key-"quoted\\segment'
-    monkeypatch.setenv("ATTESTEXTRACT_API_KEY", secret)
+    monkeypatch.setenv("NICEEXTRACT_API_KEY", secret)
     source = tmp_path / "source.txt"
     task = tmp_path / "task.json"
     output = tmp_path / "result.json"
@@ -234,7 +234,7 @@ def test_cli_masks_raw_and_json_escaped_secrets_in_error_paths_and_every_trace_a
                 "record_type": "entry", "values": {secret: "bare synthetic value"}, "quotes": {},
             }]}))
 
-    monkeypatch.setattr("attestextract.backends.OpenAICompatibleBackend", OfflineBackend)
+    monkeypatch.setattr("niceextract.backends.OpenAICompatibleBackend", OfflineBackend)
     status = cli.main([
         "extract", "--input", str(source), "--task", str(task), "--output", str(output),
         "--base-url", "https://example.invalid/v1", "--model", "synthetic-model",

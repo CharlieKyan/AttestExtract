@@ -4,12 +4,12 @@ import json
 
 import pytest
 
-from attestextract.automatic import ModelConnection, build_automatic_backend
-from attestextract.automatic_execution import AutomaticExecutionSession, validate_automatic_state
-from attestextract.diagnostics import RunTrace
-from attestextract.errors import BackendError, ConfigurationError, InvalidResponseError
-from attestextract.execution import _read_state, digest
-from attestextract.models import BackendResponse, DocumentChunk, ExecutionOptions, SourceSpan
+from niceextract.automatic import ModelConnection, build_automatic_backend
+from niceextract.automatic_execution import AutomaticExecutionSession, validate_automatic_state
+from niceextract.diagnostics import RunTrace
+from niceextract.errors import BackendError, ConfigurationError, InvalidResponseError
+from niceextract.execution import _read_state, digest
+from niceextract.models import BackendResponse, DocumentChunk, ExecutionOptions, SourceSpan
 
 
 def coordinator(tmp_path, *, fallback=True, read_timeout=None):

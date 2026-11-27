@@ -5,12 +5,12 @@ import json
 
 import pytest
 
-from attestextract import extract
-from attestextract.archive import CandidateReview, ExtractionArchive, create_archive
-from attestextract.backends import ReplayBackend
-from attestextract.documents import Document
-from attestextract.evidence import check_measurement, ground_quote
-from attestextract.models import DocumentChunk, FieldValue, MeasurementInput, MeasurementSpec, SourceSpan
+from niceextract import extract
+from niceextract.archive import CandidateReview, ExtractionArchive, create_archive
+from niceextract.backends import ReplayBackend
+from niceextract.documents import Document
+from niceextract.evidence import check_measurement, ground_quote
+from niceextract.models import DocumentChunk, FieldValue, MeasurementInput, MeasurementSpec, SourceSpan
 
 
 def evaluate(context, value, unit="%", *, prefix="🙂 ", suffix="", header="", schema_version="0.3"):

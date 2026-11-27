@@ -18,7 +18,7 @@ B 的转写、二次抽取和映射代码已删除；旧自动改写执行模式
 完整检查空字段、单条格式错误隔离、三套样例及中断恢复，可在仓库根目录运行：
 
 ```powershell
-.venv\Scripts\python.exe scripts\table_results_smoke.py --output-dir ..\research\attestextract\experiments\table-results-check-01
+.venv\Scripts\python.exe scripts\table_results_smoke.py --output-dir ..\research\niceextract\experiments\table-results-check-01
 ```
 
 每次使用新目录。该命令阻断网络连接，执行12个合成槽位，逐包生成报告并输出 `summary.json`。
@@ -28,23 +28,23 @@ B 的转写、二次抽取和映射代码已删除；旧自动改写执行模式
 
 ```powershell
 .venv\Scripts\python.exe scripts\table_route_experiment.py prepare `
-  --cases src\attestextract\examples\table_routes\cases.json `
-  --output ..\research\attestextract\experiments\table-a-demo-01
+  --cases src\niceextract\examples\table_routes\cases.json `
+  --output ..\research\niceextract\experiments\table-a-demo-01
 
 .venv\Scripts\python.exe scripts\table_route_experiment.py check `
-  --bundle ..\research\attestextract\experiments\table-a-demo-01
+  --bundle ..\research\niceextract\experiments\table-a-demo-01
 
 .venv\Scripts\python.exe scripts\table_route_experiment.py replay `
-  --bundle ..\research\attestextract\experiments\table-a-demo-01
+  --bundle ..\research\niceextract\experiments\table-a-demo-01
 
 .venv\Scripts\python.exe scripts\table_route_experiment.py report `
-  --bundle ..\research\attestextract\experiments\table-a-demo-01
+  --bundle ..\research\niceextract\experiments\table-a-demo-01
 ```
 
 打开输出目录的 `REPORT.html`。回放回答来自样例预设，检查的是给定回答时的程序处理。
 再次运行同一目录不会重发已预留调用。不要把回放目录切换成真实运行目录。
 
-| 合成文件（位于 `src/attestextract/examples/table_routes/`） | 用途 |
+| 合成文件（位于 `src/niceextract/examples/table_routes/`） | 用途 |
 | --- | --- |
 | `cases.json` | 并排参数、反应前后、转置、父子分组 |
 | `edge_cases.json` | 组总量、明确共享条件、脚注条件、同格多个事实 |

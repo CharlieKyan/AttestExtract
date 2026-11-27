@@ -20,7 +20,7 @@ TXT/Markdown；MinerU 解析在框架外完成。结构索引、检索视图与�
 例如，先对已配置的后端做本地检查，不发送模型请求：
 
 ```console
-attestextract extract --input synthetic.md --task task.json --config backends.toml --profile review --context structure --mineru-content-list synthetic_content_list.json --structure-hints hints.json --check
+niceextract extract --input synthetic.md --task task.json --config backends.toml --profile review --context structure --mineru-content-list synthetic_content_list.json --structure-hints hints.json --check
 ```
 
 使用 `--context neighbors --neighbor-chars 500` 可检查邻段方案。移除 `--check`
@@ -39,7 +39,7 @@ attestextract extract --input synthetic.md --task task.json --config backends.to
 
 `Document.structure` 是可选的 `DocumentStructure`，包含原文哈希、标题、表格和诊断。
 加入索引不改变 `Document.text` 或文档身份。`build_structure()` 和
-`validate_structure()` 位于 `attestextract.structure`；索引加载时检查哈希、范围及
+`validate_structure()` 位于 `niceextract.structure`；索引加载时检查哈希、范围及
 表格网格与原始语法是否一致。
 
 - Markdown 表格支持转义管道 `\|`、可选首尾管道与空单元格，并检查各行列数。

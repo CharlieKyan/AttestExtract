@@ -81,7 +81,7 @@ def freeze_baseline(repo: Path, output: Path, commit: str = BASELINE) -> None:
     """Copy tracked Python source through read-only Git operations, never a worktree."""
     resolved = subprocess.check_output(["git", "-C", str(repo), "rev-parse", commit], text=True).strip()
     names = subprocess.check_output(["git", "-C", str(repo), "ls-tree", "-r", "--name-only", resolved,
-                                     "src/attestextract"], text=True).splitlines()
+                                     "src/niceextract"], text=True).splitlines()
     output.mkdir(parents=True, exist_ok=False)
     hashes = {}
     for name in names:
@@ -96,20 +96,20 @@ def freeze_baseline(repo: Path, output: Path, commit: str = BASELINE) -> None:
 
 
 def worker(case: dict, arm: str) -> dict:
-    import attestextract
-    from attestextract.chunking import chunk_document
-    from attestextract.evidence import ground_quote
-    from attestextract.models import DocumentChunk, SourceSpan, TaskSpec, GenerationOptions
-    from attestextract.pipeline import _request
+    import niceextract
+    from niceextract.chunking import chunk_document
+    from niceextract.evidence import ground_quote
+    from niceextract.models import DocumentChunk, SourceSpan, TaskSpec, GenerationOptions
+    from niceextract.pipeline import _request
 
     source = case["source"]
     body = SourceSpan(**case["target"])
     chunk = DocumentChunk(chunk_id=case["id"], text=source[body.start:body.end], segments=[body])
     kwargs = {}
     if arm in {"structure", "neighbors"}:
-        from attestextract.models import ContextOptions
-        from attestextract.structure import build_structure
-        from attestextract.contextual_chunking import enrich_chunk
+        from niceextract.models import ContextOptions
+        from niceextract.structure import build_structure
+        from niceextract.contextual_chunking import enrich_chunk
         structure = build_structure(source, mineru_content=case.get("mineru_content"), hints=case.get("hints"))
         context = ContextOptions(mode=arm, neighbor_chars=500)
         chunk = enrich_chunk(source, chunk, structure, context)
@@ -126,7 +126,7 @@ def worker(case: dict, arm: str) -> dict:
         probes.append({**probe, "status": located.status, "matches": len(located.matches),
                        "body_matches": len(body_hits), "context_only": bool(located.matches) and not body_hits})
     request = _request(TaskSpec.model_validate(case["task"]), chunk, GenerationOptions(**BACKEND["generation"]))
-    return {"arm": arm, "case": case["id"], "version": attestextract.__version__,
+    return {"arm": arm, "case": case["id"], "version": niceextract.__version__,
             "body": case["target"], "chunk": chunk.model_dump(mode="json"),
             "request": request.model_dump(mode="json"), "probes": probes,
             "natural_chunk_count": len(natural), "uncovered_chars": coverage.count(0),
@@ -206,8 +206,8 @@ def score_records(records: list[dict], gold: list[dict]) -> dict:
 
 
 def review_source(raw, row: dict, source: str) -> dict:
-    from attestextract.evidence import ground_quote
-    from attestextract.models import DocumentChunk
+    from niceextract.evidence import ground_quote
+    from niceextract.models import DocumentChunk
     # Old chunks are supported by the current contract; source checks below
     # are common post-hoc checks and are not attributed to the old engine.
     chunk = DocumentChunk.model_validate(row["chunk"])
@@ -230,14 +230,14 @@ def review_source(raw, row: dict, source: str) -> dict:
 
 
 def run_live(root: Path, output: Path) -> dict:
-    import attestextract
-    from attestextract.config import BackendConfig
-    from attestextract.diagnostics import RunTrace
-    from attestextract.envconfig import load_env_file
-    from attestextract.errors import BackendError
-    from attestextract.models import ExtractionRequest, TaskSpec
-    from attestextract.pipeline import _parse_response, _check_task_records
-    from attestextract.registry import default_registry
+    import niceextract
+    from niceextract.config import BackendConfig
+    from niceextract.diagnostics import RunTrace
+    from niceextract.envconfig import load_env_file
+    from niceextract.errors import BackendError
+    from niceextract.models import ExtractionRequest, TaskSpec
+    from niceextract.pipeline import _parse_response, _check_task_records
+    from niceextract.registry import default_registry
 
     manifest = check_frozen(root)
     if not manifest["private"] or manifest["planned_calls"] != 12:
@@ -275,7 +275,7 @@ def run_live(root: Path, output: Path) -> dict:
             flat = [{"values": {name: field.value for name, field in record.fields.items()}} for record in raw.records]
             result.update(status="completed", scores=score_records(flat, cases[row["case"]]["gold"]),
                           review=review_source(raw, row, cases[row["case"]]["source"]))
-            trace.finish({"package_version": attestextract.__version__, "run": result})
+            trace.finish({"package_version": niceextract.__version__, "run": result})
         except BackendError as error:
             result.update(status="failed", error_code=error.code, attempts=error.attempts,
                           http_diagnostics=error.http_diagnostics)

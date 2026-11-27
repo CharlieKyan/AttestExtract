@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from attestextract.json_validation import JSONValidationError, load_json
+from niceextract.json_validation import JSONValidationError, load_json
 
 
 def diagnostic(raw, **kwargs):

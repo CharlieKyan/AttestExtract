@@ -5,8 +5,8 @@ import json
 import httpx
 import pytest
 
-from attestextract import cli
-from attestextract.backends import OpenAICompatibleBackend
+from niceextract import cli
+from niceextract.backends import OpenAICompatibleBackend
 
 
 TEXT = "Lamp A uses 8 W."
@@ -20,7 +20,7 @@ RESPONSE = '{"records":[{"record_type":"power","values":{"value":8},"quotes":{"v
 def clean_provider_environment(monkeypatch):
     import os
     for key in list(os.environ):
-        if key.startswith(("ATTESTEXTRACT_", "DEEPSEEK_", "QWEN_", "DASHSCOPE_", "VLM_")):
+        if key.startswith(("NICEEXTRACT_", "ATTESTEXTRACT_", "DEEPSEEK_", "QWEN_", "DASHSCOPE_", "VLM_")):
             monkeypatch.delenv(key)
 
 
@@ -32,7 +32,7 @@ def inputs(tmp_path):
 
 
 def intercept(monkeypatch, handler):
-    monkeypatch.setattr("attestextract.backends.OpenAICompatibleBackend", lambda **kwargs:
+    monkeypatch.setattr("niceextract.backends.OpenAICompatibleBackend", lambda **kwargs:
                         OpenAICompatibleBackend(**kwargs, transport=httpx.MockTransport(handler)))
 
 
@@ -44,8 +44,8 @@ def test_switching_only_selector_routes_model_key_and_parameters(tmp_path, monke
     env = tmp_path / "keys.env"
     env.write_text("DEEPSEEK_API_KEY=synthetic-deepseek\nVLM_API_KEY=synthetic-qwen\n"
                    "VLM_BASE_URL=https://demo.cn-beijing.maas.aliyuncs.com/compatible-mode/v1\n"
-                   "ATTESTEXTRACT_API_KEY=stale-key\nATTESTEXTRACT_BASE_URL=https://stale.invalid/v1\n"
-                   "ATTESTEXTRACT_MODEL=stale-model\n", encoding="utf-8")
+                   "NICEEXTRACT_API_KEY=stale-key\nNICEEXTRACT_BASE_URL=https://stale.invalid/v1\n"
+                   "NICEEXTRACT_MODEL=stale-model\n", encoding="utf-8")
     calls = []
 
     def handler(request):

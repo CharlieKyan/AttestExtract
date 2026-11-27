@@ -12,7 +12,7 @@ permitted by the runner.
 
 from __future__ import annotations
 
-from attestextract.errors import ConfigurationError
+from niceextract.errors import ConfigurationError
 
 
 BASELINE_TAG = "v0.1.0.dev22"

@@ -2,9 +2,9 @@
 
 import pytest
 
-from attestextract.chunking import chunk_document
-from attestextract.models import ExecutionOptions, GenerationOptions, TaskSpec
-from attestextract.planning import plan_chunks, split_chunk
+from niceextract.chunking import chunk_document
+from niceextract.models import ExecutionOptions, GenerationOptions, TaskSpec
+from niceextract.planning import plan_chunks, split_chunk
 
 
 @pytest.mark.parametrize("source,limit,expected", [

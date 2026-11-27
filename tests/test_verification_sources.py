@@ -2,7 +2,7 @@
 
 import pytest
 
-from attestextract.verification_sources import SourceIndex
+from niceextract.verification_sources import SourceIndex
 
 
 def assert_original(text, passages):

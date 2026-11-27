@@ -6,11 +6,11 @@ import json
 import httpx
 import pytest
 
-from attestextract import cli, extract, RunTrace, ModelConnection
-from attestextract.automatic_provenance import validate_automatic_provenance
-from attestextract.errors import BackendError
-from attestextract.models import BackendResponse
-from attestextract.registry import BackendRegistry
+from niceextract import cli, extract, RunTrace, ModelConnection
+from niceextract.automatic_provenance import validate_automatic_provenance
+from niceextract.errors import BackendError
+from niceextract.models import BackendResponse
+from niceextract.registry import BackendRegistry
 
 
 TABLE = '<table><tr><th>Sample</th><th>Mass (g)</th></tr><tr><td>A</td><td>17</td></tr></table>'
@@ -32,9 +32,10 @@ TABLE_RECORD = {'record_id': 'table-observation', 'record_type': 'mass', 'fields
 
 @pytest.fixture(autouse=True)
 def isolated_configuration(monkeypatch, tmp_path):
-    for key in ('ATTESTEXTRACT_API_KEY', 'ATTESTEXTRACT_MODEL', 'ATTESTEXTRACT_BASE_URL'):
-        monkeypatch.delenv(key, raising=False)
-    monkeypatch.setenv('ATTESTEXTRACT_MODEL_CACHE_DIR', str(tmp_path / 'model-cache'))
+    for prefix in ("NICEEXTRACT", "ATTESTEXTRACT"):
+        for suffix in ("BASE_URL", "MODEL", "API_KEY"):
+            monkeypatch.delenv(f"{prefix}_{suffix}", raising=False)
+    monkeypatch.setenv('NICEEXTRACT_MODEL_CACHE_DIR', str(tmp_path / 'model-cache'))
 
 
 def setup_cli(tmp_path, *, source=SOURCE, table_records=None):

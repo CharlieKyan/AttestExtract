@@ -4,9 +4,9 @@ import json
 
 import pytest
 
-from attestextract import cli
-from attestextract.errors import BackendError
-from attestextract.models import BackendResponse
+from niceextract import cli
+from niceextract.errors import BackendError
+from niceextract.models import BackendResponse
 
 
 @pytest.fixture
@@ -16,10 +16,10 @@ def inputs(tmp_path, monkeypatch):
     task.write_text(json.dumps({"name": "Synthetic report", "record_types": {
         "entry": {"fields": {"amount": {"type": "number"}}},
     }}), encoding="utf-8")
-    env.write_text("ATTESTEXTRACT_MODEL=synthetic-model\n", encoding="utf-8")
-    monkeypatch.setenv("ATTESTEXTRACT_BASE_URL", "https://offline.invalid/v1")
-    monkeypatch.setenv("ATTESTEXTRACT_MODEL", "synthetic-model")
-    monkeypatch.delenv("ATTESTEXTRACT_API_KEY", raising=False)
+    env.write_text("NICEEXTRACT_MODEL=synthetic-model\n", encoding="utf-8")
+    monkeypatch.setenv("NICEEXTRACT_BASE_URL", "https://offline.invalid/v1")
+    monkeypatch.setenv("NICEEXTRACT_MODEL", "synthetic-model")
+    monkeypatch.delenv("NICEEXTRACT_API_KEY", raising=False)
     return source, task, env
 
 
@@ -51,7 +51,7 @@ def configured_backend(monkeypatch, *, quote="12", failure=False):
                 "record_type": "entry", "values": {"amount": 12}, "quotes": {"amount": quote},
             }]}))
 
-    monkeypatch.setattr("attestextract.backends.OpenAICompatibleBackend", OfflineBackend)
+    monkeypatch.setattr("niceextract.backends.OpenAICompatibleBackend", OfflineBackend)
     return calls
 
 
@@ -107,7 +107,7 @@ def test_failed_extraction_produces_no_success_report(inputs, tmp_path, monkeypa
 def test_report_masks_configured_secret_before_markdown_escaping(inputs, tmp_path, monkeypatch):
     secret = 'synthetic_key-*<tag>\\"token'
     inputs[0].write_text("12 " + secret, encoding="utf-8")
-    monkeypatch.setenv("ATTESTEXTRACT_API_KEY", secret)
+    monkeypatch.setenv("NICEEXTRACT_API_KEY", secret)
     calls = configured_backend(monkeypatch, quote="12 " + secret)
     output, report = tmp_path / "extraction.json", tmp_path / "review.md"
     assert cli.main(arguments(inputs, output, report)) == 0

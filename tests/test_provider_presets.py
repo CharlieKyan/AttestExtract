@@ -3,8 +3,8 @@
 import httpx
 import pytest
 
-from attestextract.errors import ConfigurationError
-from attestextract.providers import available_models, resolve_model_config, resolve_model_credentials
+from niceextract.errors import ConfigurationError
+from niceextract.providers import available_models, resolve_model_config, resolve_model_credentials
 
 
 @pytest.mark.parametrize("selector,key,base,options", [
@@ -14,8 +14,8 @@ from attestextract.providers import available_models, resolve_model_config, reso
 ])
 def test_selecting_a_known_model_requires_only_its_credential(selector, key, base, options, monkeypatch):
     monkeypatch.setattr(httpx.Client, "request", lambda *a, **kw: pytest.fail("Preset resolution must not call a service"))
-    environment = {key: "synthetic-credential", "ATTESTEXTRACT_BASE_URL": "https://unrelated.invalid",
-                   "ATTESTEXTRACT_API_KEY": "unrelated-key", "ATTESTEXTRACT_MODEL": "old-model",
+    environment = {key: "synthetic-credential", "NICEEXTRACT_BASE_URL": "https://unrelated.invalid",
+                   "NICEEXTRACT_API_KEY": "unrelated-key", "NICEEXTRACT_MODEL": "old-model",
                    "VLM_MODEL": "ignored-model", "DEEPSEEK_MODEL": "ignored-model"}
     config = resolve_model_config(selector, environment=environment)
     assert config.base_url == base and config.model == selector.split(":", 1)[1]
@@ -65,7 +65,7 @@ def test_empty_preferred_credential_never_falls_back_to_another_account(value):
 
 
 def test_missing_selected_key_does_not_use_global_or_other_provider_credential():
-    environment = {"ATTESTEXTRACT_API_KEY": "old-key", "VLM_API_KEY": "qwen-key"}
+    environment = {"NICEEXTRACT_API_KEY": "old-key", "VLM_API_KEY": "qwen-key"}
     config = resolve_model_config("deepseek:deepseek-flash", environment=environment)
     with pytest.raises(ConfigurationError, match="DEEPSEEK_API_KEY"):
         resolve_model_credentials(config, environment)

@@ -6,11 +6,11 @@ import os
 import httpx
 import pytest
 
-from attestextract import cli, extract
-from attestextract.backends import OpenAICompatibleBackend, ReplayBackend
-from attestextract.config import resolve_backend_config
-from attestextract.errors import InvalidResponseError
-from attestextract.providers import resolve_model_config
+from niceextract import cli, extract
+from niceextract.backends import OpenAICompatibleBackend, ReplayBackend
+from niceextract.config import resolve_backend_config
+from niceextract.errors import InvalidResponseError
+from niceextract.providers import resolve_model_config
 
 
 TASK = {"name": "Synthetic power", "record_types": {"power": {
@@ -22,7 +22,7 @@ VALID = '{"records":[{"record_type":"power","values":{"value":8},"quotes":{"valu
 @pytest.fixture(autouse=True)
 def clean_environment(monkeypatch):
     for key in list(os.environ):
-        if key.startswith(("ATTESTEXTRACT_", "DEEPSEEK_", "QWEN_", "DASHSCOPE_", "VLM_")):
+        if key.startswith(("NICEEXTRACT_", "ATTESTEXTRACT_", "DEEPSEEK_", "QWEN_", "DASHSCOPE_", "VLM_")):
             monkeypatch.delenv(key)
     monkeypatch.setenv("DEEPSEEK_API_KEY", "synthetic-key")
 
@@ -81,7 +81,7 @@ def test_cli_regenerates_only_when_explicitly_enabled(
         content = 'malformed JSON' if len(bodies) == 1 else VALID
         return httpx.Response(200, json={"choices": [{"finish_reason": "stop", "message": {"content": content}}]})
 
-    monkeypatch.setattr("attestextract.backends.OpenAICompatibleBackend", lambda **kwargs:
+    monkeypatch.setattr("niceextract.backends.OpenAICompatibleBackend", lambda **kwargs:
                         OpenAICompatibleBackend(**kwargs, transport=httpx.MockTransport(handler)))
     args = arguments(tmp_path, selection, profile_retry)
     if cli_retry is not None:

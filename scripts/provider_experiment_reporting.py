@@ -10,10 +10,10 @@ from collections import Counter, defaultdict
 import re
 from statistics import median
 
-from attestextract.errors import InvalidResponseError
-from attestextract.evidence import ground_quote
-from attestextract.models import DocumentChunk, ExtractionRequest, TaskSpec
-from attestextract.pipeline import _check_task_records, _parse_response
+from niceextract.errors import InvalidResponseError
+from niceextract.evidence import ground_quote
+from niceextract.models import DocumentChunk, ExtractionRequest, TaskSpec
+from niceextract.pipeline import _check_task_records, _parse_response
 
 
 PROVIDERS = ("qwen", "deepseek")

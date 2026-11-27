@@ -7,11 +7,11 @@ import json
 import pytest
 from pydantic import ValidationError
 
-from attestextract import TaskSpec, extract, load_task
-from attestextract.backends import ReplayBackend
-from attestextract.chunking import chunk_document
-from attestextract.decisions import DecisionResult, DecisionTask, validate_decision
-from attestextract.errors import InvalidResponseError, TaskValidationError
+from niceextract import TaskSpec, extract, load_task
+from niceextract.backends import ReplayBackend
+from niceextract.chunking import chunk_document
+from niceextract.decisions import DecisionResult, DecisionTask, validate_decision
+from niceextract.errors import InvalidResponseError, TaskValidationError
 
 
 @pytest.fixture

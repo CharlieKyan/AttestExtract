@@ -15,11 +15,11 @@ import ssl
 import sys
 import threading
 
-import attestextract
-from attestextract.backends import OpenAICompatibleBackend
-from attestextract.diagnostics import RunTrace
-from attestextract.errors import BackendError
-from attestextract.models import ExtractionRequest
+import niceextract
+from niceextract.backends import OpenAICompatibleBackend
+from niceextract.diagnostics import RunTrace
+from niceextract.errors import BackendError
+from niceextract.models import ExtractionRequest
 
 
 @contextmanager
@@ -167,7 +167,7 @@ def main(argv=None):
              certificate_case(args.certificate_dir)]
     assert dict(os.environ) == original_environment
     assert not any(name == "langextract" or name.startswith("langextract.") for name in sys.modules)
-    summary = {"passed": True, "package_version": attestextract.__version__, "module_path": attestextract.__file__,
+    summary = {"passed": True, "package_version": niceextract.__version__, "module_path": niceextract.__file__,
                "real_endpoint_calls": 0, "loopback_only": True, "local_model_posts": sum(c["model_posts"] for c in cases),
                "probe_attempts": sum(c["probe_attempts"] for c in cases), "environment_restored": True,
                "cases": cases, "scope": "Real local TLS handshakes and synthetic responses; no provider reliability claim."}

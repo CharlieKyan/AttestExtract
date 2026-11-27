@@ -7,11 +7,11 @@ import argparse
 import json
 from pathlib import Path
 
-import attestextract
-from attestextract import Document, create_archive, extract, load_archive, save_archive
-from attestextract.backends import ReplayBackend
-from attestextract.errors import InvalidResponseError
-from attestextract.reporting import render_markdown_report
+import niceextract
+from niceextract import Document, create_archive, extract, load_archive, save_archive
+from niceextract.backends import ReplayBackend
+from niceextract.errors import InvalidResponseError
+from niceextract.reporting import render_markdown_report
 
 
 TASK = {"name": "Synthetic range acceptance", "record_types": {"reading": {
@@ -77,7 +77,7 @@ def main(argv=None):
         pass
     else:
         raise AssertionError("Native data must not be auto-detected as a new flat response")
-    summary = {"package_version": attestextract.__version__, "module_path": str(Path(attestextract.__file__).resolve()),
+    summary = {"package_version": niceextract.__version__, "module_path": str(Path(niceextract.__file__).resolve()),
                "passed": True, "real_endpoint_calls": 0, "mock_http_calls": 0,
                "legacy_replay_passed": True, "implicit_native_rejected": True, "cases": results}
     (root / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

@@ -6,14 +6,14 @@ import os
 import httpx
 import pytest
 
-from attestextract import cli
-from attestextract.capabilities import structured_output_capabilities
-from attestextract.config import resolve_backend_config
-from attestextract.errors import BackendError, ConfigurationError
-from attestextract.models import ExtractionRequest
-from attestextract.providers import resolve_model_config, resolve_model_credentials
-from attestextract.registry import default_registry
-from attestextract.responses_backend import DeepSeekResponsesBackend
+from niceextract import cli
+from niceextract.capabilities import structured_output_capabilities
+from niceextract.config import resolve_backend_config
+from niceextract.errors import BackendError, ConfigurationError
+from niceextract.models import ExtractionRequest
+from niceextract.providers import resolve_model_config, resolve_model_credentials
+from niceextract.registry import default_registry
+from niceextract.responses_backend import DeepSeekResponsesBackend
 
 
 SELECTOR = "deepseek-responses:deepseek-flash"
@@ -24,14 +24,14 @@ SCHEMA = {"type": "object", "properties": {"records": {"type": "array", "items":
 @pytest.fixture(autouse=True)
 def isolated_environment(monkeypatch):
     for key in list(os.environ):
-        if key.startswith(("ATTESTEXTRACT_", "DEEPSEEK_", "QWEN_", "DASHSCOPE_", "VLM_")):
+        if key.startswith(("NICEEXTRACT_", "ATTESTEXTRACT_", "DEEPSEEK_", "QWEN_", "DASHSCOPE_", "VLM_")):
             monkeypatch.delenv(key)
 
 
 def test_responses_preset_is_explicit_and_keeps_existing_chat_defaults(monkeypatch):
     monkeypatch.setattr(httpx.Client, "send", lambda *a, **k: pytest.fail("Selection made a network call"))
-    config = resolve_model_config(SELECTOR, environment={"ATTESTEXTRACT_MODEL": "stale-model",
-                                                        "ATTESTEXTRACT_BASE_URL": "https://stale.invalid"})
+    config = resolve_model_config(SELECTOR, environment={"NICEEXTRACT_MODEL": "stale-model",
+                                                        "NICEEXTRACT_BASE_URL": "https://stale.invalid"})
     assert config.adapter == "deepseek-responses"
     assert config.base_url == "https://api.deepseek.com"
     assert config.model == "deepseek-flash" and config.api_key_env == "DEEPSEEK_API_KEY"

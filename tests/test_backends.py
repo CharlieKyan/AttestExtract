@@ -3,9 +3,9 @@ import json
 import httpx
 import pytest
 
-from attestextract.backends import OpenAICompatibleBackend, ReplayBackend
-from attestextract.errors import BackendError, ConfigurationError, InvalidResponseError
-from attestextract.models import ExtractionRequest
+from niceextract.backends import OpenAICompatibleBackend, ReplayBackend
+from niceextract.errors import BackendError, ConfigurationError, InvalidResponseError
+from niceextract.models import ExtractionRequest
 
 
 def request():

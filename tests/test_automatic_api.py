@@ -5,8 +5,8 @@ import json
 import httpx
 import pytest
 
-from attestextract import ExecutionOptions, ModelConnection, RunTrace, extract
-from attestextract.errors import BackendError, ConfigurationError
+from niceextract import ExecutionOptions, ModelConnection, RunTrace, extract
+from niceextract.errors import BackendError, ConfigurationError
 
 
 SOURCE = "Lamp A uses 8 W."
@@ -18,7 +18,8 @@ CONTENT = '{"records":[{"record_type":"power","values":{"value":8},"quotes":{"va
 
 @pytest.fixture(autouse=True)
 def isolate_cache(monkeypatch, tmp_path):
-    monkeypatch.setenv("ATTESTEXTRACT_MODEL_CACHE_DIR", str(tmp_path / "model-cache"))
+    monkeypatch.setenv("NICEEXTRACT_MODEL_CACHE_DIR", str(tmp_path / "model-cache"))
+    monkeypatch.delenv("NICEEXTRACT_API_KEY", raising=False)
     monkeypatch.delenv("ATTESTEXTRACT_API_KEY", raising=False)
 
 
@@ -56,7 +57,7 @@ def call(**kwargs):
 
 def test_unknown_model_uses_public_entry_without_preset_or_probe_generation(monkeypatch):
     monkeypatch.setenv("DEEPSEEK_API_KEY", "unrelated-secret")
-    monkeypatch.setattr("attestextract.providers.resolve_model_config", lambda *a, **kw: pytest.fail("preset used"))
+    monkeypatch.setattr("niceextract.providers.resolve_model_config", lambda *a, **kw: pytest.fail("preset used"))
     requests = install_http(monkeypatch, lambda request: envelope())
     result = call()
     assert len(requests) == 1
@@ -173,7 +174,7 @@ def test_raw_connection_rejects_region_and_empty_credential_binding():
 
 
 def test_automatic_result_cannot_bypass_source_validation_by_downgrading_schema(monkeypatch):
-    from attestextract import ExtractionResult
+    from niceextract import ExtractionResult
     install_http(monkeypatch, lambda request: envelope())
     payload = call().model_dump(mode="json")
     payload["schema_version"] = "0.4"
@@ -182,7 +183,7 @@ def test_automatic_result_cannot_bypass_source_validation_by_downgrading_schema(
 
 
 def test_cli_minimal_inputs_and_offline_preview(monkeypatch, tmp_path, capsys):
-    from attestextract.cli import main
+    from niceextract.cli import main
 
     source, task = tmp_path / "source.txt", tmp_path / "task.json"
     source.write_text(SOURCE, encoding="utf-8")
@@ -194,7 +195,7 @@ def test_cli_minimal_inputs_and_offline_preview(monkeypatch, tmp_path, capsys):
     preview = json.loads(capsys.readouterr().out)
     assert preview["network_calls"] == 0 and requests == []
     assert preview["execution"]["max_model_calls"] == preview["chunk_count"] + 2
-    monkeypatch.setenv("ATTESTEXTRACT_API_KEY", "synthetic-primary")
+    monkeypatch.setenv("NICEEXTRACT_API_KEY", "synthetic-primary")
     assert main(args) == 0
     assert len(requests) == 1
     results = list((tmp_path / "outputs").glob("*/result.json"))
@@ -253,7 +254,7 @@ def test_cli_hidden_key_never_falls_back_to_echo(monkeypatch, tmp_path, capsys, 
     import getpass
     import sys
     import warnings
-    from attestextract.cli import main
+    from niceextract.cli import main
 
     source, task = tmp_path / "source.txt", tmp_path / "task.json"
     source.write_text(SOURCE, encoding="utf-8")

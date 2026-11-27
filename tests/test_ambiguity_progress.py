@@ -2,7 +2,7 @@
 
 from io import StringIO
 
-from attestextract.progress import ConsoleProgress
+from niceextract.progress import ConsoleProgress
 
 
 def test_review_event_reports_counts_without_echoing_private_proposals():

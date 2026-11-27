@@ -11,11 +11,11 @@ from pathlib import Path
 
 import httpx
 
-import attestextract
-from attestextract import cli
-from attestextract.backends import OpenAICompatibleBackend
-from attestextract.registry import BackendRegistry
-from attestextract.responses_backend import DeepSeekResponsesBackend
+import niceextract
+from niceextract import cli
+from niceextract.backends import OpenAICompatibleBackend
+from niceextract.registry import BackendRegistry
+from niceextract.responses_backend import DeepSeekResponsesBackend
 
 
 TEXT = "Sample A reads 12."
@@ -41,7 +41,7 @@ def main(argv=None):
     root = parser.parse_args(argv).output_dir.resolve()
     root.mkdir(parents=True, exist_ok=False)
     for key in list(os.environ):
-        if key.startswith(("ATTESTEXTRACT_", "DEEPSEEK_", "QWEN_", "DASHSCOPE_", "VLM_")):
+        if key.startswith(("NICEEXTRACT_", "ATTESTEXTRACT_", "DEEPSEEK_", "QWEN_", "DASHSCOPE_", "VLM_")):
             del os.environ[key]
     os.environ["DEEPSEEK_API_KEY"] = "synthetic-key"
     source, task = root / "source.txt", root / "task.json"
@@ -132,8 +132,8 @@ def main(argv=None):
     failed = invoke("deepseek-responses:deepseek-flash", status=1)
     assert len(calls) == 4 and not (failed / "result.json").exists()
     assert read(failed / "diagnostics/error.json")["code"] == "truncated_response"
-    summary = {"passed": True, "package_version": attestextract.__version__,
-               "module_path": attestextract.__file__, "real_endpoint_calls": 0,
+    summary = {"passed": True, "package_version": niceextract.__version__,
+               "module_path": niceextract.__file__, "real_endpoint_calls": 0,
                "mock_http_calls": 4, "localized_format_feedback": True,
                "responses_schema_sent": True, "server_enforcement": "not_verified",
                "completed_resume_new_calls": 0, "truncation_rejected": True}

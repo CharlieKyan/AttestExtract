@@ -116,12 +116,12 @@ LaTeX 渲染。这个显示修复不改变匹配逻辑、原始引文或 JSON。
 `extract` 会调用真实模型，可能产生费用；它不会退回演示数据。
 
 ```powershell
-$repo = "C:\Work\AttestExtract"
+$repo = "C:\Work\NiceExtract"
 $paper = "C:\Work\research\paper-or-excerpt.md"
 $task = "C:\Work\research\task.dev7.json"
 $runDir = "C:\Work\research\runs\$(Get-Date -Format 'yyyyMMdd-HHmmss-fff')"
 New-Item -ItemType Directory -Force -Path $runDir | Out-Null
-& "$repo\.venv\Scripts\python.exe" -m attestextract extract `
+& "$repo\.venv\Scripts\python.exe" -m niceextract extract `
   --env-file "$repo\.env" --structured-output off --format-retries 0 `
   --input $paper --task $task `
   --output "$runDir\extraction.json" --report "$runDir\review.md" `

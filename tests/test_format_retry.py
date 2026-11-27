@@ -8,11 +8,11 @@ import json
 import httpx
 import pytest
 
-from attestextract import cli, extract, load_task
-from attestextract.backends import OpenAICompatibleBackend
-from attestextract.diagnostics import RunTrace
-from attestextract.errors import BackendError, ConfigurationError, InvalidResponseError, TaskValidationError
-from attestextract.models import BackendResponse, ExtractionRequest
+from niceextract import cli, extract, load_task
+from niceextract.backends import OpenAICompatibleBackend
+from niceextract.diagnostics import RunTrace
+from niceextract.errors import BackendError, ConfigurationError, InvalidResponseError, TaskValidationError
+from niceextract.models import BackendResponse, ExtractionRequest
 
 
 TEXT = "前言🙂\r\n\r\nSample A amount 12.\r\n"
@@ -377,7 +377,8 @@ def test_cli_controls_pipeline_regeneration_without_requiring_live_api(tmp_path,
         constructor_options.append(kwargs)
         return backend
 
-    monkeypatch.setattr("attestextract.backends.OpenAICompatibleBackend", configured_backend)
+    monkeypatch.setattr("niceextract.backends.OpenAICompatibleBackend", configured_backend)
+    monkeypatch.delenv("NICEEXTRACT_API_KEY", raising=False)
     monkeypatch.delenv("ATTESTEXTRACT_API_KEY", raising=False)
     args = [
         "extract", "--input", str(source), "--task", str(task), "--output", str(output),

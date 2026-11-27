@@ -9,15 +9,15 @@ from pathlib import Path
 import httpx
 import pytest
 
-from attestextract import ExecutionOptions, cli, extract
-from attestextract.backends import OpenAICompatibleBackend
-from attestextract.chunking import chunk_document
-from attestextract.diagnostics import RunTrace
-from attestextract.errors import BackendError, ConfigurationError, InvalidResponseError
-from attestextract.execution import check_resume_paths, digest
-from attestextract.models import BackendResponse, GenerationOptions, TaskSpec
-from attestextract.planning import plan_chunks, split_chunk
-from attestextract.progress import ConsoleProgress
+from niceextract import ExecutionOptions, cli, extract
+from niceextract.backends import OpenAICompatibleBackend
+from niceextract.chunking import chunk_document
+from niceextract.diagnostics import RunTrace
+from niceextract.errors import BackendError, ConfigurationError, InvalidResponseError
+from niceextract.execution import check_resume_paths, digest
+from niceextract.models import BackendResponse, GenerationOptions, TaskSpec
+from niceextract.planning import plan_chunks, split_chunk
+from niceextract.progress import ConsoleProgress
 
 
 TEXT = "Item A reads 11.\n\nItem B reads 22.\n\nItem C reads 33."
@@ -342,7 +342,7 @@ def test_cli_resume_and_preflight_then_budgeted_recovery(tmp_path, monkeypatch, 
         source_text = json.loads(json.loads(request.content)["messages"][-1]["content"])["source"]
         calls.append(source_text)
         return reply(output(source_text))
-    monkeypatch.setattr("attestextract.backends.OpenAICompatibleBackend", lambda **kw:
+    monkeypatch.setattr("niceextract.backends.OpenAICompatibleBackend", lambda **kw:
                         OpenAICompatibleBackend(**kw, transport=httpx.MockTransport(endpoint)))
     args = ["extract", "--input", str(source), "--task", str(task), "--env-file", str(env),
             "--model-id", "deepseek:deepseek-flash", "--chunking", "fixed", "--max-chunk-chars", "18"]

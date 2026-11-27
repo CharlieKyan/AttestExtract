@@ -9,7 +9,7 @@ import json
 
 import pytest
 
-from attestextract.structure_diagnostics import OBSERVED_OBJECT_MESSAGE, diagnose_structure
+from niceextract.structure_diagnostics import OBSERVED_OBJECT_MESSAGE, diagnose_structure
 
 
 KEYS = {"records", "record_type", "fields", "subject", "parameter", "value", "quote"}

@@ -4,17 +4,17 @@ import hashlib
 
 import pytest
 
-from attestextract.automatic import ModelConnection, build_automatic_backend
-from attestextract.automatic_execution import prepare_automatic_execution
-from attestextract.contextual_chunking import coverage_report
-from attestextract.diagnostics import RunTrace
-from attestextract.document_routing import is_table_chunk, routing_structure, table_input_for_chunk
-from attestextract.errors import ConfigurationError
-from attestextract.execution import prepare_execution
-from attestextract.models import BackendResponse, ContextOptions, ExecutionOptions, GenerationOptions, TaskSpec
-from attestextract.planning import plan_chunks, split_chunk
-from attestextract.structure import build_structure
-from attestextract.table_routes import build_table_input
+from niceextract.automatic import ModelConnection, build_automatic_backend
+from niceextract.automatic_execution import prepare_automatic_execution
+from niceextract.contextual_chunking import coverage_report
+from niceextract.diagnostics import RunTrace
+from niceextract.document_routing import is_table_chunk, routing_structure, table_input_for_chunk
+from niceextract.errors import ConfigurationError
+from niceextract.execution import prepare_execution
+from niceextract.models import BackendResponse, ContextOptions, ExecutionOptions, GenerationOptions, TaskSpec
+from niceextract.planning import plan_chunks, split_chunk
+from niceextract.structure import build_structure
+from niceextract.table_routes import build_table_input
 
 
 TASK = TaskSpec.model_validate({"name": "Synthetic observations", "record_types": {"reading": {
@@ -67,6 +67,32 @@ def test_whitespace_does_not_create_model_calls(text):
     assert coverage_report(text, chunks)['uncovered'] == []
     for chunk in chunks:
         assert table_input_for_chunk(text, chunk)['table_source'] in (HTML, MARKDOWN)
+
+
+def test_observation_table_and_retry_windows_can_cite_adjacent_intro_without_owning_it():
+    from niceextract.contextual_chunking import extraction_context
+    from niceextract.pipeline import configure_observation_task, resolve_task
+    from niceextract.table_windows import split_table_chunk
+
+    task = configure_observation_task(resolve_task(None, prompt_description="List masses.",
+                                                  field_list={"mass": "Reported mass."}, examples=[]))
+    policy = extraction_context(task)
+    assert policy == ContextOptions(mode="neighbors", neighbor_chars=500)
+    source = "# Results\n\nThe material came from unit A.\n" + HTML + "\nThese were dry weights."
+    structure = build_structure(source)
+    chunks = plan_chunks(source, task, GenerationOptions(), ExecutionOptions(), max_chars=6000,
+                         context=policy, table_mode="auto", structure=structure)
+    parent = next(chunk for chunk in chunks if is_table_chunk(chunk))
+    for chunk in [parent, *split_table_chunk(source, parent, structure=structure)]:
+        table = table_input_for_chunk(source, chunk, structure)
+        prose = {item["kind"]: item for item in table["entries"] if item["kind"].startswith("neighbor_")}
+        assert {role: item["quote"].strip() for role, item in prose.items()} == {
+            "neighbor_before": "The material came from unit A.", "neighbor_after": "These were dry weights."}
+        for item in prose.values():
+            assert item["quote"] == source[item["start"]:item["end"]]
+            assert all(item["end"] <= span.start or item["start"] >= span.end for span in chunk.body_segments)
+            assert item["ref"] not in table.get("window", {}).get("owned_cell_refs", [])
+    assert extraction_context(task, mode="none").mode == "none"
 
 
 def test_mineru_heading_and_metadata_survive_table_input():

@@ -1,5 +1,7 @@
 # 审查摘要：可逐步检查的 D4 表格 A/B 实验
 
+本文中的历史源码路径和行号对应当时尚未提交的工作区。
+
 - 日期：2026-11-10。
 - 基线：`046ba1ad8c6a95c88b3b0c442f4a12f3634f44f5`（dev24，开始时工作区干净）。
 - 目标：本轮未提交工作树，无目标提交或新版本标签；不将移动分支链接伪装成固定版本定位。
@@ -60,9 +62,9 @@
 
 | 入口 | 重点 |
 | --- | --- |
-| [table_routes.py](../../src/attestextract/table_routes.py) | 字段来源、合并范围、逐测量条件、句子映射和自动更新的门槛 |
+| `src/attestextract/table_routes.py` | 字段来源、合并范围、逐测量条件、句子映射和自动更新的门槛 |
 | [table_route_runner.py](../../scripts/table_route_runner.py) | 固定额度、预留、恢复、停止条件、B2依赖、日志完整性和凭据处理 |
-| [table_reporting.py](../../src/attestextract/table_reporting.py) | 无响应与空结果区别、同值错格、来源未评估、外来HTML安全展示 |
+| `src/attestextract/table_reporting.py` | 无响应与空结果区别、同值错格、来源未评估、外来HTML安全展示 |
 | [test_table_route_review.py](../../tests/test_table_route_review.py) | 独立发现的误改与范围反例，不按实现放宽预期 |
 | [TABLE_ROUTE_EXPERIMENTS.md](../TABLE_ROUTE_EXPERIMENTS.md) | 用户能否复现故障、看到实际输入输出，并区分离线和真实模型效果 |
 

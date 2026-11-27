@@ -65,19 +65,19 @@ dev15 增加的诊断针对“对象期待属性名，却遇到匿名对象”�
 在仓库根目录配置好 `.env`，先运行不发网络请求的预检：
 
 ```powershell
-.\.venv\Scripts\python.exe -m attestextract extract --input src/attestextract/examples/procurement.md --task src/attestextract/examples/procurement.task.json --env-file .env --model-id deepseek-responses:deepseek-flash --check
+.\.venv\Scripts\python.exe -m niceextract extract --input src/niceextract/examples/procurement.md --task src/niceextract/examples/procurement.task.json --env-file .env --model-id deepseek-responses:deepseek-flash --check
 ```
 
 下面是实际抽取命令，会调用真实服务并计费；本次发布没有执行它：
 
 ```powershell
-.\.venv\Scripts\python.exe -m attestextract extract --input src/attestextract/examples/procurement.md --task src/attestextract/examples/procurement.task.json --env-file .env --model-id deepseek-responses:deepseek-flash
+.\.venv\Scripts\python.exe -m niceextract extract --input src/niceextract/examples/procurement.md --task src/niceextract/examples/procurement.task.json --env-file .env --model-id deepseek-responses:deepseek-flash
 ```
 
 Python 使用同一个选择入口：
 
 ```python
-from attestextract import extract, load_task
+from niceextract import extract, load_task
 
 result = extract("Lamp A uses 8 W.", load_task("task.json"),
                  model="deepseek-responses:deepseek-flash", env_file=".env")
@@ -105,7 +105,7 @@ Schema 的发送、返回内容是否符合 Schema、服务端是否真正强制
 在仓库根目录直接执行；每次使用新的输出目录：
 
 ```powershell
-$acceptance = Join-Path (Split-Path $PWD) ("research\attestextract\audits\structured-output-" + (Get-Date -Format "yyyyMMdd-HHmmss-fff"))
+$acceptance = Join-Path (Split-Path $PWD) ("research\niceextract\audits\structured-output-" + (Get-Date -Format "yyyyMMdd-HHmmss-fff"))
 .\.venv\Scripts\python.exe scripts/structured_output_smoke.py --output-dir "$acceptance"
 Get-Content -Raw -Encoding UTF8 (Join-Path $acceptance "summary.json")
 ```

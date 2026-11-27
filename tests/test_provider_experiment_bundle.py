@@ -9,7 +9,7 @@ import sys
 import httpx
 import pytest
 
-from attestextract.errors import ConfigurationError
+from niceextract.errors import ConfigurationError
 
 
 SCRIPT = Path(__file__).parents[1] / "scripts/provider_experiment_bundle.py"

@@ -6,8 +6,8 @@ import json
 
 import pytest
 
-from attestextract.verification_protocol import apply_decision, parse_step, VerificationValidationError
-from attestextract.verification_sources import SourceIndex
+from niceextract.verification_protocol import apply_decision, parse_step, VerificationValidationError
+from niceextract.verification_sources import SourceIndex
 
 
 SOURCE = ("Specimen A was prepared in batch East. A weighs 10 g.\n\n"

@@ -3,7 +3,7 @@
 这是正式包入口的行为，不依赖论文启动脚本。密钥配置一次；用户主要填写模型、输入和任务。`.env` 明确通过 `--env-file` 读取；已有进程环境变量仍优先。
 
 ```powershell
-attestextract extract --model-id deepseek:deepseek-flash --env-file .env --input paper.md --task task.json
+niceextract extract --model-id deepseek:deepseek-flash --env-file .env --input paper.md --task task.json
 ```
 
 更换为 `--model-id qwen:qwen3.8-27b` 即使用 Qwen。地址、凭据和生成参数由已支持的模型预设提供；连接策略和一次 HTTP 尝试的默认值也适用于高级 profile 与直接创建的内置适配器。格式重生成默认关闭，显式设置仍保留。
@@ -40,7 +40,7 @@ CLI 的三种输出上限语义：
 `provider` 意为交给服务商默认值，**不是无限输出**。`--check` 的 `generation.max_output_tokens` 会显示 `null`；实际请求文件中相应字段缺省。普通格式重试保持这一选择，不自行增加上限。Python现有写法 `model_options={"generation": {"max_output_tokens": None}}` 与此对应。
 
 ```powershell
-attestextract extract --model-id deepseek:deepseek-flash --env-file .env --input paper.md --task task.json --max-output-tokens provider --check
+niceextract extract --model-id deepseek:deepseek-flash --env-file .env --input paper.md --task task.json --max-output-tokens provider --check
 ```
 
 DeepSeek当前文档说明：非思考模式不传 `max_tokens` 默认8K。因此本项目关闭思考的预设采用 `provider` 时，可能仍遭遇同样的截断；其他服务商默认值可能不同。[官方参数说明](https://api-docs.deepseek.com/api/create-chat-completion/)
@@ -91,7 +91,7 @@ CLI 默认不格式重生成。显式设置 `--format-retries 1` 后，仅对本
 使用上面的实际模型／文件配置，追加 `--check`：
 
 ```powershell
-attestextract extract --model-id deepseek:deepseek-flash --env-file .env --input paper.md --task task.json --check
+niceextract extract --model-id deepseek:deepseek-flash --env-file .env --input paper.md --task task.json --check
 ```
 
 它只检查本地配置、凭据形式、任务、输入和分块；与 `--resume` 合用时还验证全部缓存并报告可复用块数、剩余块数和预算，输出 `mode: local_check`、`network_calls: 0` 和实际默认值。诊断 manifest 为 `checked`，不产生 `result.json`，不验证密钥有效性或服务端 Schema 支持。去掉 `--check` 才会调用模型。
