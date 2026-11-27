@@ -1,492 +1,206 @@
-# AttestExtract
+<p align="center">
+  <img src="docs/assets/niceextract-logo.png" alt="NiceExtract. Turn research papers into datasets you can verify." width="560">
+</p>
 
-Dev40 limits format-regeneration feedback to observed syntax facts, including when
-resuming historical checkpoints. It removes speculative shape corrections without
-changing the source, task, first request or default retry allowance. See
-[format feedback and explicit recovery](docs/STRUCTURED_OUTPUT.md).
+# NiceExtract
 
-Dev35 replaces whole-document analysis for new runs with a bounded verification
-loop. With `table_subject` / `--table-subject`, the model can search the local
-source, read selected passages, and decide object ownership and target-field
-meaning. Existing `flat-v1` extraction stays unchanged; its candidates provide
-unverified hints, not a new joint object-extraction protocol. New analysis has no
-60,000-character source cap: each framework request instead has a configurable
-UTF-8 byte ceiling, which is not a token limit or a provider-window guarantee.
-Every model step consumes the separate analysis budget; local search/read does
-not generate text. Original values, failed responses and uncertain attribution
-remain traceable. Target-field mismatches are kept outside the target wide table.
-Outputs are model proposals, not expert-approved data. Historical analysis
-checkpoints keep their original contract. See [analysis tables](docs/analysis-tables.md).
+[简体中文](README.zh-CN.md) · [Quick start](#quick-start) · [Tasks and examples](#define-a-task-and-label-examples) · [API setup](#configure-the-api-and-switch-models) · [Multi-paper CSV (dev60 preview)](#prepare-one-task-for-several-papers)
 
-Dev33 subdivides known table length truncations into bounded row/cell windows,
-preserving full table context, original cell references and spent calls. Verified
-dev31/dev32 root checkpoints can reuse completed chunks; unknown transport outcomes
-are not resent. Windows reduce output responsibility, not input tokens. See
-[table recovery](docs/TABLE_EXTRACTION.md#预算格式错误与恢复).
+## Introduction
 
-Dev32 adds a simpler `annotation.json` / `annotation.md` view: values, units,
-conditions and quotations appear together under each exact object label. Technical
-source pointers live in `annotation.sources.json`; detailed review and raw results
-remain available. Different observations are preserved, not merged or certified.
+NiceExtract is a Python framework that uses language models to extract observations from research papers and keep the source evidence for each candidate. Define your fields once and use the Python API or CLI to read prose and tables. The upcoming dev60 release adds a dataset workflow. When you specify what each row represents, you can also produce a CSV for each paper and trace a cell back to its reported value, unit and source.
 
-Dev31 aligns the table prompt/schema with the local binding validator, adds explicit
-one-shot retries of quarantined tables with a cumulative budget, and saves
-`review.json` / `review.md` beside managed results. Review rows group identical
-object/condition/scope labels for display; they are not merged or accepted facts.
-Existing results can be exported offline with `attestextract export-review`.
-See [review and targeted recovery](docs/EXPERT_REVIEW.md).
+## Quick start
 
-Dev30 adds `output_dir` to Python and `--output-dir` to CLI. A single new or empty run directory holds the result, report, diagnostics and recovery checkpoint. Ordinary Python model selection now uses the same managed execution defaults as CLI; in-memory calls remain available. Install the package in your terminal, then import it from your own project.
+Download and unpack the [NiceExtract preview source ZIP](https://github.com/CharlieKyan/NiceExtract/archive/5b19b8f25b987771beca119c0b7251dd199c6123.zip). This earlier snapshot runs the demo and extraction examples below. The dev60 CSV workflow is awaiting release. Use Python 3.11 or newer and run these commands in the extracted directory containing `pyproject.toml`.
 
-Dev29 accepts a task description, a complete field-name/definition mapping and
-optional annotated examples in the normal Python and CLI entry points. The task
-compiles offline before model configuration; examples guide extraction without
-limiting the declared targets. CLI users keep everything in one task JSON file.
-See [simple task inputs](docs/SIMPLE_TASKS.md) for complete examples, validation,
-source preservation and recovery boundaries. No onboarding model calls are added.
-
-Dev28 routes recognized complete Markdown/HTML tables through A from the normal
-Python `extract` and CLI entry points. Prose and immutable table records share
-one result, budget and recovery flow; local position checks and unperformed
-scientific/member checks are shown separately. Start with the offline `--check`
-example in the [unified table extraction guide](docs/TABLE_EXTRACTION.md).
-
-Dev27 makes the separate A-route table experiment deliver parsed model fields
-unchanged, with evidence and relationship checks beside them. It does not rewrite
-values or citations, merge records, or replace them with historical results.
-Older saved responses remain available for offline imports. See the
-[table experiment and v3 migration guide](docs/TABLE_ROUTE_EXPERIMENTS.md).
-
-Dev25 lets the public Python and CLI entry points accept an API base address,
-key, raw model name, task and source directly. There is no registration or paid
-onboarding probe. Explicit parameter rejection can select a bounded compatible
-route; read/write failures with an unknown outcome still stop. Automatic runs
-record every generation and model source in result 0.5/checkpoint v4. See the
-[minimal-input guide](docs/MINIMAL_API.md) for complete commands and boundaries.
-
-Dev24 defaults all built-in HTTP adapters to TLS 1.2 first, with a bounded,
-credential-free compatibility probe before generation and automatic negotiation
-only for recognized TLS failures. Default generation attempts are now one across
-presets, profiles and direct adapters. See [connection defaults](docs/CLI_EXPERIENCE.md).
-
-Dev23 connects validated stage-C semantic reviews to stage-D experiment selection,
-while preserving strict scores and the original call ledger. See [review attachment](docs/semantic-review.md).
-
-Dev22 includes the experiment entry points and helpers in the source distribution.
-
-Dev21 adds value-free observations of the actual TLS/HTTP connection and a bounded
-[provider experiment](docs/PROVIDER_EXPERIMENTS.md). Preparation and checks are offline;
-each approved trial can be reserved only once. Missing responses are not scored as invalid
-JSON. Existing extraction defaults, flat-v1, result schema 0.4 and retry policies are unchanged.
-Mock acceptance is not evidence of live endpoint reliability or model accuracy.
-
-Dev19 adds optional source structure and conservative evidence retrieval. Use `--context structure` or
-`--context neighbors --neighbor-chars 500` to opt in; `none` remains the default. MinerU sidecars and
-explicit header hints preserve original HTML cell coordinates without rewriting the input. Result schema
-0.4 reports normalized matches as requiring review, preserves supplied context and supports old archive
-identities. See [D4 evidence and context](docs/D4_EVIDENCE.md) and the
-[controlled context experiment](docs/D4_CONTEXT_EXPERIMENT.md) for interfaces, observed risks and limits.
-
-Schema-driven extraction from text and tables, with source-linked evidence and pluggable decision backends.
-
-**Early prototype · `0.1.0.dev33` · Python 3.11+**
-
-dev18 adds offline `prepare-decisions` / `check-decisions`: validated successful-run materials cover every candidate and empty chunk; simulated suggestions are checked and recorded without applying them. Equal values with uncertain identity, conditions or evidence now produce insufficient-context associations. That release used flat-v1 / result schema 0.3; dev19 uses schema 0.4. No Jev inference or extra model calls are introduced. See [offline decision materials](docs/DECISION_MATERIALS.md).
-
-Dev16 rolls back the CLI's automatic format regeneration default to zero; explicit `--format-retries 1` and profile settings remain supported. Saved live failures show that switching to Responses Schema did not prevent malformed JSON. The adapter and diagnostics remain available, without claiming a format-reliability fix. Shape guidance is appended only when a specific hint exists. See [observed limits](docs/STRUCTURED_OUTPUT.md).
-
-Dev15 adds localized, value-free feedback for anonymous objects inside JSON objects and an explicit `deepseek-responses:deepseek-flash` preset using DeepSeek's documented `text.format` Schema protocol. The existing Chat preset is unchanged. One regeneration still uses the same budget and never repairs or silently skips invalid output. See [structured output and recovery](docs/STRUCTURED_OUTPUT.md); new adapter verification is offline, not a live enforcement claim. Start a new run after upgrading or changing protocol.
-
-Dev14 fixes result version metadata reported by dev13; new results use the installed package version and historical explicit versions remain unchanged.
-
-Dev13 adds sentence-aware chunking, one CLI format regeneration by default, and persistent regeneration allowances across recovery. Known incompatible structured-output requests fail before HTTP. See [execution and recovery](docs/EXECUTION.md) for defaults, budgets and offline acceptance. Python keeps format retries off by default and opts into managed execution with `execution=ExecutionOptions(...)`. Dev12 checkpoints require a new run with this planner.
-
-Dev9 adds a minimal model-selection entry point: configure a provider key once,
-then change `--model-id` in the CLI or `model=` in Python. Named profiles and
-injected backends remain supported. See the [model configuration guide](docs/BACKENDS.md)
-and the [D2 acceptance checklist](docs/D2_ACCEPTANCE.md) for the implemented scope
-and the distinction between offline checks, earlier live calls and content accuracy.
-
-dev7 adds task-declared measurement evidence groups, conditional missingness rules,
-possible candidate associations, literal math evidence in review reports, and separate
-observed JSON Schema diagnostics. See [measurement review and evaluation](docs/MEASUREMENT_REVIEW.md)
-and [JSON Schema troubleshooting](docs/SCHEMA_DIAGNOSTICS.md). Jev and semantic adjudication remain unimplemented.
-
-AttestExtract is an independent, domain-configurable extraction core. It grew out of work on a CCUS extraction workflow, but its task schema and runtime contain no CCUS-specific rules and do not depend on LangExtract. It produces typed candidates, exact source references, and a review queue. An optional archive preserves the exact document, explicit review decisions, and accepted records. **Jev integration is planned and is not implemented.**
-
-[中文说明](README.zh-CN.md)
-
-[Change review summaries](docs/reviews/README.md) record each completed change's scope, behavior, findings, verification and human review priorities. Start there to understand changes without reading every diff line.
-
-## Try the offline demonstration
-
-```bash
-python -m pip install "git+https://github.com/CharlieKyan/AttestExtract.git"
-attestextract demo --output demo-results.json
+```sh
+python -m pip install .
+niceextract demo --output result.json
 ```
 
-`demo` replays **fixed, synthetic model responses**. It performs no inference, needs no API key, and does not demonstrate model accuracy. It runs the same validation and evidence-mapping pipeline used for live extraction. The bundled examples contain two Chinese CCUS observations and three English purchase lines from prose and a Markdown table.
+Open `result.json` to see the results for two synthetic documents. In the research example, sample A has the same pressure, 12 bar, at 25 °C and 50 °C. The result contains two candidates, each with its own temperature and source sentence. The demo replays fixed responses offline and needs no API key. [Source passage](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/src/niceextract/examples/ccus.txt) · [Saved research example](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/examples/ccus-result.json)
 
-```bash
-attestextract demo --example ccus
-attestextract demo --example procurement
-python -m attestextract --version
-```
+## Why NiceExtract?
 
-With `--example all` (the default), the output is `{"examples": {"ccus": ..., "procurement": ...}}`. A single example returns one extraction result. Without `--output`, demo JSON is printed to stdout; replay notices go to stderr.
+- **Reuse field definitions across papers.** In the dev60 preview, declare which fields accept text or numbers and save the definitions with `prepare-task`. A grade code such as `003` can keep its leading zeros. A concentration field can distinguish a single value such as `5 ppm`, a range such as `2–5 ppm`, and a lower bound such as `≥5 ppm`.
+- **Check a result against the source.** For text fields, inspect the quotation and its location when a match is found. Missing quotations and ambiguous matches are flagged so you can decide where to look more closely.
+- **Read prose and tables together.** Process a document containing Markdown or HTML tables in one run. The JSON includes both sets of results, with cell references for tracing table observations back to their rows and columns.
+- **Keep the context that gives a value meaning.** Review a reported value alongside the object it describes, its unit and its conditions. Observations made under different conditions can be kept separate even when their values are identical.
+- **Resume work on a long document.** Set a limit on model calls and save the run. If it stops partway through, you can reuse completed chunks when you resume. [Run and resume guide (in Chinese)](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/docs/EXECUTION.md)
 
-## D1 document-to-record examples
+## From a text match to a research record
 
-```bash
-attestextract d1 --output d1-archives.json
-attestextract d1 --example attribute
-attestextract d1 --example observation
-attestextract d1 --example relation
-```
+LangExtract can highlight where an extraction appears in a document. In its v1.7.2 data model, each extraction has one optional character span, an alignment status and a dictionary of attributes. In a paper, the value, its unit and the conditions under which it was measured can each come from a different place. NiceExtract lets you examine the evidence for those fields separately. [LangExtract data model](https://github.com/google/langextract/blob/v1.7.2/langextract/core/data.py#L64-L92)
 
-These are **synthetic manual expected examples**, replaying fixed responses and explicit fixture review labels. They are not real expert validation, model inference, or an accuracy benchmark. Each case packages `source.txt`, `task.json`, `response.json`, `reviews.json`, and a hand-written `expected.json` under `src/attestextract/examples/d1/`.
-
-| Case | Intended behavior | Candidates / accepted records |
-| --- | --- | --- |
-| `attribute` | Preserve a reported product power rating; reject a deliberately wrong candidate with an absent quotation | 2 / 1 |
-| `observation` | Preserve two equal flow values under different temperature conditions | 2 / 2 |
-| `relation` | Preserve an explicit subject–relation–object statement | 1 / 1 |
-
-The relation case uses three declared string fields; it does not implement graph inference, entity resolution, or a general event ontology. `reviews.json` refers to candidates by zero-based `candidate_index` in replay order. Indices must be unique and in range; the loader resolves them to real candidate IDs. The fixture author supplies each review label and rationale with `origin: "synthetic_fixture"`. `expected.json` independently specifies counts, review states, and accepted field values with exact source quotations and offsets; it excludes generated IDs and run timing.
-
-The D1 implementation covers a separate installable project, document/task/candidate/evidence/accepted-record contracts, all three manual cases, and validated JSON save/reload. `attestextract d1 --example all` (the default) outputs `{"examples": {"attribute": ..., "observation": ..., "relation": ...}}`; each value is an archive. A single case returns one archive. The earlier `demo` command retains its extraction-result output.
-
-Private expert feedback informs which failure patterns to exercise. Original papers, expert comments, and machine outputs stay outside the public project. The public cases were written from scratch and do not reproduce those materials.
-
-## Extract with a model
-
-Clone the repository to use the example input and task files:
-
-```bash
-git clone https://github.com/CharlieKyan/AttestExtract.git
-cd AttestExtract
-python -m pip install -e ".[dev]"
-```
-
-For a supported preset, configure the keys for the providers you use once in a
-local `.env` file. No model address or TOML profile is needed for their default
-official endpoints:
-
-```dotenv
-DEEPSEEK_API_KEY=your-deepseek-key
-DASHSCOPE_API_KEY=your-qwen-beijing-key
-```
-
-List the local presets without network access, then select a model:
-
-```bash
-attestextract models
-attestextract extract --model-id deepseek:deepseek-flash --env-file .env --input src/attestextract/examples/procurement.md --task src/attestextract/examples/procurement.task.json
-```
-
-For Qwen, change only `--model-id` to `qwen:qwen3.8-27b`. The same source and task
-apply. The Python equivalent is:
-
-```python
-from attestextract import extract, load_task
-
-result = extract(
-    "Purchase request: 5 desk lamps at USD 24.50 each, delivery within 10 days.",
-    load_task("src/attestextract/examples/procurement.task.json"),
-    model="deepseek:deepseek-flash",  # Or: qwen:qwen3.8-27b
-    env_file=".env",
-)
-```
-
-The three explicit presets are `deepseek:deepseek-flash`, `qwen:qwen3.8-27b`, and
-`qwen:qwen-plus`; Qwen presets support Beijing only. Defaults are JSON object
-output, thinking disabled, one HTTP attempt, no format regeneration and at most
-8,192 output tokens per generation, with temperature 0. These are request defaults, not a guarantee
-of extraction accuracy or server-side parameter enforcement. Existing
-`VLM_API_KEY` / `VLM_BASE_URL` can be used for Qwen; credential and address
-precedence is documented in the [configuration guide](docs/BACKENDS.md).
-
-Unknown models, other regions and custom protocols use the advanced profile or
-backend interface. Use `--max-output-tokens provider` to omit the limit from the request; the service still applies its own default and maximum, so this is not unlimited output. The existing CLI `--model` still means a provider's raw model
-name; it does not parse `provider:model`. `--model-id` cannot be combined with
-`--model`, `--adapter`, `--config` or `--profile`.
-
-For the existing advanced configuration, configure an OpenAI-compatible **chat
-completions** endpoint. The base URL includes the API prefix, such as
-`https://your-provider.example/v1`; the adapter appends `/chat/completions`. It
-sends non-streaming text requests. The endpoint must accept `model` and
-`messages` and return text in `choices[0].message.content`.
-
-```powershell
-$env:ATTESTEXTRACT_BASE_URL = "https://your-provider.example/v1"
-$env:ATTESTEXTRACT_MODEL = "your-model-name"
-$env:ATTESTEXTRACT_API_KEY = "your-key"
-attestextract extract --input src/attestextract/examples/procurement.md --task src/attestextract/examples/procurement.task.json --output extraction-results.json
-```
-
-On Bash, use `export ATTESTEXTRACT_BASE_URL=...`, `export ATTESTEXTRACT_MODEL=...`, and `export ATTESTEXTRACT_API_KEY=...`. Alternatively, load a configuration file explicitly with `--env-file`, as below. Configuration precedence is **CLI arguments → existing process environment → the explicit `.env` file**. No `.env` file is loaded automatically. `--api-key-env OTHER_VARIABLE` selects the variable containing the key; no command-line key value is accepted. A key may be omitted for a local endpoint that does not require authentication. `--timeout` explicitly overrides all HTTP phase limits (0 < seconds <= 600). Without it, connect/read/write/pool limits are 15/180/30/15 seconds; `--read-timeout` overrides only reading. All built-in HTTP adapters default to verified TLS 1.2 first with bounded compatibility fallback; see [connection and recovery](docs/CLI_EXPERIENCE.md).
-
-Live extraction sends document chunks to your configured endpoint. There is no automatic fallback to demo responses. All built-in configurations default to one generation HTTP attempt. Explicitly increasing the limit permits retries only for safe connection failures and selected transient HTTP statuses; ambiguous read/write failures stop without automatic resubmission. Authentication and configuration failures stop immediately. CLI response-format errors stop by default; an explicit CLI/profile format_retries=1 allows one regeneration. An unrecovered chunk fails the run with a nonzero exit status; there is no partial-success result or failed chunk disguised as empty records. CLI checkpoints can resume completed responses in a new run; see [execution and recovery](docs/EXECUTION.md).
-
-### Optional structured output
-
-`extract --structured-output off|json_object|json_schema` overrides the selected
-configuration. Advanced configuration defaults to `off`; model presets default
-to `json_object`, which requests valid JSON without promising task-Schema
-enforcement. With `json_schema`, AttestExtract generates the response schema
-from the task and sends `response_format` with `type: "json_schema"` and
-`strict: true`. The Python backend equivalent is
-`OpenAICompatibleBackend(..., structured_output="json_schema")`.
-
-New model calls use **flat-v1**: each record has `record_type`, `values`, `quotes`, and task-declared `measurements`. `values` maps field names to their declared scalar types; `quotes` maps the same names to verbatim source strings. Strict schemas require all declared keys: missing information uses a null value and empty quote. Missing evidence still enters review; schema diagnostics and candidate acceptance are separate. This wire protocol is independent of the service structured-output mode and cannot be switched to the old format for live calls.
-
-The provider/model must support this schema format. HTTP 400/422 failures stop the run; AttestExtract does not silently fall back to unstructured output or issue a format retry for HTTP errors. Normal transient-network retry rules still apply. [Wenwen's structured-output documentation](https://wenwen-ai.apifox.cn/305807074e0) shows this request format; support must be checked on the actual provider/model route. Local validation remains mandatory even when the endpoint accepts the parameter.
-
-### Bounded format regeneration
-
-Prompts require unique keys in each JSON object and declared scalar types. `values.value` is the scalar for a task field named value; `quotes.value` contains its source quotation. Duplicate keys are rejected even when their values agree. The parser also rejects non-finite numbers. Diagnostics identify `duplicate_key` and `non_finite_number` paths, masking undeclared key names; ordinary JSON syntax errors retain line and column information. Nothing is silently repaired or overwritten.
-
-CLI `extract --format-retries 0|1` defaults to `0`. With an explicit CLI/profile setting of `1`, a local JSON, record-contract, or task-schema failure allows **one new generation for that chunk** using the same source, task, and schema plus bounded validation feedback. The new response must pass structural validation and undergo the usual evidence checks. Earlier successful chunks are not rerun. Python retains its default `0`; opt in with `extract(text, task, backend=backend, format_retries=1)`.
-
-This explicit opt-in can add one paid generation per failing chunk within the total call budget; each generation retains the usual bounded HTTP retries. It does not format-retry HTTP 400/401, malformed API response envelopes, refusals, or truncated completions. Truncation instead follows the bounded subdivision policy. Missing, unmatched, or ambiguous quotations continue to require review without a format retry. If the second format attempt fails, the run fails explicitly. Checkpoint v3 preserves the pending feedback and reserved regeneration allowance: resume cannot reset it, including after an interrupted regeneration. Raising the total call budget does not restore an exhausted format allowance. This is candidate generation, not acceptance or factual verification.
-
-### Explicit `.env` configuration and run logs
-
-For the legacy endpoint configuration, create a local `.env` from `.env.example`,
-or edit your existing file, with the provider values below. The model-selection
-shortcut above needs only its provider-specific key and any optional address:
-
-```dotenv
-ATTESTEXTRACT_BASE_URL=https://your-provider.example/v1
-ATTESTEXTRACT_MODEL=your-model-name
-ATTESTEXTRACT_API_KEY=replace-with-your-key
-```
-
-The file accepts `KEY=value` assignments, an optional `export` prefix, and quoted values. It is parsed as data; shell commands are not executed. Keep credentials in the local file and out of commits. An existing environment variable takes precedence over the file, so clear or update stale shell variables when switching providers.
-
-From the repository root, this PowerShell example writes research outputs and detailed logs outside the Git project:
-
-```powershell
-$runDir = "..\research\attestextract\runs\procurement\$(Get-Date -Format 'yyyyMMdd-HHmmss-fff')"
-New-Item -ItemType Directory -Force -Path $runDir | Out-Null
-attestextract extract --env-file .env --structured-output json_schema --input src/attestextract/examples/procurement.md --task src/attestextract/examples/procurement.task.json --output "$runDir\extraction.json" --report "$runDir\review.md" --log-dir "$runDir\diagnostics"
-```
-
-`--log-dir` explicitly enables file tracing; its directory must be empty or not yet exist. Without `--output`, the CLI creates a fresh `outputs/<timestamp-id>/` beside the input; if the input is directly inside `inputs/` (case-insensitive), `outputs/` is its sibling. Each run directory contains `result.json`, `report.md`, and `diagnostics/`. With explicit `--output`, file tracing remains opt-in. Normal terminal progress works in either mode. See [CLI defaults and acceptance](docs/CLI_EXPERIENCE.md).
-
-| Trace file | What it records |
+| Question during review | What you can inspect in NiceExtract |
 | --- | --- |
-| `events.jsonl` | Structured processing events for following progress by module/chunk. |
-| `manifest.json` | Run status, versions, run summary, artifact list, and `artifact_roles` describing each artifact's purpose. |
-| `document.json` | Input document text, identity, hash, and source metadata. |
-| `task.json` | The effective, validated extraction task. |
-| `backend.json` | Sanitized backend configuration, excluding endpoint and key values. |
-| `chunk_plan.json` | Planned chunk IDs, sizes, and original source segments. |
-| `chunks/{chunk_id}.json` | Chunk text and its mapping to the original source. |
-| `requests/{chunk_id}.request.json` | Sanitized actual HTTP request body: `model`, `messages`, and `response_format` when enabled. Replay/custom backends without HTTP instead store their `ExtractionRequest`; request kind is identified in the manifest/events. No HTTP headers or endpoint are included. |
-| `prompts/{chunk_id}.system.txt` | Directly readable system instructions. |
-| `prompts/{chunk_id}.task.json` | The task supplied in this chunk's prompt. |
-| `prompts/{chunk_id}.source.txt` | The source text supplied in this chunk's prompt. |
-| `responses/{chunk_id}.txt` | Raw model response text for diagnosing parsing and extraction. |
-| `responses/{chunk_id}.meta.json` | Response metadata only: model, usage, attempts, and elapsed time. |
-| `http/{chunk_id}.attempt-{n}.error.json` | Safe HTTP failure details for one attempt, including failure layer, chunk, attempt, HTTP status, request IDs, and allowed provider error fields when available. |
-| `validation/{chunk_id}.errors.json` | Validation phase, total error count, and up to 50 safe details with field paths, codes, expected types, actual types, and messages; no rejected input values. |
-| `candidates/{chunk_id}.json` | Candidates and structural/evidence checks for the chunk. |
-| `result.json` | Final extraction result after a successful run. |
-| `error.json` | Safe failure summary; `http_diagnostics` summarizes HTTP failures and `http_details` links their relative artifact paths. Validation failures retain their detail links and total counts. |
+| **Which occurrence supports this field?** | Each quoted text field has its own match status. When the wording occurs more than once in the search range, you can inspect the possible locations. If spacing or punctuation differs, a normalized match keeps both the model's quotation and the original source text for review. [Evidence guide (in Chinese)](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/docs/D4_EVIDENCE.md) |
+| **Does this unit apply to this table value?** | Follow cell references from a reported value to the header, unit or footnote cited for it. The result distinguishes finding the quoted text from checking its row or column relationship. That gives you the original cells to consult when a header spans several columns. [Table checks (in Chinese)](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/docs/TABLE_EXTRACTION.md) |
+| **Does a bearing temperature belong in a column for the whole motor?** | In the dev60 preview, suppose a paper says that bearing B7 in motor M4 reached 60 °C. If the field accepts component temperatures, you can find that observation under M4 with B7 recorded as the measured object. If the field requires the mean for the whole motor and the component reading is judged inapplicable, the cell stays empty. The observation still records the bearing’s 60 °C and its quotation. With `--table-subject`, the model can reread passages within a verification budget, and ambiguous ownership can remain pending. [Preview the CSV workflow](#prepare-one-task-for-several-papers) |
+| **What if the model's output cuts off halfway through a table?** | When the service reports an output-length limit, NiceExtract can split the work by row and, if needed, by cell. Each retry still sees the original table and its headers. The retries share the run's call budget, and the incomplete response stays out of the results. [Table recovery (in Chinese)](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/docs/TABLE_EXTRACTION.md#预算格式错误与恢复) |
 
-New traces use `trace_schema_version: "0.3"`; existing log directories are not rewritten. First-attempt paths above remain unchanged. A format retry uses the stem `{chunk_id}.format-2`, for example `requests/chunk-0001.format-2.request.json`, `responses/chunk-0001.format-2.txt`, and, if rejected, `validation/chunk-0001.format-2.errors.json`. Its HTTP errors use `http/chunk-0001.format-2.attempt-{n}.error.json`. Both requests and raw responses are preserved; `.meta.json` contains metadata, not model text. Candidate chunk IDs remain unchanged. `format_retry` events record `retry`, `succeeded`, or `failed`; `format_attempt` distinguishes generation from the HTTP `attempt`. Successful run counts and usage include both rejected and recovered responses.
+## Explore the examples
 
-A failed run can leave earlier chunk files for diagnosis; they are not a successful partial result. Trace files can contain **the full paper text, task instructions, and model output**, even when credentials and backend details are sanitized. Store them outside this repository, as above, and do not commit or publicly share them without reviewing their contents. These are logs of the implemented extraction pipeline; Jev and Stage2.5/Stage3 decision modules are not implemented or simulated by tracing.
+These synthetic examples show how the choice of task changes what you extract. You can read them directly in your browser.
 
-`extract` writes JSON to the optional `--output` file, or to the automatically created run directory. Add `--report review.md` for a Markdown review report generated from the same successful result, with no additional model call. It shows candidates, field values, verbatim quotations, source positions, evidence status, and review reasons. The report does not accept candidates or establish factual correctness; JSON remains the machine-readable result. Known configured API keys are redacted from the report. A failed extraction produces no success report. Output and report paths must differ from each other and from input, task, and `.env` files, and both must be outside `--log-dir`.
+| What do you want to collect? | What to look at |
+| --- | --- |
+| Measurements and their conditions | Compare a [research excerpt](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/src/niceextract/examples/ccus.txt) with its [saved JSON result](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/examples/ccus-result.json) to see how two measurements of the same sample are recorded. |
+| Items, quantities and delivery terms | Read a [purchase request](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/src/niceextract/examples/procurement.md) alongside its [task definition](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/src/niceextract/examples/procurement.task.json) to see how the same framework handles a different vocabulary. |
+| A relationship stated in the text | Compare a [source sentence](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/src/niceextract/examples/d1/relation/source.txt) with its [handwritten expected record](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/src/niceextract/examples/d1/relation/expected.json) to see who supplies what. |
 
-With tracing enabled, key stages, completions, and retries appear on stderr in real time, alongside file-written notices and error summaries. Field-level details remain in `events.jsonl`; model responses and trace contents are not streamed to stdout. `demo` and `d1` still print JSON to stdout when `--output` is omitted. Inspect the per-chunk files for intermediate results.
+## Use your own documents
 
-To investigate an HTTP failure, start with `error.json`, then follow `http_details` to the failed attempt. Read the failure layer, chunk, attempt number, HTTP status, and available request IDs alongside provider-reported `error.code`, `type`, `message`, `status`, and `param`. Application compatibility hints are separate inferences; they are not the provider's stated reason. Only allowlisted, redacted, length-bounded fields are retained, rather than complete HTTP error bodies or headers. When no usable provider reason is available, diagnostics mark `provider_detail_unavailable`; they cannot reveal the provider's internal root cause or recover information absent from an older 400-error log.
+Keep two files side by side. `paper.md` contains the document you want to process, saved as UTF-8 text or Markdown. `task.json` describes what to collect and can be reused across papers. If you start from a PDF, convert it first and check that the tables you need are preserved as Markdown or HTML tables. [Table extraction guide (in Chinese)](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/docs/TABLE_EXTRACTION.md)
 
-Dev5 strengthens format prompts and diagnostics and adds the explicitly enabled format retry. Its offline tests establish the retry and validation behavior, not a real model's format success rate or extraction accuracy. Jev's absence does not make unsupported evidence acceptable.
+### Define a task and label examples
 
-### Run a complete paper and keep its outputs together
+For observations, a task needs just two entries. In `prompt_description`, say what to extract and when to keep observations separate. In `field_list`, give **every target field** a name and a definition that tells a reader what counts. Add `examples` when a short passage and your expected labels can resolve a tricky choice.
 
-Pass the complete UTF-8 `.md` or `.txt` paper to `--input`; the framework chunks it automatically. There is no need to split the paper manually or submit excerpts one at a time. Convert PDFs externally first. Keep reusable papers and tasks separate from disposable run outputs, outside this Git repository:
-
-```text
-../research/attestextract/
-  inputs/paper.md
-  tasks/paper.task.json
-  runs/paper/<timestamp>/
-    extraction.json
-    review.md
-    diagnostics/
-  RUN_HISTORY.md
-```
-
-Place your existing paper and task at the chosen paths, then run this PowerShell block from the repository root. It makes **real model calls** using `.env`; `--format-retries 1` explicitly allows the extra generation described above. Use `off` unless structured-output compatibility has been verified for your endpoint. Every run uses a new timestamp directory and fixed filenames.
-
-```powershell
-python -m attestextract --version
-$researchRoot = (Resolve-Path "..\research\attestextract" -ErrorAction Stop).Path
-$paper = (Resolve-Path (Join-Path $researchRoot "inputs\paper.md") -ErrorAction Stop).Path
-$task = (Resolve-Path (Join-Path $researchRoot "tasks\paper.task.json") -ErrorAction Stop).Path
-$paperStem = [IO.Path]::GetFileNameWithoutExtension($paper)
-$runDir = Join-Path $researchRoot "runs\$paperStem\$(Get-Date -Format 'yyyyMMdd-HHmmss-fff')"
-New-Item -ItemType Directory -Force -Path $runDir | Out-Null
-$output = Join-Path $runDir "extraction.json"
-$report = Join-Path $runDir "review.md"
-$logs = Join-Path $runDir "diagnostics"
-python -m attestextract extract --env-file .env --structured-output off --format-retries 1 --input "$paper" --task "$task" --output "$output" --report "$report" --log-dir "$logs"
-$extractExitCode = $LASTEXITCODE
-Get-Content "$logs\manifest.json" -Raw -Encoding UTF8
-$events = @(Get-Content "$logs\events.jsonl" -Encoding UTF8 | ForEach-Object { $_ | ConvertFrom-Json })
-$events | Where-Object { $_.stage -eq "format_retry" -or ($_.stage -eq "validation" -and $_.event -eq "rejected") } | Format-Table stage,event,chunk_id,format_attempt,path
-if ($extractExitCode -eq 0) {
-    $result = Get-Content "$output" -Raw -Encoding UTF8 | ConvertFrom-Json
-    $result.run | Format-List
-    Write-Output "Read the candidate review report: $report"
-}
-```
-
-Open `review.md` in a Markdown preview for the readable result; use `extraction.json` for programmatic processing and `diagnostics/` for investigation. Read `validation/*.errors.json` alongside the matching `responses/*.txt` inside diagnostics. A preserved first error followed by `format_retry/succeeded` means the new response passed format validation; it does not mean the original JSON was modified. A successful whole run requires exit code `0`, manifest status `succeeded`, and the final output. A successful empty result is not proof of completeness, and a report containing review items is not a set of accepted facts.
-
-For a smaller paid experiment, use a verbatim excerpt containing complete subject/condition context and any table header. An excerpt has a new document identity and offsets starting at zero, rather than full-paper offsets. To assess retry behavior, run the same input/task/model with `--format-retries 0` and then `1`, using a fresh run directory each time. Compare first-attempt format failures, recovered chunks, usage, and values/quotations separately; count only attempted chunks in failed runs. Repeat a fixed small set within your budget. One pair of runs cannot establish reliable improvement, and this comparison does not isolate prompt changes between versions.
-
-`RUN_HISTORY.md` is a suggested local experiment ledger, not a file automatically maintained by the CLI. Before removing old run directories, record each run's version, input/task identity, model, outcome, failure cause or recovery, and retained result locations; secure reusable inputs and task files in their separate directories first. Keep any raw evidence needed for later audits, because a summary cannot reconstruct deleted responses. Cleaning old outputs is an explicit local housekeeping step; `extract` does not automatically delete previous runs.
-
-## Python API and task format
-
-```python
-import os
-from attestextract import extract, load_task
-from attestextract.backends import OpenAICompatibleBackend
-
-task = load_task("src/attestextract/examples/procurement.task.json")
-backend = OpenAICompatibleBackend(
-    base_url=os.environ["ATTESTEXTRACT_BASE_URL"],
-    model=os.environ["ATTESTEXTRACT_MODEL"],
-    api_key=os.environ.get("ATTESTEXTRACT_API_KEY"),
-)
-result = extract("Purchase request: 5 desk lamps at USD 24.50 each, delivery within 10 days.", task, backend=backend)
-print(result.model_dump_json(indent=2))
-```
-
-A task declares record types, scalar fields, and optional identity/condition field lists. Names in these lists must refer to declared fields. Change the task and descriptions to change domains; no domain adapter is required. Prompts include a complete synthetic example tailored to the task's record types, fields, and scalar types. These generated examples explain the output contract; they are not evidence or records to copy from the input.
+Save this complete example as `task.json`. It asks for two properties and shows how to distinguish dry mass from a second mass reported for the same specimen.
 
 ```json
 {
-  "name": "measurements",
-  "description": "Extract explicitly reported measurements without unit conversion.",
-  "record_types": {
-    "measurement": {
-      "fields": {
-        "subject": {"type": "string", "description": "Named subject", "required": true},
-        "value": {"type": "number", "description": "Reported value", "required": true},
-        "condition": {"type": "string", "description": "Reported measurement condition"}
-      },
-      "identity_fields": ["subject"],
-      "condition_fields": ["condition"]
+  "prompt_description": "Collect explicitly reported specimen properties. Keep measurements under different conditions separate and preserve the reported units.",
+  "field_list": {
+    "dry_mass": "Mass measured after drying. Exclude measurements taken before drying.",
+    "thickness": "Reported specimen thickness at the stated measurement conditions."
+  },
+  "examples": [
+    {
+      "text": "Sample B weighed 5.1 g before drying. After drying, Sample B weighed 4.2 g. The drying temperature was 60 °C.",
+      "extractions": [
+        {
+          "field": "dry_mass",
+          "entity": "Sample B",
+          "value": "4.2",
+          "unit": "g",
+          "conditions": "60 °C",
+          "quote": "After drying, Sample B weighed 4.2 g.",
+          "quotes": {"conditions": "The drying temperature was 60 °C."}
+        }
+      ]
     }
+  ]
+}
+```
+
+**How to label your own example**
+
+- Put a short passage in `text` and the observations you would accept from **that passage** in `extractions`, one entry per observation. Here only 4.2 g meets the dry-mass definition. Thickness remains a target even though this passage gives no thickness measurement. To add another example, append another pair of `text` and `extractions` to the `examples` array. You can also omit `examples` entirely.
+- Set `field` to a key from `field_list`. Write `value` as a nonempty string, even for numbers or ranges. Keep the original unit. You can omit `entity`, `unit` or `conditions`, or set them to `null`, when the passage leaves them unstated.
+- Copy a continuous passage from the example's own `text` into `quote`. Here the second sentence supports the value and unit, while the third supplies the temperature. The `conditions` entry inside `quotes` cites that third sentence separately. When you run on `paper.md`, the examples guide the model and its output quotations are checked against `paper.md`.
+
+After installation you can check the task locally without a model or API key. Run this in the directory containing `task.json`.
+
+```sh
+python -c "from niceextract import load_task; print(list(load_task('task.json').record_types))"
+```
+
+For the example above, this prints `['dry_mass', 'thickness']`. An undeclared field or a quotation the loader cannot find raises an error identifying the offending entry. You still decide whether the passage supports your label. For custom record shapes such as subject–relation–object, see the relation task. [Another task covering mass and length](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/src/niceextract/examples/observations.task.json) · [Relation task](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/src/niceextract/examples/d1/relation/task.json) · [Task guide (in Chinese)](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/docs/SIMPLE_TASKS.md)
+
+## Configure the API and switch models
+
+A live run sends document content and task examples to the chosen provider and may incur charges.
+
+### Switch between built-in presets
+
+Set the key for the provider you want to use. You can either set an environment variable or put it in a private `.env` file. The examples below explicitly load that file. If you use environment variables only, omit `--env-file .env` in the CLI and `env_file=".env"` in Python. An existing environment variable takes precedence over the file.
+
+| Connection in this preview | Model ID | Key variable |
+| --- | --- | --- |
+| DeepSeek Chat | `deepseek:deepseek-flash` | `DEEPSEEK_API_KEY` |
+| DeepSeek Responses | `deepseek-responses:deepseek-flash` | `DEEPSEEK_API_KEY` |
+| Qwen Chat (Beijing) | `qwen:qwen3.8-27b` or `qwen:qwen-plus` | `DASHSCOPE_API_KEY` or `QWEN_API_KEY` |
+
+A private `.env` file can hold both providers' keys. Replace the placeholders for the providers you use.
+
+```dotenv
+DEEPSEEK_API_KEY=your-deepseek-key
+DASHSCOPE_API_KEY=your-dashscope-key
+```
+
+Run `niceextract models` to list the presets included in your installation. Pick either command below. The input and task are the same, and separate JSON files make it easy to compare the candidates if you try both models.
+
+```sh
+niceextract extract --input paper.md --task task.json --env-file .env --model-id deepseek:deepseek-flash --output deepseek.json
+niceextract extract --input paper.md --task task.json --env-file .env --model-id qwen:qwen3.8-27b --output qwen.json
+```
+
+Append `--check` to preview the configuration, document chunks and call budget offline. To compare models, start a fresh run for each. A saved checkpoint belongs to the model and task that created it.
+
+### Use the same task in Python
+
+In a notebook or script, change `model` to switch presets. This reads the same two files used by the CLI and prints the result as JSON.
+
+```python
+from pathlib import Path
+from niceextract import extract, load_task
+
+model = "deepseek:deepseek-flash"  # or "qwen:qwen3.8-27b"
+result = extract(
+    text=Path("paper.md").read_bytes().decode("utf-8-sig"),
+    task=load_task("task.json"),
+    model=model,
+    env_file=".env",
+)
+print(result.model_dump_json(indent=2))
+```
+
+### Connect a lab gateway or reuse a team configuration
+
+**Compatible API.** For a service offering a non-streaming OpenAI-compatible Chat Completions API with a bearer key, use its base URL and its own model name. Replace the example address and model below, and set `LAB_MODEL_KEY` to the key for that endpoint. In Python, pass `base_url`, the raw `model` name and `api_key_env="LAB_MODEL_KEY"` to the same `extract()` call. [Connection guide (in Chinese)](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/docs/MINIMAL_API.md)
+
+```sh
+niceextract extract --input paper.md --task task.json --env-file .env --base-url https://gateway.example/v1 --model lab-model --api-key-env LAB_MODEL_KEY --output gateway.json
+```
+
+**Named configurations.** If your team shares endpoints, timeouts or generation settings, store them as named profiles in a TOML file. Select a profile by name and keep its key in your environment or private `.env`. The bundled `qwen` profile reads `DASHSCOPE_API_KEY`. [Example configuration](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/examples/backends.toml) · [Provider and profile guide](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/docs/BACKENDS.md)
+
+```sh
+niceextract extract --input paper.md --task task.json --env-file .env --config examples/backends.toml --profile qwen --output profile-result.json
+```
+
+## Prepare one task for several papers
+
+**dev60 preview.** These commands apply once dev60 is available. To use this workflow, add a top-level `field_types` entry to the task above. With both fields declared numeric as shown here, the shared task can be prepared offline. By default numeric fields accept single values, ranges and one-sided bounds.
+
+```json
+{
+  "field_types": {
+    "dry_mass": {"kind": "numeric"},
+    "thickness": {"kind": "numeric"}
   }
 }
 ```
 
-Types are `string`, `integer`, `number`, and `boolean`; booleans do not count as integers. They constrain the entries in `values`; entries in `quotes` must be strings. For the synthetic source `Sample A measured 12 bar at 20 °C.`, a complete completion for the task above is:
-
-```json
-{"records": [{"record_type": "measurement", "values": {"subject": "Sample A", "value": 12, "condition": "20 °C"}, "quotes": {"subject": "Sample A measured 12 bar at 20 °C.", "value": "Sample A measured 12 bar at 20 °C.", "condition": "Sample A measured 12 bar at 20 °C."}}]}
+```sh
+niceextract prepare-task --task task.json --output-dir prepared
 ```
 
-Only declared record types and fields are accepted. Invalid JSON, unknown fields, and wrong scalar types fail explicitly. Missing/null/blank required, identity, or condition fields enter the review queue. Optional missing values produce informational items; empty records still require review. Outside strict structured mode, omitting an optional field is allowed. `not_applicable_when` classifies missing values only; an explicitly reported unit such as `%` remains reported even for a dimensionless parameter.
+Then run extraction on each paper with your configured model. This example names the specimen as the row subject.
 
-Evidence quotes must preserve the input **verbatim**, including OCR errors, spaces, Unicode symbols, and LaTeX notation. Do not replace a source expression such as `$10^{-3}$` with `0.001` inside `quote`, or silently fix OCR text. A typed field value can represent the reported scalar, but its quotation must remain the exact source substring. JSON string escaping is still required, for example `\\` for a literal LaTeX backslash.
-
-## Document, review, and archive contracts
-
-`extract(text, task, backend=...)` remains a candidate-producing API and also accepts a `Document`. Creating an archive is a separate, explicit action:
-
-```python
-from attestextract import (
-    CandidateReview, Document, DocumentMetadata, create_archive, extract,
-    load_archive, save_archive,
-)
-
-document = Document.from_text(
-    "Synthetic source text.",
-    source_name="source.txt",
-    metadata=DocumentMetadata(title="Synthetic example"),
-)
-# `task` and `backend` are configured as in the extraction example above.
-result = extract(document, task, backend=backend)
-pending = create_archive(document, result)
-assert pending.records == []  # Exact evidence matching does not accept a candidate.
-
-# After actually reviewing the candidate and evidence, record that decision:
-if result.candidates:
-    review = CandidateReview(
-        candidate_id=result.candidates[0].candidate_id,
-        status="accepted",
-        reviewer="Example reviewer",
-        rationale="Reviewed this candidate against the exact source and task.",
-    )
-    reviewed = create_archive(document, result, reviews=[review])
-    save_archive(reviewed, "reviewed-archive.json")
-    restored = load_archive("reviewed-archive.json")
+```sh
+niceextract extract --input paper.md --task prepared/task.json --env-file .env --model-id deepseek:deepseek-flash --table-subject "individual specimens" --output-dir run
 ```
 
-The sample review must be supplied only after real review; it is not a recipe for automatically accepting the first candidate. An accepted candidate must also have complete required fields and exact evidence. To inspect an already labelled synthetic case directly, use `from attestextract.d1_examples import load_d1_example` followed by `load_d1_example("attribute")`.
+Use the same `prepared/task.json` to extract each paper into its own output directory. To let a model suggest types for some fields, omit those declarations and supply `--model-id` and the corresponding credentials to `prepare-task`. The saved task records which types came from you and which came from the model. Reusing it saves the field-preparation calls on subsequent papers.
 
-| Contract | Stored information and rules |
-| --- | --- |
-| `Document` | Embedded exact decoded `text`, `document_id`, SHA-256, character count, source name, representation (`text/plain` or `text/markdown`), and representation version. `DocumentMetadata` optionally stores title, authors, year, DOI, and source URI. |
-| `TaskSpec` | Named task, record types, typed scalar fields, instructions, and identity/condition field references. |
-| `Candidate` / `EvidenceRef` | Candidate ID, typed fields, exact quotations, Unicode character spans or unresolved evidence states, chunk references, and structural checks. |
-| `CandidateReview` | Existing candidate ID, `accepted` / `rejected` / `needs_review` / `unreviewed`, reviewer, rationale, optional annotation reference, and origin. Nontrivial human/fixture decisions require a reviewer and rationale. |
-| `FinalRecord` | Accepted candidate's unchanged fields/evidence, its candidate and document references, and a record ID. Rejected and pending candidates remain in the archive without becoming accepted records. |
-| `ExtractionArchive` | `archive_schema_version: "0.1"`, `document`, `extraction`, `reviews`, and `records`; extraction retains its own schema version and run information. |
+In `run/dataset/`, open `main.csv` for the field values, their basis and their citation status. To check one cell, take the matching data row in `lineage.json` (`rows` follows the CSV data-row order). Its `cells` entry for that field lists the observation IDs. Look up those IDs in `observations.csv` or `dataset.json` for the original value, unit, measured object and evidence. A located citation tells you where the wording occurs. Read the passage to judge whether it supports the interpretation.
 
-If no explicit review is supplied, candidates become `unreviewed`, or `needs_review` when checks are unresolved; system checks never set `accepted`. `origin: "human"` records caller-provided attribution and does not authenticate a person's identity. Synthetic cases are labelled `synthetic_fixture`, and automatically assigned pending states are labelled `system`. “Accepted record” means an explicit recorded review decision, not an independently proven fact. Changing a value requires a new candidate and review; a final record cannot silently overwrite its source candidate.
+For a second opinion on pending observations, `niceextract review-dataset` writes a local model’s decisions to a separate directory. This optional adapter requires a separately obtained, trusted Intern-Decision-4B checkpoint, its inference code and a compatible environment.
 
-`save_document` / `load_document` and `save_archive` / `load_archive` persist UTF-8 JSON and validate hashes, counts, IDs, references, and evidence on reload. Document IDs identify an exact text representation; metadata does not establish source authenticity. Preserve the input string's line endings when reading source files, for example with `Path(path).read_bytes().decode("utf-8")`. Markdown converted from a PDF has its own text positions, not PDF page or bounding-box coordinates.
+## Review a result
 
-## Evidence, output, and limits
+Open a saved extraction JSON to inspect its candidates, evidence and warnings. For a more readable view, run the following in the unpacked preview ZIP, which contains the single-document example. It runs offline and writes the review to a new directory.
 
-- Input is a UTF-8 `.txt` or `.md` document. Paragraphs and simple pipe tables are chunked, preserving original source segments; later table batches repeat their original headers. The default target is 6,000 characters and at most 12 rows per table batch. A header or row is atomic and may exceed the character target. Convert PDFs externally with a tool such as MinerU before extraction.
-- Each candidate retains field values, quoted evidence, a stable ID, chunk IDs, and structural/evidence checks. Conditions remain ordinary schema fields. Half-open `start`/`end` offsets count Unicode characters in the decoded input string, not UTF-8 bytes or UTF-16 code units: `text[start:end] == quote` for uniquely matched evidence.
-- Evidence is searched within the passages actually supplied to the model. Exact matches retain the original quote contract; conservative normalized matches separately retain source text and always require review. Missing, absent, or ambiguous quotes require review; ambiguous matches have no guessed `start`/`end`. Optional null/blank/omitted fields produce one `info` item rather than two review failures. Task-declared critical conditions remain blocking. Only identical candidates grounded at the same source locations are deduplicated. Equal values from different locations or conditions remain separate.
-- New result JSON uses `schema_version: "0.4"`, with `package_version`, `task`, `source`, `candidates`, `review`, `links`, and `run`. The reader still accepts `0.1`, `0.2` and `0.3`; older readers need upgrading for `0.4`. Review items have `severity: "review" | "info"`. Candidate `field_status` distinguishes reported, not reported by the model, task-declared not applicable, and required missing. Configured `measurements` keep shared context and exact token spans; their `semantic_status` remains `not_verified`. New identity rules for optional missing values and measurement metadata can change candidate IDs; do not reuse earlier review decisions without checking provenance. Run information includes backend, `live`/`replay` mode, model, counts, attempts, usage if reported, and elapsed time. A successful empty extraction has no candidates; failures raise exceptions instead.
-- A matched quote proves that text occurs at a location. It **does not prove that the extracted value is supported or factually correct**. Ordinary extraction alone does not verify semantic ownership or resolve object identity. The optional analysis stage proposes those judgments with source evidence; it does not provide expert acceptance, guaranteed factual adjudication, full PDF parsing, or a complete replacement for the original CCUS workflow's Stage2.5/Stage3.
-
-`ExtractionBackend` defines the generation boundary. `ReplayBackend` is available for explicit offline replay and tests. `DecisionBackend`, `DecisionTask`, and `DecisionResult` reserve a separate decision boundary: `validate_decision` allows selecting only a supplied candidate, rejecting, or requesting review. Decisions cannot invent a replacement candidate. The extraction pipeline does not yet call a decision backend.
-
-## Development and roadmap
-
-```bash
-python -m pip install -e ".[dev]"
-python -m pytest
-python -m build
+```sh
+niceextract export-review --input examples/ccus-result.json --output-dir review-example
 ```
 
-CI runs on Windows and Ubuntu with Python 3.11 and 3.13. Public tests use synthetic fixed responses, mocked HTTP and loopback-only TLS handshakes, never paid model requests. They compare all three D1 cases to hand-written expected semantic output and check archive persistence and invalid references. CI also installs the wheel in a clean environment outside the checkout and runs both original demos and all three D1 archives. Format regression tests cover rejected output, bounded regeneration, preserved attempts, and subsequent evidence checks. End-to-end model quality and provider compatibility require separate evaluation against your chosen endpoint and corpus.
+Open `review-example/annotation.md` to read fields alongside their values, conditions and quotations. Use `annotation.json` for the same review in structured form. You can run this command on your own `deepseek.json` or `qwen.json` with a fresh output directory. [Guide to reviewing results (in Chinese)](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/docs/EXPERT_REVIEW.md)
 
-Next steps are a Jev-style bounded decision adapter, conflict handling and support verification, and compatibility outputs for the earlier CCUS workflow. These are plans, not implemented features or performance claims. The public prototype contains only new framework code and synthetic examples; it does not include research documents, annotations, patents, original workflow outputs, or credentials.
+## License
 
-Related work: [LangExtract](https://github.com/google/langextract) and the existing [JevExtract](https://github.com/gabazureus/jevextract) project. AttestExtract is a separate early project and does not vendor either implementation.
-
-No license has been added to this early repository. Public availability does not grant an open-source license. This version is not published to PyPI.
-
-
-### Flat protocol and range evidence (dev17)
-
-The internal candidate/archive format still uses `fields`. Model text is saved separately from `normalized/<stem>.json`; `output-protocol.json` records the selected extraction protocol. An HTTP `responses/<stem>.protocol.json` describes the provider envelope and has a different purpose. New extraction metadata records `run.output_protocol`.
-
-For explicit historical offline replay only, use `ReplayBackend(responses, output_protocol="native-v1")`. The default replay format is flat, as are all new live requests and examples. There is no protocol auto-detection or fallback. Keep old raw files: invalid legacy JSON still fails. Missing quote keys produce missing evidence rather than invented quotes; quote-only keys fail.
-
-Result schema 0.3 adds local `range_binding` evidence: two exact endpoints, a separator, unit positions and their shared/per-endpoint/table-header relationship. Repeated unit strings keep their original ambiguous match list while a valid range binding resolves their relationship. Clear identifier/subscript digits are distinguished from independent quantities; malformed OCR and mixed units stay in review. Old archives keep their legacy identity and check semantics. Package/protocol changes require a new run; old checkpoints are not migrated.
-
-See [measurement review](docs/MEASUREMENT_REVIEW.md) for boundaries. To verify an installed package with synthetic material and no network calls:
-
-```powershell
-python scripts/protocol_evidence_smoke.py --output-dir outputs/protocol-evidence-check
-```
-
-Use a fresh output directory. This acceptance checks software behavior, not a new model success rate.
+The linked preview source is distributed under the Apache License 2.0. Copyright 2026 Yuzhi Kuang. [Apache License 2.0](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/LICENSE) · [Attribution](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/NOTICE)
