@@ -12,10 +12,10 @@ import re
 import httpx
 import pytest
 
-from attestextract import ExecutionOptions, GenerationOptions, RunTrace, extract
-from attestextract.backends import OpenAICompatibleBackend
-from attestextract.errors import BackendError, ConfigurationError, InvalidResponseError
-from attestextract.execution import digest
+from niceextract import ExecutionOptions, GenerationOptions, RunTrace, extract
+from niceextract.backends import OpenAICompatibleBackend
+from niceextract.errors import BackendError, ConfigurationError, InvalidResponseError
+from niceextract.execution import digest
 
 
 FIXTURE = Path(__file__).parent / "fixtures/dev32_table_truncated.json"
@@ -228,9 +228,9 @@ def test_new_run_known_length_splits_but_timeout_does_not(tmp_path):
 
 
 def test_automatic_table_windows_preserve_route_provenance_and_budget(monkeypatch, tmp_path):
-    from attestextract.automatic_provenance import validate_automatic_provenance
+    from niceextract.automatic_provenance import validate_automatic_provenance
 
-    monkeypatch.setenv("ATTESTEXTRACT_MODEL_CACHE_DIR", str(tmp_path / "model-cache"))
+    monkeypatch.setenv("NICEEXTRACT_MODEL_CACHE_DIR", str(tmp_path / "model-cache"))
     original_client = httpx.Client
     calls = []
 
@@ -273,9 +273,9 @@ def test_automatic_table_windows_preserve_route_provenance_and_budget(monkeypatc
 
 
 def test_cli_check_reports_saved_windows_and_reuse_without_network(monkeypatch, tmp_path, capsys):
-    from attestextract import cli
+    from niceextract import cli
 
-    monkeypatch.setenv("ATTESTEXTRACT_API_KEY", "synthetic-key")
+    monkeypatch.setenv("NICEEXTRACT_API_KEY", "synthetic-key")
     source = tmp_path / "synthetic.md"
     source.write_text("Sample A length is 1 m.\n\n| Sample | Value/m |\n| --- | --- |\n| F | 6 |\n| G | 7 |\n")
     task = tmp_path / "task.json"

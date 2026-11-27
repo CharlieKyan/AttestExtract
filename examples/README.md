@@ -1,6 +1,6 @@
 # Synthetic examples
 
-The runnable data is packaged under [`src/attestextract/examples`](../src/attestextract/examples), so it remains available after a wheel installation outside this checkout:
+The runnable data is packaged under [`src/niceextract/examples`](../src/niceextract/examples), so it remains available after a wheel installation outside this checkout:
 
 | Example | Source | Task | Fixed completion | Purpose |
 | --- | --- | --- | --- | --- |
@@ -9,17 +9,17 @@ The runnable data is packaged under [`src/attestextract/examples`](../src/attest
 
 All source material and completion responses were written for this demonstration. They are not experimental findings, literature extracts, real purchase requests, or model-generated evaluation results.
 
-Run `attestextract demo --example all`. This explicitly replays fixed completions through the normal pipeline; it performs no model inference. For live extraction, configure an endpoint and run:
+Run `niceextract demo --example all`. This explicitly replays fixed completions through the normal pipeline; it performs no model inference. For live extraction, configure an endpoint and run:
 
 ```bash
-attestextract extract --input src/attestextract/examples/procurement.md --task src/attestextract/examples/procurement.task.json --output extraction-results.json
+niceextract extract --input src/niceextract/examples/procurement.md --task src/niceextract/examples/procurement.task.json --output extraction-results.json
 ```
 
 The live result is produced by the configured model and is not expected to match the replay exactly. Review its candidates and evidence before relying on them.
 
 ## D1 manual expected examples
 
-Three additional cases live under [`src/attestextract/examples/d1`](../src/attestextract/examples/d1):
+Three additional cases live under [`src/niceextract/examples/d1`](../src/niceextract/examples/d1):
 
 | Case | Intended distinction | Candidate / accepted record count |
 | --- | --- | --- |
@@ -32,8 +32,8 @@ Each directory contains `source.txt`, `task.json`, `response.json`, `reviews.jso
 `response.json` is a fixed extraction response, not a final answer. `reviews.json` manually labels candidates using zero-based `candidate_index`; duplicate or out-of-range indices fail. `expected.json` is the independent manual semantic target: case type, counts, review states, and accepted record fields with values, quotations, and half-open Unicode character offsets. It excludes run timing and generated identities. Offsets count the exact source string, including newlines.
 
 ```bash
-attestextract d1 --example all --output d1-archives.json
-attestextract d1 --example relation
+niceextract d1 --example all --output d1-archives.json
+niceextract d1 --example relation
 ```
 
-This command replays the fixed extraction response, applies the explicit fixture labels, and returns validated archives with exact documents, candidates, review states, and accepted records. Missing review labels never cause automatic acceptance. The relation example is a minimal three-string record type, not a graph inference or event-processing engine. Use `load_d1_example(name)` from `attestextract.d1_examples` for the Python equivalent.
+This command replays the fixed extraction response, applies the explicit fixture labels, and returns validated archives with exact documents, candidates, review states, and accepted records. Missing review labels never cause automatic acceptance. The relation example is a minimal three-string record type, not a graph inference or event-processing engine. Use `load_d1_example(name)` from `niceextract.d1_examples` for the Python equivalent.

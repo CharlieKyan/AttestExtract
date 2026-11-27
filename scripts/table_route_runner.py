@@ -17,13 +17,13 @@ import platform
 import re
 import time
 
-import attestextract
-from attestextract.config import BackendConfig
-from attestextract.diagnostics import RunTrace, redact_text
-from attestextract.errors import BackendError, ConfigurationError
-from attestextract.models import BackendResponse, ExtractionRequest, TaskSpec
-from attestextract.registry import default_registry
-from attestextract.storage import _reject_constant, _unique_object
+import niceextract
+from niceextract.config import BackendConfig
+from niceextract.diagnostics import RunTrace, redact_text
+from niceextract.errors import BackendError, ConfigurationError
+from niceextract.models import BackendResponse, ExtractionRequest, TaskSpec
+from niceextract.registry import default_registry
+from niceextract.storage import _reject_constant, _unique_object
 
 
 DEFAULT_BACKEND = {
@@ -61,9 +61,9 @@ def write_new(path: Path, value) -> None:
 
 
 def runtime_identity() -> dict:
-    package = Path(attestextract.__file__).resolve().parent
+    package = Path(niceextract.__file__).resolve().parent
     scripts = Path(__file__).resolve().parent
-    return {"package_version": attestextract.__version__, "python": platform.python_version(),
+    return {"package_version": niceextract.__version__, "python": platform.python_version(),
             "package_files": {p.relative_to(package).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
                               for p in sorted(package.rglob("*.py"))},
             "scripts": {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
@@ -73,10 +73,10 @@ def runtime_identity() -> dict:
 def _private_root(output: Path) -> Path:
     target = output.resolve()
     repo = Path(__file__).resolve().parents[1]
-    package = Path(attestextract.__file__).resolve().parent
+    package = Path(niceextract.__file__).resolve().parent
     forbidden_roots = [package]
     for candidate in (repo, package.parent.parent):
-        if (candidate / "pyproject.toml").is_file() and (candidate / "src/attestextract").is_dir():
+        if (candidate / "pyproject.toml").is_file() and (candidate / "src/niceextract").is_dir():
             forbidden_roots.append(candidate)
     for forbidden in forbidden_roots:
         if target == forbidden or target.is_relative_to(forbidden):
@@ -134,7 +134,7 @@ def prepare_bundle(output: Path, cases: list[dict], backend_config: dict | None 
                    *, replay_overrides: dict | None = None, replay_only: bool = False,
                    rounds: int = 1, replay_provenance: dict | None = None,
                    frozen_table_inputs: dict | None = None) -> dict:
-    from attestextract.table_routes import build_route_request, build_table_input
+    from niceextract.table_routes import build_route_request, build_table_input
     root = _private_root(output)
     if root.exists():
         raise ConfigurationError("Choose a new experiment directory; existing bundles are never overwritten.")
@@ -397,7 +397,7 @@ def load_outcomes(root: Path, slots: list[dict]) -> dict:
 
 
 def inspect_bundle(root: Path) -> dict:
-    from attestextract.table_reporting import summarize_table_bundle
+    from niceextract.table_reporting import summarize_table_bundle
     bundle = load_bundle(root)
     outcomes = load_outcomes(root, bundle["slots"])
     return {"network_calls": 0, "planned_slots": len(bundle["slots"]), "outcomes": len(outcomes),
@@ -413,7 +413,7 @@ def summarize_bundle(root: Path) -> dict:
     Frozen inputs and recorded trial evidence must still pass their hashes. This
     does not re-evaluate them with new core logic or overwrite the old report.
     """
-    from attestextract.table_reporting import summarize_table_bundle
+    from niceextract.table_reporting import summarize_table_bundle
     bundle = load_bundle(root, check_runtime=False)
     load_outcomes(root, bundle["slots"])
     return {"network_calls": 0, **summarize_table_bundle(root)}
@@ -444,7 +444,7 @@ def _redact_payload(value, secret: str):
 
 def run_bundle(root: Path, *, mode: str = "replay", environment: dict | None = None,
                backend_factory=None) -> dict:
-    from attestextract.table_routes import evaluate_route, parse_route_response_partial, reconcile_results
+    from niceextract.table_routes import evaluate_route, parse_route_response_partial, reconcile_results
     if mode not in {"replay", "live"}:
         raise ConfigurationError("Experiment mode must be replay or live.")
     root = root.resolve()
@@ -582,7 +582,7 @@ def run_bundle(root: Path, *, mode: str = "replay", environment: dict | None = N
 
 
 def write_report(root: Path) -> Path:
-    from attestextract.table_reporting import render_table_report, summarize_table_bundle
+    from niceextract.table_reporting import render_table_report, summarize_table_bundle
     bundle = load_bundle(root, check_runtime=False)
     load_outcomes(root, bundle["slots"])
     target = root.resolve() / "REPORT.html"

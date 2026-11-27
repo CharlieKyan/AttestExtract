@@ -3,11 +3,11 @@
 import httpx
 import pytest
 
-from attestextract.backends import OpenAICompatibleBackend
-from attestextract.capabilities import check_structured_output, structured_output_capabilities
-from attestextract.errors import ConfigurationError
-from attestextract.models import ExtractionRequest
-from attestextract.providers import resolve_model_config
+from niceextract.backends import OpenAICompatibleBackend
+from niceextract.capabilities import check_structured_output, structured_output_capabilities
+from niceextract.errors import ConfigurationError
+from niceextract.models import ExtractionRequest
+from niceextract.providers import resolve_model_config
 
 
 REQUEST = ExtractionRequest(chunk_id="chunk-0001", messages=[{"role": "user", "content": "Return JSON."}],

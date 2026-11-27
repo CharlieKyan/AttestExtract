@@ -5,12 +5,12 @@ import json
 import httpx
 import pytest
 
-from attestextract import extract
-from attestextract.backends import OpenAICompatibleBackend
-from attestextract.config import resolve_backend_config
-from attestextract.errors import ConfigurationError
-from attestextract.providers import resolve_model_config
-from attestextract.registry import default_registry
+from niceextract import extract
+from niceextract.backends import OpenAICompatibleBackend
+from niceextract.config import resolve_backend_config
+from niceextract.errors import ConfigurationError
+from niceextract.providers import resolve_model_config
+from niceextract.registry import default_registry
 
 
 PROFILE = '''[profiles.test]
@@ -100,7 +100,7 @@ def test_python_model_options_reach_actual_request_timeouts(controls, expected, 
         assert kwargs["tls_mode"] == tls_mode
         return OpenAICompatibleBackend(*args, **kwargs, transport=httpx.MockTransport(handler))
 
-    monkeypatch.setattr("attestextract.backends.OpenAICompatibleBackend", factory)
+    monkeypatch.setattr("niceextract.backends.OpenAICompatibleBackend", factory)
     original = json.loads(json.dumps(controls))
     extract("Synthetic text.", {"name": "synthetic", "record_types": {"item": {"fields": {"value": {"type": "string"}}}}},
             model="qwen:qwen-plus", api_key="synthetic-key",

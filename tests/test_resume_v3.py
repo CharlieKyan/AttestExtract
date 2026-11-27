@@ -8,14 +8,14 @@ from pathlib import Path
 import httpx
 import pytest
 
-from attestextract import ExecutionOptions, extract
-from attestextract.backends import OpenAICompatibleBackend
-from attestextract.decision_bundle import prepare_decision_bundle
-from attestextract.diagnostics import RunTrace
-from attestextract.errors import BackendError, ConfigurationError
-from attestextract.execution import digest, prepare_execution
-from attestextract.models import GenerationOptions, TaskSpec
-from attestextract.pipeline import _validate_cached_responses
+from niceextract import ExecutionOptions, extract
+from niceextract.backends import OpenAICompatibleBackend
+from niceextract.decision_bundle import prepare_decision_bundle
+from niceextract.diagnostics import RunTrace
+from niceextract.errors import BackendError, ConfigurationError
+from niceextract.execution import digest, prepare_execution
+from niceextract.models import GenerationOptions, TaskSpec
+from niceextract.pipeline import _validate_cached_responses
 
 
 FIXTURE = Path(__file__).parent / "fixtures/dev19_v2_failed"
@@ -81,7 +81,7 @@ def test_frozen_dev19_python_identity_migrates(tmp_path):
 
 @pytest.mark.parametrize("changed", ["source", "model", "endpoint", "generation", "context"])
 def test_legacy_semantic_changes_are_rejected_before_network(changed):
-    from attestextract.models import ContextOptions
+    from niceextract.models import ContextOptions
     calls = []
     changes = {}
     if changed == "source":
@@ -161,13 +161,13 @@ def test_frozen_legacy_resume_requests_only_remaining_leaf_and_exports_decisions
 
 @pytest.mark.parametrize("resumed_tls", ["1.2", "tls12_fallback"])
 def test_sixteen_chunks_timeout_resume_reuses_eleven_with_five_call_budget(tmp_path, monkeypatch, resumed_tls):
-    import attestextract
+    import niceextract
     text = "\n\n".join(f"Item {n:02} reads 11." for n in range(16))
     task = read(FIXTURE / "inputs.json")["task"]
     first, second = tmp_path / "first", tmp_path / "second"
     trace = RunTrace(first)
     calls = []
-    monkeypatch.setattr(attestextract, "__version__", "0.1.0.dev23")
+    monkeypatch.setattr(niceextract, "__version__", "0.1.0.dev23")
     with pytest.raises(BackendError) as failure:
         extract(text, task, backend=backend(calls=calls,trace=trace,fail_at=12,timeout=60,max_attempts=3,tls_mode="auto"),
             trace=trace,max_chunk_chars=19,
@@ -178,7 +178,7 @@ def test_sixteen_chunks_timeout_resume_reuses_eleven_with_five_call_budget(tmp_p
     assert len(state["nodes"]) == 16 and sum(n["status"] == "completed" for n in state["nodes"].values()) == 11
     trace2 = RunTrace(second)
     more = []
-    monkeypatch.setattr(attestextract,"__version__","0.1.0.dev999")
+    monkeypatch.setattr(niceextract,"__version__","0.1.0.dev999")
     result = extract(text, task, backend=backend(calls=more,trace=trace2,read_timeout=180,tls_mode=resumed_tls,max_attempts=1),
         trace=trace2,max_chunk_chars=19,resume_from=first,
         execution=ExecutionOptions(adaptive_chunking=False,min_chunk_chars=1,max_model_calls=17))

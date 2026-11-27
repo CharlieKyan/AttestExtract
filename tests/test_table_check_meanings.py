@@ -5,8 +5,8 @@ import json
 
 import pytest
 
-from attestextract.table_reporting import render_table_report, table_check_label
-from attestextract.table_routes import build_table_input, evaluate_route, parse_route_response_partial
+from niceextract.table_reporting import render_table_report, table_check_label
+from niceextract.table_routes import build_table_input, evaluate_route, parse_route_response_partial
 
 
 def cumulative_case(scope="group", scope_text="Combined volume/L"):

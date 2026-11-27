@@ -11,12 +11,12 @@ import sys
 
 import pytest
 
-from attestextract.d1_examples import d1_example_names, load_d1_example
-from attestextract.storage import load_archive, save_archive
+from niceextract.d1_examples import d1_example_names, load_d1_example
+from niceextract.storage import load_archive, save_archive
 
 
 def gold(name):
-    resource = files("attestextract").joinpath("examples", "d1", name, "expected.json")
+    resource = files("niceextract").joinpath("examples", "d1", name, "expected.json")
     return json.loads(resource.read_text(encoding="utf-8"))
 
 
@@ -87,10 +87,10 @@ def test_observation_keeps_conditions_in_final_records():
 
 
 def run_cli(*args: str, cwd: Path):
-    env = {key: value for key, value in os.environ.items() if not key.startswith("ATTESTEXTRACT_")}
+    env = {key: value for key, value in os.environ.items() if not key.startswith(("NICEEXTRACT_", "ATTESTEXTRACT_"))}
     env["PYTHONUTF8"] = "1"
     return subprocess.run(
-        [sys.executable, "-m", "attestextract", *args], cwd=cwd, env=env,
+        [sys.executable, "-m", "niceextract", *args], cwd=cwd, env=env,
         capture_output=True, text=True, encoding="utf-8", timeout=30, check=False,
     )
 

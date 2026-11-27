@@ -6,11 +6,11 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
-from attestextract.backends import OpenAICompatibleBackend, ReplayBackend
-from attestextract.diagnostics import RunTrace
-from attestextract.errors import BackendError, ConfigurationError, InvalidResponseError
-from attestextract.models import ExtractionRequest, GenerationOptions
-from attestextract.pipeline import extract
+from niceextract.backends import OpenAICompatibleBackend, ReplayBackend
+from niceextract.diagnostics import RunTrace
+from niceextract.errors import BackendError, ConfigurationError, InvalidResponseError
+from niceextract.models import ExtractionRequest, GenerationOptions
+from niceextract.pipeline import extract
 
 
 TASK = {"name": "synthetic", "record_types": {"item": {"fields": {"name": {"type": "string"}}}}}

@@ -6,12 +6,12 @@ import json
 
 import pytest
 
-from attestextract import extract, ExtractionResult, RunTrace
-from attestextract.backends import ReplayBackend
-from attestextract.expert_review import build_expert_review, render_expert_review, save_expert_review
-from attestextract.models import BackendResponse, CandidateLink, CheckResult, ReviewItem
-from attestextract.reporting import render_markdown_report
-from attestextract.run_output import save_run_result
+from niceextract import extract, ExtractionResult, RunTrace
+from niceextract.backends import ReplayBackend
+from niceextract.expert_review import build_expert_review, render_expert_review, save_expert_review
+from niceextract.models import BackendResponse, CandidateLink, CheckResult, ReviewItem
+from niceextract.reporting import render_markdown_report
+from niceextract.run_output import save_run_result
 
 
 SOURCE = "A has porosity 10~20% (mean 15%) and permeability 7 mD under warm conditions."

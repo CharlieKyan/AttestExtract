@@ -7,7 +7,7 @@ import sys
 
 import pytest
 
-from attestextract.errors import ConfigurationError
+from niceextract.errors import ConfigurationError
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
 import table_route_runner as runner

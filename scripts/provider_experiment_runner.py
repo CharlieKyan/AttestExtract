@@ -16,13 +16,13 @@ from pathlib import Path
 import time
 from typing import Callable
 
-from attestextract import Document, extract
-from attestextract.config import BackendConfig
-from attestextract.diagnostics import RunTrace
-from attestextract.errors import BackendError, ConfigurationError
-from attestextract.models import ContextOptions, ExecutionOptions, ExtractionRequest, GenerationOptions
-from attestextract.registry import default_registry
-from attestextract.reporting import render_markdown_report
+from niceextract import Document, extract
+from niceextract.config import BackendConfig
+from niceextract.diagnostics import RunTrace
+from niceextract.errors import BackendError, ConfigurationError
+from niceextract.models import ContextOptions, ExecutionOptions, ExtractionRequest, GenerationOptions
+from niceextract.registry import default_registry
+from niceextract.reporting import render_markdown_report
 
 from provider_experiment_bundle import _read, load_bundle, runtime_identity
 from provider_experiment_reporting import (score_response, select_connections,

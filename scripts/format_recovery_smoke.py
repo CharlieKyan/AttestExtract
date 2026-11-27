@@ -15,9 +15,9 @@ from unittest.mock import patch
 
 import httpx
 
-import attestextract
-from attestextract import ExecutionOptions, backends, cli, extract
-from attestextract.errors import InvalidResponseError
+import niceextract
+from niceextract import ExecutionOptions, backends, cli, extract
+from niceextract.errors import InvalidResponseError
 
 
 _TASK = {"name": "Synthetic format recovery", "record_types": {"reading": {
@@ -298,12 +298,12 @@ def _offline_only():
         raise AssertionError("Network and .env access are forbidden in this synthetic acceptance.")
 
     environment = {key: value for key, value in os.environ.items() if not key.startswith(
-        ("ATTESTEXTRACT_", "DEEPSEEK_", "QWEN_", "DASHSCOPE_", "VLM_", "OPENAI_"))}
+        ("NICEEXTRACT_", "ATTESTEXTRACT_", "DEEPSEEK_", "QWEN_", "DASHSCOPE_", "VLM_", "OPENAI_"))}
     environment["DEEPSEEK_API_KEY"] = "synthetic-key"
     with patch.dict(os.environ, environment, clear=True), \
             patch("socket.socket.connect", blocked), patch("socket.socket.connect_ex", blocked), \
             patch("socket.create_connection", blocked), patch("socket.getaddrinfo", blocked), \
-            patch("attestextract.envconfig.load_env_file", blocked), patch.object(cli, "load_env_file", blocked):
+            patch("niceextract.envconfig.load_env_file", blocked), patch.object(cli, "load_env_file", blocked):
         yield
 
 
@@ -339,8 +339,8 @@ def main(argv=None):
     with _offline_only():
         recovery, exhausted = _existing_cases(root)
         legacy_entries = {entry: _legacy_entry_case(root, entry) for entry in ("cli", "python")}
-    summary = {"passed": True, "package_version": attestextract.__version__,
-               "module_path": attestextract.__file__, "real_endpoint_calls": 0,
+    summary = {"passed": True, "package_version": niceextract.__version__,
+               "module_path": niceextract.__file__, "real_endpoint_calls": 0,
                "mock_http_calls": recovery["mock_http_calls"] + exhausted["mock_http_calls"] +
                    sum(case["mock_http_calls"] for case in legacy_entries.values()),
                "recovery": recovery, "exhausted": exhausted, "legacy_entry_cases": legacy_entries}

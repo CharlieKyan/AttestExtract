@@ -4,9 +4,9 @@ import json
 
 import pytest
 
-from attestextract import extract
-from attestextract.diagnostics import RunTrace
-from attestextract.models import BackendResponse
+from niceextract import extract
+from niceextract.diagnostics import RunTrace
+from niceextract.models import BackendResponse
 
 
 TASK = {"name": "Synthetic syntax guidance", "record_types": {"reading": {

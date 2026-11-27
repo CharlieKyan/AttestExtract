@@ -15,11 +15,11 @@ import sys
 
 import httpx
 
-import attestextract
-from attestextract import Document, create_archive
-from attestextract.errors import ConfigurationError
-from attestextract.models import ExtractionResult
-from attestextract.registry import default_registry
+import niceextract
+from niceextract import Document, create_archive
+from niceextract.errors import ConfigurationError
+from niceextract.models import ExtractionResult
+from niceextract.registry import default_registry
 
 from provider_experiment_bundle import load_bundle, prepare_bundle
 from provider_experiment_runner import load_results, read_record, run_stage
@@ -184,8 +184,8 @@ def main(argv=None):
         run(stage, round_number)
     assert len(observed) == 108
     assert not any(name == "langextract" or name.startswith("langextract.") for name in sys.modules)
-    summary = {"passed": True, "package_version": attestextract.__version__,
-               "module_path": attestextract.__file__, "real_endpoint_calls": 0,
+    summary = {"passed": True, "package_version": niceextract.__version__,
+               "module_path": niceextract.__file__, "real_endpoint_calls": 0,
                "mock_network_calls": len(observed), "probe_requests": 0,
                "actual_tls_versions": {"unknown": 108}, "d1_scored_trials": d1_count,
                "fresh_runs": fresh_results, "repeat_stage_new_calls": 0,

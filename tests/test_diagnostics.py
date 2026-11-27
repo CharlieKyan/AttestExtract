@@ -5,14 +5,15 @@ from __future__ import annotations
 import hashlib
 import json
 
+
 import httpx
 import pytest
 
-from attestextract import cli, extract
-from attestextract.backends import OpenAICompatibleBackend, ReplayBackend
-from attestextract.diagnostics import RunTrace
-from attestextract.errors import BackendError, ConfigurationError, InvalidResponseError
-from attestextract.models import BackendResponse
+from niceextract import cli, extract
+from niceextract.backends import OpenAICompatibleBackend, ReplayBackend
+from niceextract.diagnostics import RunTrace
+from niceextract.errors import BackendError, ConfigurationError, InvalidResponseError, NiceExtractError, NICEExtractError
+from niceextract.models import BackendResponse
 
 
 TEXT = "采购记录🙂\r\n\r\n编号青禾的金额为 120 元。\r\n"
@@ -148,6 +149,16 @@ def test_pipeline_redacts_secrets_in_source_request_response_and_candidate_logs(
         assert any("[REDACTED]" in path.read_text(encoding="utf-8") for path in artifacts)
 
 
+def test_public_base_error_spelling_preserves_catch_and_diagnostic_type(tmp_path):
+    assert NiceExtractError is NICEExtractError
+    with pytest.raises(NiceExtractError):
+        raise ConfigurationError("synthetic configuration error")
+
+    directory = tmp_path / "base-error"
+    RunTrace(directory).fail(NiceExtractError("synthetic failure"), stage="configuration")
+    assert read_json(directory / "error.json")["error_type"] == "NICEExtractError"
+
+
 def test_failed_trace_masks_sensitive_exception_message_and_keeps_first_failure(tmp_path):
     secret = "synthetic-error-secret"
     directory = tmp_path / "error-redaction"
@@ -187,26 +198,147 @@ def cli_inputs(tmp_path):
     source.write_bytes(TEXT.encode("utf-8"))
     task.write_text(json.dumps(TASK, ensure_ascii=False), encoding="utf-8")
     env_file.write_text(
-        "ATTESTEXTRACT_BASE_URL=https://example.invalid/v1\n"
-        "ATTESTEXTRACT_MODEL=synthetic-diagnostics-model\n"
-        "ATTESTEXTRACT_API_KEY=synthetic-cli-api-token\n",
+        "NICEEXTRACT_BASE_URL=https://example.invalid/v1\n"
+        "NICEEXTRACT_MODEL=synthetic-diagnostics-model\n"
+        "NICEEXTRACT_API_KEY=synthetic-cli-api-token\n",
         encoding="utf-8",
     )
     return source, task, env_file
 
 
 def clean_configuration(monkeypatch):
-    for key in ("ATTESTEXTRACT_BASE_URL", "ATTESTEXTRACT_MODEL", "ATTESTEXTRACT_API_KEY"):
-        monkeypatch.delenv(key, raising=False)
+    for prefix in ("NICEEXTRACT", "ATTESTEXTRACT"):
+        for suffix in ("BASE_URL", "MODEL", "API_KEY"):
+            monkeypatch.delenv(f"{prefix}_{suffix}", raising=False)
 
 
-@pytest.mark.parametrize("api_key_env", ["ATTESTEXTRACT_API_KEY", "CUSTOM_DIAGNOSTIC_API_KEY"])
+@pytest.mark.parametrize("route", ["dotenv", "profile", "fallback"])
+def test_cli_trace_masks_all_configured_keys_before_saving_the_task(tmp_path, monkeypatch, capsys, route):
+    clean_configuration(monkeypatch)
+    source, task, env_file = cli_inputs(tmp_path)
+    directory = tmp_path / "run"
+    current_key = "synthetic-dotenv-current-key"
+    legacy_key = "synthetic-inherited-legacy-key"
+    keys = [current_key, legacy_key]
+    monkeypatch.setenv("ATTESTEXTRACT_BASE_URL", "https://old.example/v1")
+    monkeypatch.setenv("ATTESTEXTRACT_MODEL", "old-synthetic-model")
+    monkeypatch.setenv("ATTESTEXTRACT_API_KEY", legacy_key)
+    env = {"NICEEXTRACT_BASE_URL": "https://current.example/v1", "NICEEXTRACT_MODEL": "current-model",
+           "NICEEXTRACT_API_KEY": current_key}
+    args = ["--env-file", str(env_file), "--output-dir", str(directory), "--check"]
+    if route == "profile":
+        env["FIXTURE_PROFILE_KEY"] = "synthetic-profile-key"
+        keys.append(env["FIXTURE_PROFILE_KEY"])
+        profile = tmp_path / "profile.toml"
+        profile.write_text('[profiles.sample]\nbase_url="https://profile.example/v1"\nmodel="profile-model"\n'
+                           'api_key_env="FIXTURE_PROFILE_KEY"\n', encoding="utf-8")
+        args += ["--config", str(profile), "--profile", "sample"]
+    if route == "fallback":
+        env.update(FIXTURE_PRIMARY_KEY="synthetic-primary-key", FIXTURE_BACKUP_KEY="synthetic-fallback-key")
+        keys += [env["FIXTURE_PRIMARY_KEY"], env["FIXTURE_BACKUP_KEY"]]
+        args += ["--base-url", "https://primary.example/v1", "--model", "primary-model",
+                 "--api-key-env", "FIXTURE_PRIMARY_KEY", "--fallback-base-url", "https://backup.example/v1",
+                 "--fallback-model", "backup-model", "--fallback-api-key-env", "FIXTURE_BACKUP_KEY"]
+        # Fail after configuration, while retaining the diagnostic trail.
+        source = source.with_suffix(".pdf")
+        source.write_bytes(b"Synthetic unsupported input.")
+    env_file.write_text("".join(f"{name}={value}\n" for name, value in env.items()), encoding="utf-8")
+    task.write_text(json.dumps({**TASK, "description": " ".join(keys)}), encoding="utf-8")
+    monkeypatch.setattr(httpx.Client, "send", lambda *a, **kw: pytest.fail("Local check attempted HTTP"))
+    status = cli.main(["extract", "--input", str(source), "--task", str(task), *args])
+    diagnostics = directory / "diagnostics"
+    expected_status = "failed" if route == "fallback" else "checked"
+    assert read_json(diagnostics / "manifest.json")["status"] == expected_status
+    assert (status != 0) == (route == "fallback")
+    if route == "fallback":
+        assert read_json(diagnostics / "error.json")["error_type"] == "ValueError"
+    else:
+        assert read_json(diagnostics / "task.json")["description"] == " ".join(["[REDACTED]"] * len(keys))
+    captured = capsys.readouterr()
+    transcript = all_artifact_text(diagnostics) + captured.out + captured.err
+    assert all(key not in transcript for key in keys)
+
+
+def test_explicit_cli_report_masks_keys_and_preserves_scientific_json(tmp_path, monkeypatch, capsys):
+    clean_configuration(monkeypatch)
+    current_key, legacy_key = "synthetic-key-violet", "synthetic-key-amber"
+    monkeypatch.setenv("ATTESTEXTRACT_API_KEY", legacy_key)
+    source, task, env_file = cli_inputs(tmp_path)
+    clause = f"Sample Q recorded {current_key} and {legacy_key}."
+    original = f"{clause} Stable count: 120."
+    source.write_text(original, encoding="utf-8")
+    task.write_text(json.dumps({"name": "Synthetic sample properties", "record_types": {
+        "reading": {"fields": {"label": {"type": "string"}, "count": {"type": "integer"}}},
+    }}), encoding="utf-8")
+    env_file.write_text("NICEEXTRACT_BASE_URL=https://current.example/v1\nNICEEXTRACT_MODEL=current-model\n"
+                        f"NICEEXTRACT_API_KEY={current_key}\n", encoding="utf-8")
+
+    def endpoint(request):
+        assert request.headers["Authorization"] == f"Bearer {current_key}"
+        record = {"record_type": "reading", "values": {"label": clause, "count": 120},
+                  "quotes": {"label": clause, "count": "120"}}
+        return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps({"records": [record]})},
+                                                       "finish_reason": "stop"}]})
+
+    monkeypatch.setattr("niceextract.backends.OpenAICompatibleBackend",
+                        lambda **kw: OpenAICompatibleBackend(**kw, transport=httpx.MockTransport(endpoint)))
+    output, report = tmp_path / "paper.json", tmp_path / "report.md"
+    assert cli.main(["extract", "--input", str(source), "--task", str(task), "--env-file", str(env_file),
+                     "--output", str(output), "--report", str(report)]) == 0
+    saved = read_json(output)
+    fields = saved["candidates"][0]["fields"]
+    label_evidence = fields["label"]["evidence"]
+    assert original[label_evidence["start"]:label_evidence["end"]] == label_evidence["quote"] == clause
+    assert fields["label"]["value"] == clause
+    assert fields["count"]["value"] == 120
+    evidence = fields["count"]["evidence"]
+    assert original[evidence["start"]:evidence["end"]] == evidence["quote"] == "120"
+    assert saved["source"]["sha256"] == hashlib.sha256(original.encode()).hexdigest()
+    rendered = report.read_text(encoding="utf-8")
+    assert r"Sample Q recorded \[REDACTED\] and \[REDACTED\]\." in rendered
+    assert "120" in rendered
+    captured = capsys.readouterr()
+    for secret in (current_key, legacy_key):
+        assert secret not in rendered + captured.out + captured.err
+
+
+def test_python_managed_auth_failure_masks_inactive_legacy_key(tmp_path, monkeypatch, capsys):
+    clean_configuration(monkeypatch)
+    current_key, legacy_key = "synthetic-python-primary", "synthetic-python-inactive"
+    monkeypatch.setenv("ATTESTEXTRACT_API_KEY", legacy_key)
+    monkeypatch.setenv("NICEEXTRACT_MODEL_CACHE_DIR", str(tmp_path / "cache"))
+    dotenv = tmp_path / "model.env"
+    dotenv.write_text(f"NICEEXTRACT_API_KEY={current_key}\n", encoding="utf-8")
+    sent = []
+
+    def endpoint(request):
+        if request.method == "GET":
+            return httpx.Response(401)
+        sent.append(request.headers["Authorization"])
+        return httpx.Response(401, json={"error": {"message": f"Denied {current_key} and {legacy_key}"}})
+
+    original_client = httpx.Client
+    monkeypatch.setattr(httpx, "Client", lambda *args, **kw:
+                        original_client(*args, **{**kw, "transport": httpx.MockTransport(endpoint)}))
+    directory = tmp_path / "run"
+    with pytest.raises(BackendError) as error:
+        extract(f"Sample Q contains {current_key} and {legacy_key}.", TASK, base_url="https://model.example/v1",
+                model="unlisted-research-model", env_file=dotenv, output_dir=directory)
+    assert error.value.status_code == 401 and sent == [f"Bearer {current_key}"]
+    diagnostics = directory / "diagnostics"
+    assert read_json(diagnostics / "manifest.json")["status"] == "failed"
+    captured = capsys.readouterr()
+    transcript = all_artifact_text(diagnostics) + captured.out + captured.err
+    assert current_key not in transcript and legacy_key not in transcript
+
+
+@pytest.mark.parametrize("api_key_env", ["NICEEXTRACT_API_KEY", "CUSTOM_DIAGNOSTIC_API_KEY"])
 def test_cli_env_file_and_log_directory_produce_result_without_live_api(tmp_path, monkeypatch, capsys, api_key_env):
     clean_configuration(monkeypatch)
     monkeypatch.delenv(api_key_env, raising=False)
     source, task, env_file = cli_inputs(tmp_path)
-    if api_key_env != "ATTESTEXTRACT_API_KEY":
-        env_file.write_text(env_file.read_text(encoding="utf-8").replace("ATTESTEXTRACT_API_KEY=", f"{api_key_env}="), encoding="utf-8")
+    if api_key_env != "NICEEXTRACT_API_KEY":
+        env_file.write_text(env_file.read_text(encoding="utf-8").replace("NICEEXTRACT_API_KEY=", f"{api_key_env}="), encoding="utf-8")
     output = tmp_path / "result.json"
     directory = tmp_path / "cli-log"
     constructors = []
@@ -221,7 +353,7 @@ def test_cli_env_file_and_log_directory_produce_result_without_live_api(tmp_path
             assert json.loads(request.messages[-1]["content"])["source"] == TEXT
             return BackendResponse(text=json.dumps({"records": [FLAT_RECORD]}))
 
-    monkeypatch.setattr("attestextract.backends.OpenAICompatibleBackend", OfflineBackend)
+    monkeypatch.setattr("niceextract.backends.OpenAICompatibleBackend", OfflineBackend)
     status = cli.main([
         "extract", "--input", str(source), "--task", str(task), "--output", str(output),
         "--env-file", str(env_file), "--log-dir", str(directory), "--api-key-env", api_key_env,
@@ -259,7 +391,7 @@ def test_cli_auth_failure_logs_phase_and_status_without_credentials_or_http_body
     def mocked_backend(**kwargs):
         return OpenAICompatibleBackend(**kwargs, transport=httpx.MockTransport(endpoint), sleep_fn=lambda _: None)
 
-    monkeypatch.setattr("attestextract.backends.OpenAICompatibleBackend", mocked_backend)
+    monkeypatch.setattr("niceextract.backends.OpenAICompatibleBackend", mocked_backend)
     status = cli.main([
         "extract", "--input", str(source), "--task", str(task), "--output", str(output),
         "--env-file", str(env_file), "--log-dir", str(directory),
@@ -344,7 +476,7 @@ def test_truncated_http_completion_is_preserved_and_redacted_before_failure(tmp_
     def mocked_backend(**kwargs):
         return OpenAICompatibleBackend(**kwargs, transport=httpx.MockTransport(endpoint), sleep_fn=lambda _: None)
 
-    monkeypatch.setattr("attestextract.backends.OpenAICompatibleBackend", mocked_backend)
+    monkeypatch.setattr("niceextract.backends.OpenAICompatibleBackend", mocked_backend)
     status = cli.main([
         "extract", "--input", str(source), "--task", str(task), "--output", str(output),
         "--env-file", str(env_file), "--log-dir", str(directory),
@@ -372,7 +504,7 @@ def test_cli_rejects_outputs_inside_log_directory_before_creating_backend(tmp_pa
         constructors.append(kwargs)
         raise AssertionError("Output conflict must be rejected before backend construction")
 
-    monkeypatch.setattr("attestextract.backends.OpenAICompatibleBackend", forbidden_backend)
+    monkeypatch.setattr("niceextract.backends.OpenAICompatibleBackend", forbidden_backend)
     status = cli.main([
         "extract", "--input", str(source), "--task", str(task), "--output", str(directory / relative),
         "--env-file", str(env_file), "--log-dir", str(directory),
@@ -395,3 +527,26 @@ def test_json_redaction_preserves_nonstring_literals_that_look_like_secrets(tmp_
     assert payload["boolean"] is True
     assert type(payload["number"]) is int and payload["number"] == 1
     assert payload["value"] == "[REDACTED]"
+
+
+def test_atomic_diagnostic_update_tolerates_a_short_windows_lock(tmp_path, monkeypatch):
+    from niceextract import diagnostics
+
+    trace = diagnostics.RunTrace(tmp_path / "trace")
+    trace.write_json("state.json", {"reserved": 1}, atomic=True)
+    target = trace.directory / "state.json"
+    replace = diagnostics.os.replace
+    delays = []
+
+    def temporarily_locked(src, dest):
+        assert json.loads(target.read_bytes()) == {"reserved": 1}
+        if len(delays) < 2:
+            exc = PermissionError("locked")
+            exc.winerror = 32
+            raise exc
+        replace(src, dest)
+
+    monkeypatch.setattr(diagnostics.os, "replace", temporarily_locked)
+    monkeypatch.setattr(diagnostics.time, "sleep", delays.append)
+    trace.write_json("state.json", {"reserved": 2}, atomic=True)
+    assert len(delays) == 2 and json.loads(target.read_bytes()) == {"reserved": 2}

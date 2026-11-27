@@ -15,11 +15,11 @@ import os
 from pathlib import Path
 from unittest.mock import patch
 
-import attestextract
-from attestextract import ExecutionOptions, RunTrace, cli, extract
-from attestextract.models import BackendResponse
-from attestextract.registry import BackendRegistry
-from attestextract.reporting import render_markdown_report
+import niceextract
+from niceextract import ExecutionOptions, RunTrace, cli, extract
+from niceextract.models import BackendResponse
+from niceextract.registry import BackendRegistry
+from niceextract.reporting import render_markdown_report
 
 
 PROSE = 'Sample A mass ranges from 10-20 g; mean mass is 15 g.'
@@ -145,7 +145,7 @@ def accept(root: Path) -> dict:
     assert status == 0 and len(cli_backend.calls) == 2
     results = list((root / 'outputs').glob('*/result.json'))
     assert len(results) == 1
-    cli_result = attestextract.ExtractionResult.model_validate_json(results[0].read_text(encoding='utf-8'))
+    cli_result = niceextract.ExtractionResult.model_validate_json(results[0].read_text(encoding='utf-8'))
     report = assert_result(cli_result)
     assert (results[0].parent / 'report.md').read_text(encoding='utf-8') == report
     assert cli_result.task == result.task
@@ -168,15 +168,15 @@ def main() -> int:
         network_attempts.append(True)
         raise AssertionError('Network access is forbidden in simple-task acceptance')
 
-    environment = {key: value for key, value in os.environ.items() if not key.startswith('ATTESTEXTRACT_')}
-    environment['ATTESTEXTRACT_MODEL_CACHE_DIR'] = str(root / 'model-cache')
+    environment = {key: value for key, value in os.environ.items() if not key.startswith(('NICEEXTRACT_', 'ATTESTEXTRACT_'))}
+    environment['NICEEXTRACT_MODEL_CACHE_DIR'] = str(root / 'model-cache')
     with patch.dict(os.environ, environment, clear=True), patch('socket.socket.connect', blocked), \
             patch('socket.socket.connect_ex', blocked), patch('socket.create_connection', blocked), \
             patch('socket.getaddrinfo', blocked):
         details = accept(root)
     assert not network_attempts
-    summary = {'passed': True, 'package_version': attestextract.__version__,
-               'module_path': str(Path(attestextract.__file__).resolve()),
+    summary = {'passed': True, 'package_version': niceextract.__version__,
+               'module_path': str(Path(niceextract.__file__).resolve()),
                'real_model_calls': 0, 'network_attempts': 0, **details,
                'notice': 'Synthetic offline installed-package acceptance; no API or scientific verification.'}
     write_json(root / 'summary.json', summary)

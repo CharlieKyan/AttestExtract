@@ -12,8 +12,8 @@ import re
 
 import httpx
 
-import attestextract
-from attestextract import backends, cli
+import niceextract
+from niceextract import backends, cli
 
 
 def main():
@@ -22,7 +22,7 @@ def main():
     root = parser.parse_args().output_dir.resolve()
     root.mkdir(parents=True, exist_ok=False)
     for key in list(os.environ):
-        if key.startswith(("ATTESTEXTRACT_", "DEEPSEEK_", "QWEN_", "DASHSCOPE_", "VLM_")):
+        if key.startswith(("NICEEXTRACT_", "ATTESTEXTRACT_", "DEEPSEEK_", "QWEN_", "DASHSCOPE_", "VLM_")):
             del os.environ[key]
     os.environ["DEEPSEEK_API_KEY"] = "synthetic-key"
     source, task_path = root / "source.md", root / "task.json"
@@ -73,7 +73,7 @@ def main():
         assert len(observed) == 4
     finally:
         backends.OpenAICompatibleBackend = original
-    summary = {"passed": True, "package_version": attestextract.__version__, "module_path": attestextract.__file__,
+    summary = {"passed": True, "package_version": niceextract.__version__, "module_path": niceextract.__file__,
                "real_endpoint_calls": 0, "mock_http_calls": len(observed), "truncated_parent_calls": 1,
                "successful_child_calls": 3, "resume_new_calls": 2, "completed_resume_new_calls": 0,
                "candidate_values": [11, 22, 33], "previous_run_unchanged": True}

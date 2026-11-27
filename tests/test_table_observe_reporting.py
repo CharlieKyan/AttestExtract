@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from attestextract.table_reporting import (delivery_fidelity, render_table_report,
+from niceextract.table_reporting import (delivery_fidelity, render_table_report,
                                            score_table_records, summarize_table_bundle)
 
 

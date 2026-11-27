@@ -7,16 +7,16 @@ from pathlib import Path
 
 import pytest
 
-from attestextract import ExecutionOptions, __version__, extract
-from attestextract.backends import ReplayBackend
-from attestextract.decision_bundle import (
+from niceextract import ExecutionOptions, __version__, extract
+from niceextract.backends import ReplayBackend
+from niceextract.decision_bundle import (
     DecisionBundle, decision_bundle_summary, load_decision_bundle,
     prepare_decision_bundle, save_decision_bundle,
 )
-from attestextract.diagnostics import RunTrace
-from attestextract.errors import BackendError
-from attestextract.execution import digest
-from attestextract.models import BackendResponse
+from niceextract.diagnostics import RunTrace
+from niceextract.errors import BackendError
+from niceextract.execution import digest
+from niceextract.models import BackendResponse
 
 
 TEXT = "Sensor A reads 11. Sensor B reads 22.\n\nNo values here."

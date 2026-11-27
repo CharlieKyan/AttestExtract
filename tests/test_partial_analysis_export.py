@@ -7,9 +7,9 @@ import sqlite3
 
 import pytest
 
-from attestextract.analysis import is_review_only_partial
-from attestextract.analysis_export import save_analysis
-from attestextract.progress import ConsoleProgress
+from niceextract.analysis import is_review_only_partial
+from niceextract.analysis_export import save_analysis
+from niceextract.progress import ConsoleProgress
 from test_analysis_export import review_sample, read_csv
 
 
@@ -31,6 +31,122 @@ def partial_sample():
                      "observation_ids": group["target_observation_ids"], "review_observation_ids": ["o1"],
                      "attempts": 1, "steps": [group]}]
     return data
+
+
+def mixed_partial_sample():
+    data = partial_sample()
+    direct = deepcopy(data["observations"][1])
+    direct.update(observation_id="direct", binding_status="as_extracted", name_handling="as_reported",
+                  subject_id=None, binding_evidence_ids=[], target_match="unknown", blockers=[])
+    data["observations"].append(direct)
+    return data
+
+
+def test_review_only_counts_first_pass_owners_outside_verification_jobs(tmp_path):
+    data = mixed_partial_sample()
+    data["review_only"] = False  # Historical dev55 snapshot recorded this value.
+    assert is_review_only_partial(data)
+    save_analysis(data, tmp_path)
+    report = (tmp_path / "analysis.md").read_text(encoding="utf-8")
+    assert "观测共5条" in report and "沿用首轮归属1条，归属隔离待核1条" in report
+
+
+@pytest.mark.parametrize("damage", [
+    {"binding_status": "pending"}, {"name_handling": "uncertain"}, {"entity": " "},
+    {"evidence_ids": []}, {"evidence_ids": ["missing"]}, {"subject_id": "L1"},
+    {"binding_evidence_ids": ["e1"]}, {"blockers": [{"code": "ambiguous"}]},
+    {"name_review": {"issue": "competing_owner"}},
+])
+def test_skipped_observation_must_qualify_for_direct_delivery(damage, tmp_path):
+    data = mixed_partial_sample()
+    data["observations"][-1].update(damage)
+    data["review_only"] = True
+    assert not is_review_only_partial(data)
+    with pytest.raises(ValueError):
+        save_analysis(data, tmp_path / "invalid")
+
+
+@pytest.mark.parametrize(("raw", "origin"), [
+    ({"source_kind": "mention", "source_id": "o2", "target_id": "unseen"}, ["o2"]),
+    ({"source_kind": "mention", "source_id": "o1"}, ["o1"]),
+    ({"source_kind": "mention", "source_id": "foreign"}, []),
+    (None, []),
+])
+def test_single_entry_relation_review_keeps_original_and_independent_bindings(tmp_path, raw, origin):
+    data = partial_sample()
+    data["relation_entry_protocol"] = "single-entry-v1"
+    group = data["review_groups"][0]
+    review = {"proposal_type": "relation", "path": "relations[0]", "proposal_id": "relations[0]",
+              "observation_ids": origin, "dependencies": [], "code": "invalid_relation",
+              "issues": [{"path": "relations[0]", "phase": "relation", "code": "invalid_relation",
+                          "message": "Relation cannot be applied."}], "raw_proposal": raw}
+    group["diagnostic"]["reviews"].append(review)
+    response = json.loads(group["response_text"])
+    response["relations"] = [raw]
+    group["response_text"] = json.dumps(response)
+    for summary in (group["diagnostic"], group["validation_summary"]):
+        summary["proposal_count"] = 2
+    save_analysis(data, tmp_path / "valid")
+    stored, = json.loads((tmp_path / "valid" / "review_groups.json").read_bytes())
+    assert stored["diagnostic"]["reviews"][-1] == review
+    assert stored["applied_observation_ids"] == ["o2", "o3", "o4"]
+    review["observation_ids"] = ["o3"]
+    with pytest.raises(ValueError, match="original slot and mention reference"):
+        save_analysis(data, tmp_path / "damaged")
+
+
+@pytest.mark.parametrize("fault", [None, "duplicate", "binding_collision", "wrong_target", "invalid_path", "out_of_range"])
+def test_nested_name_rejections_can_coexist_with_other_held_bindings(tmp_path, fault):
+    data = partial_sample()
+    group = data["review_groups"][0]
+    reviews = group["diagnostic"]["reviews"]
+    for index, oid in [(1, "o2"), (2, "o3")]:
+        path = f"bindings[{index}].name_resolution"
+        name = {"relation": "local_identity", "target_id": "unshown", "reason": "Compared a local name."}
+        reviews.append({"proposal_type": "name_resolution", "path": path, "proposal_id": oid,
+                        "observation_ids": [oid], "dependencies": [], "code": "invalid_decision",
+                        "issues": [{"path": path, "phase": "name_resolution", "code": "invalid_decision",
+                                    "message": "The proposed endpoint was not shown."}], "raw_proposal": name})
+    for d in (group["diagnostic"], group["validation_summary"]):
+        d["proposal_count"] = len(reviews)
+    if fault == "duplicate":
+        reviews[-1]["path"] = reviews[1]["path"]
+    elif fault == "binding_collision":
+        reviews[-1]["path"] = "bindings[0].name_resolution"
+    elif fault == "wrong_target":
+        reviews[-1].update(proposal_id="o1", observation_ids=["o1"])
+    elif fault == "invalid_path":
+        reviews[-1]["path"] = "bindings[2].anything"
+    elif fault == "out_of_range":
+        reviews[-1]["path"] = "bindings[4].name_resolution"
+    if fault:
+        with pytest.raises(ValueError):
+            save_analysis(data, tmp_path)
+        return
+    save_analysis(data, tmp_path)
+    stored = json.loads((tmp_path / "review_groups.json").read_bytes())[0]
+    assert stored["diagnostic"]["reviews"] == reviews
+    assert stored["applied_observation_ids"] == ["o2", "o3", "o4"]
+
+
+def test_single_entry_endpoint_markers_survive_json_csv_and_sqlite(tmp_path):
+    data = partial_sample()
+    data["relation_entry_protocol"] = "single-entry-v1"
+    proof = data["evidence"][0]
+    for key, quote in (("left", "Core S1"), ("right", "second layer")):
+        start = proof["start"] + proof["quote"].index(quote)
+        data["evidence"].append({"evidence_id": key, "quote": quote, "start": start, "end": start + len(quote)})
+    data["relations"][0].update(source_mention_id="left", target_mention_id="right")
+    save_analysis(data, tmp_path / "ok")
+    csv_relation, = read_csv(tmp_path / "ok" / "relations.csv")
+    json_relation, = json.loads((tmp_path / "ok" / "analysis.json").read_bytes())["relations"]
+    for row in (csv_relation, json_relation):
+        assert (row["source_mention_id"], row["target_mention_id"]) == ("left", "right")
+    with sqlite3.connect(tmp_path / "ok" / "analysis.sqlite") as db:
+        assert db.execute("SELECT source_mention_id, target_mention_id FROM relations").fetchall() == [("left", "right")]
+    data["evidence"][-1].update(start=100, end=112)
+    with pytest.raises(ValueError, match="endpoint evidence"):
+        save_analysis(data, tmp_path / "damaged")
 
 
 def test_partial_exports_retain_siblings_unknown_and_raw_rejection(tmp_path):

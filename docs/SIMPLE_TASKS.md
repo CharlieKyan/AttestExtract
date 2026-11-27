@@ -10,7 +10,7 @@
 
 ```python
 import os
-from attestextract import extract
+from niceextract import extract
 
 result = extract(
     text="Sample A has mass 17 g at 25 C and length 4 cm.",
@@ -26,9 +26,9 @@ result = extract(
             "conditions": "20 C", "quote": "Sample B has mass 2 g at 20 C.",
         }],
     }],
-    model=os.environ["ATTESTEXTRACT_MODEL"],
-    base_url=os.environ["ATTESTEXTRACT_BASE_URL"],
-    api_key=os.environ["ATTESTEXTRACT_API_KEY"],
+    model=os.environ["NICEEXTRACT_MODEL"],
+    base_url=os.environ["NICEEXTRACT_BASE_URL"],
+    api_key=os.environ["NICEEXTRACT_API_KEY"],
     output_dir="outputs/sample-run-1",
 )
 for candidate in result.candidates:
@@ -70,10 +70,10 @@ Python在创建运行诊断后的失败会保留诊断并抛出异常；参数�
 准备原文 `paper.md` 和 DeepSeek 凭据后，直接运行：
 
 ```powershell
-attestextract extract --input paper.md --task task.json --model-id deepseek:deepseek-flash --output-dir outputs/run-1
+niceextract extract --input paper.md --task task.json --model-id deepseek:deepseek-flash --output-dir outputs/run-1
 ```
 
-DeepSeek 预设读取 `DEEPSEEK_API_KEY`；显式使用已有 `.env` 时增加 `--env-file .env`。Qwen 可改为 `--model-id qwen:qwen3.8-27b` 并提供对应凭据。自定义兼容服务使用 `--base-url` 和原始 `--model`，密钥通过 `ATTESTEXTRACT_API_KEY` 或终端隐藏输入提供；无需设置 TLS、Schema 或预先创建 profile。连接与有限兜底边界见[最少模型输入](MINIMAL_API.md)。
+DeepSeek 预设读取 `DEEPSEEK_API_KEY`；显式使用已有 `.env` 时增加 `--env-file .env`。Qwen 可改为 `--model-id qwen:qwen3.8-27b` 并提供对应凭据。自定义兼容服务使用 `--base-url` 和原始 `--model`，密钥通过 `NICEEXTRACT_API_KEY` 或终端隐藏输入提供；无需设置 TLS、Schema 或预先创建 profile。连接与有限兜底边界见[最少模型输入](MINIMAL_API.md)。
 
 原有 `--task` TaskSpec 文件仍可读取。文件不能混合 `record_types` 与简便输入键。
 
@@ -81,7 +81,7 @@ DeepSeek 预设读取 `DEEPSEEK_API_KEY`；显式使用已有 `.env` 时增加 `
 
 四篇论文应逐篇调用，使用四个独立目录；各篇预算分别计算，不是共享批次预算。失败后停止循环并保留该篇目录，已完成论文无需重跑。Python恢复时用相同原文、任务和模型，传`resume_from="outputs/run-1"`及新的`output_dir="outputs/run-1-resumed"`。CLI失败信息提供指向新目录的完整恢复命令；不覆盖旧运行，也不重新发放历史调用额度。
 
-在VSCode中，先在终端使用目标解释器执行`python -m pip install ...`，再在`.py`文件中`import attestextract`并调用`extract()`。安装命令不是Python语句；不在每次抽取时动态安装依赖。选择与安装时相同的虚拟环境解释器。开发版本需安装明确版本的wheel或Git标签，不能仅凭Git已发布就假定PyPI已有该版本。
+在VSCode中，先在终端使用目标解释器执行`python -m pip install ...`，再在`.py`文件中`import niceextract`并调用`extract()`。安装命令不是Python语句；不在每次抽取时动态安装依赖。选择与安装时相同的虚拟环境解释器。开发版本需安装明确版本的wheel或Git标签，不能仅凭Git已发布就假定PyPI已有该版本。
 
 需要提前了解分块和预算时，可选择运行同一命令加 `--check`；它不联网、不是必经步骤，也不验证服务可用性或科学抽取质量。
 

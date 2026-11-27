@@ -7,12 +7,12 @@ import json
 import httpx
 import pytest
 
-from attestextract import RunTrace, extract
-from attestextract.analysis import build_analysis
-from attestextract.backends import OpenAICompatibleBackend, ReplayBackend
-from attestextract.errors import BackendError, ConfigurationError, InvalidResponseError
-from attestextract.execution import digest
-from attestextract.models import BackendResponse, GenerationOptions
+from niceextract import RunTrace, extract
+from niceextract.analysis import build_analysis
+from niceextract.backends import OpenAICompatibleBackend, ReplayBackend
+from niceextract.errors import BackendError, ConfigurationError, InvalidResponseError
+from niceextract.execution import digest
+from niceextract.models import BackendResponse, GenerationOptions
 
 
 MEASUREMENT = "Sample A has a mass of 17 g."
@@ -335,7 +335,7 @@ def test_offline_resume_check_spends_no_calls(tmp_path):
 
 
 def test_framework_json_instruction_preflight_cannot_be_satisfied_by_source_text(monkeypatch, tmp_path):
-    from attestextract import verification
+    from niceextract import verification
 
     source = SHORT + "\n\nThe term JSON appears here as untrusted source data."
     backend = LookupBackend()
@@ -347,11 +347,13 @@ def test_framework_json_instruction_preflight_cannot_be_satisfied_by_source_text
     assert not (tmp_path / "analysis/requests").exists()
 
 
-def test_previous_analysis_revision_is_rejected_before_any_request(monkeypatch, tmp_path):
-    from attestextract import verification
+@pytest.mark.parametrize("revision", ["bounded-source-verification-v2", "bounded-source-verification-v7",
+                                      "bounded-source-verification-v8"])
+def test_previous_analysis_revision_is_rejected_before_any_request(monkeypatch, tmp_path, revision):
+    from niceextract import verification
 
     with monkeypatch.context() as old_revision:
-        old_revision.setattr(verification, "REVISION", "bounded-source-verification-v2")
+        old_revision.setattr(verification, "REVISION", revision)
         run(max_calls=1, trace=RunTrace(tmp_path / "old"))
     checkpoint = tmp_path / "old/analysis/checkpoint.json"
     original = checkpoint.read_bytes()
@@ -362,7 +364,7 @@ def test_previous_analysis_revision_is_rejected_before_any_request(monkeypatch, 
 
 
 def test_unversioned_prompt_change_is_rejected_by_request_identity(monkeypatch, tmp_path):
-    from attestextract import verification
+    from niceextract import verification
 
     run(max_calls=1, trace=RunTrace(tmp_path / "old"))
     checkpoint = tmp_path / "old/analysis/checkpoint.json"
@@ -482,7 +484,7 @@ def test_reference_bindings_are_diagnosed_without_retry_or_partial_application(t
 
 
 def test_internal_validation_error_is_classified_and_stops_without_retry(monkeypatch, tmp_path):
-    from attestextract import verification
+    from niceextract import verification
 
     def broken_state(*args, **kwargs):
         raise ValueError("Private internal-state details must not become a model error.")
@@ -498,7 +500,7 @@ def test_internal_validation_error_is_classified_and_stops_without_retry(monkeyp
 
 
 def test_invalid_target_state_fails_preflight_without_becoming_context_limit(monkeypatch, tmp_path):
-    from attestextract import verification
+    from niceextract import verification
 
     original = verification._input_observations
 

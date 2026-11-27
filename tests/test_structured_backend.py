@@ -8,11 +8,11 @@ import json
 import httpx
 import pytest
 
-from attestextract import cli
-from attestextract.backends import OpenAICompatibleBackend
-from attestextract.diagnostics import RunTrace
-from attestextract.errors import BackendError, ConfigurationError, InvalidResponseError
-from attestextract.models import BackendResponse, ExtractionRequest
+from niceextract import cli
+from niceextract.backends import OpenAICompatibleBackend
+from niceextract.diagnostics import RunTrace
+from niceextract.errors import BackendError, ConfigurationError, InvalidResponseError
+from niceextract.models import BackendResponse, ExtractionRequest
 
 
 SCHEMA = {
@@ -64,7 +64,7 @@ def test_opt_in_builds_strict_schema_envelope_without_mutating_request():
         "messages": value.messages,
         "response_format": {
             "type": "json_schema",
-            "json_schema": {"name": "attestextract_records", "strict": True, "schema": SCHEMA},
+            "json_schema": {"name": "niceextract_records", "strict": True, "schema": SCHEMA},
         },
     }
     payload["messages"][0]["content"] = "changed by caller"
@@ -209,7 +209,8 @@ def test_cli_forwards_explicit_mode_and_logs_effective_mode(tmp_path, monkeypatc
         def generate(self, value):
             return BackendResponse(text='{"records": []}')
 
-    monkeypatch.setattr("attestextract.backends.OpenAICompatibleBackend", OfflineBackend)
+    monkeypatch.setattr("niceextract.backends.OpenAICompatibleBackend", OfflineBackend)
+    monkeypatch.delenv("NICEEXTRACT_API_KEY", raising=False)
     monkeypatch.delenv("ATTESTEXTRACT_API_KEY", raising=False)
     args = [
         "extract", "--input", str(source), "--task", str(task), "--output", str(output),

@@ -5,12 +5,12 @@ import json
 
 import pytest
 
-from attestextract import extract, ExtractionResult, ExecutionOptions, GenerationOptions, RunTrace
-from attestextract.archive import create_archive
-from attestextract.documents import Document
-from attestextract.errors import BackendError, ConfigurationError, InvalidResponseError
-from attestextract.models import BackendResponse
-from attestextract.reporting import render_markdown_report
+from niceextract import extract, ExtractionResult, ExecutionOptions, GenerationOptions, RunTrace
+from niceextract.archive import create_archive
+from niceextract.documents import Document
+from niceextract.errors import BackendError, ConfigurationError, InvalidResponseError
+from niceextract.models import BackendResponse
+from niceextract.reporting import render_markdown_report
 
 
 TASK = {"name": "Synthetic table observations", "record_types": {"reading": {
@@ -201,7 +201,7 @@ def test_partial_trace_is_not_marked_succeeded(tmp_path):
 
 
 def test_prose_decision_bundle_rejects_table_result_explicitly(tmp_path):
-    from attestextract.decision_bundle import prepare_decision_bundle
+    from niceextract.decision_bundle import prepare_decision_bundle
     trace = RunTrace(tmp_path / "trace")
     result = extract(TABLE, TASK, backend=Backend(), trace=trace, backend_identity="synthetic")
     trace.finish(result.model_dump(mode="json"))

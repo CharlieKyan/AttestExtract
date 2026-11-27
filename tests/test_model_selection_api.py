@@ -5,9 +5,9 @@ import json
 import httpx
 import pytest
 
-from attestextract import GenerationOptions, RunTrace, extract, providers
-from attestextract.backends import OpenAICompatibleBackend, ReplayBackend
-from attestextract.errors import BackendError, ConfigurationError
+from niceextract import GenerationOptions, RunTrace, extract, providers
+from niceextract.backends import OpenAICompatibleBackend, ReplayBackend
+from niceextract.errors import BackendError, ConfigurationError
 
 
 SOURCE = "Lamp A uses 8 W."
@@ -23,7 +23,7 @@ def isolate_credentials(monkeypatch):
         "DEEPSEEK_API_KEY", "DEEPSEEK_BASE_URL", "DEEPSEEK_MODEL",
         "QWEN_API_KEY", "QWEN_BASE_URL", "DASHSCOPE_API_KEY",
         "VLM_API_KEY", "VLM_BASE_URL", "VLM_MODEL", "VLM_ENABLE_THINKING",
-        "ATTESTEXTRACT_API_KEY", "ATTESTEXTRACT_BASE_URL", "ATTESTEXTRACT_MODEL",
+        "NICEEXTRACT_API_KEY", "NICEEXTRACT_BASE_URL", "NICEEXTRACT_MODEL",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -32,7 +32,7 @@ def install_mock(monkeypatch, handler):
     def factory(*args, **kwargs):
         return OpenAICompatibleBackend(*args, **kwargs, transport=httpx.MockTransport(handler))
 
-    monkeypatch.setattr("attestextract.backends.OpenAICompatibleBackend", factory)
+    monkeypatch.setattr("niceextract.backends.OpenAICompatibleBackend", factory)
 
 
 def response(request, content=COMPLETION):
@@ -48,9 +48,9 @@ def test_switching_only_model_routes_to_matching_service_and_credentials(monkeyp
     monkeypatch.setenv("VLM_API_KEY", "synthetic-qwen-key")
     monkeypatch.setenv("VLM_BASE_URL", "https://synthetic.cn-beijing.maas.aliyuncs.com/compatible-mode/v1")
     monkeypatch.setenv("VLM_MODEL", "ignored-old-model")
-    monkeypatch.setenv("ATTESTEXTRACT_BASE_URL", "https://stale.invalid/v1")
-    monkeypatch.setenv("ATTESTEXTRACT_MODEL", "ignored-global-model")
-    monkeypatch.setenv("ATTESTEXTRACT_API_KEY", "synthetic-unrelated-key")
+    monkeypatch.setenv("NICEEXTRACT_BASE_URL", "https://stale.invalid/v1")
+    monkeypatch.setenv("NICEEXTRACT_MODEL", "ignored-global-model")
+    monkeypatch.setenv("NICEEXTRACT_API_KEY", "synthetic-unrelated-key")
     observed = []
 
     def handler(request):
@@ -190,7 +190,7 @@ def test_existing_backend_injection_does_not_load_credentials_or_apply_presets(m
         pytest.fail("Existing backend injection must not resolve model presets")
 
     monkeypatch.setattr(providers, "resolve_model_config", forbidden)
-    monkeypatch.setattr("attestextract.envconfig.load_env_file", forbidden)
+    monkeypatch.setattr("niceextract.envconfig.load_env_file", forbidden)
     result = extract(SOURCE, TASK, backend=Backend([COMPLETION]))
     assert result.run.mode == "replay"
     assert received[0].generation.max_output_tokens is None

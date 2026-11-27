@@ -7,8 +7,8 @@ import sys
 
 import pytest
 
-from attestextract.errors import ConfigurationError
-from attestextract.table_reporting import (render_table_report, score_table_records,
+from niceextract.errors import ConfigurationError
+from niceextract.table_reporting import (render_table_report, score_table_records,
                                            summarize_table_bundle)
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))

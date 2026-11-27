@@ -1,6 +1,7 @@
 include README.zh-CN.md
 include CHANGELOG.md
 include examples/backends.toml
+include examples/ccus-result.json
 include scripts/d2_acceptance.py
 include scripts/model_selection_smoke.py
 include scripts/execution_smoke.py
@@ -31,4 +32,5 @@ include scripts/table_window_smoke.py
 include scripts/simple_task_smoke.py
 include scripts/user_entry_smoke.py
 include scripts/analysis_smoke.py
+include scripts/verification_recovery_smoke.py
 recursive-include tests/fixtures/tls_local *.pem

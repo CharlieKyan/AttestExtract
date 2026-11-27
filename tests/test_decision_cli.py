@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from attestextract import cli
+from niceextract import cli
 
 
 @pytest.fixture
@@ -54,7 +54,7 @@ def test_missing_run_does_not_create_output(tmp_path, capsys):
     output = tmp_path / "new-materials"
     assert cli.main(["prepare-decisions", "--run", str(tmp_path / "missing"), "--output", str(output)]) == 1
     assert not output.exists()
-    assert "attestextract:" in capsys.readouterr().err
+    assert "niceextract:" in capsys.readouterr().err
 
 
 def test_malformed_manifest_fails_clearly_without_creating_output(prepared, capsys):
@@ -65,4 +65,4 @@ def test_malformed_manifest_fails_clearly_without_creating_output(prepared, caps
     output = prepared / "must-not-exist"
     assert cli.main(["prepare-decisions", "--run", str(prepared / "run"), "--output", str(output)]) == 1
     assert not output.exists()
-    assert "attestextract:" in capsys.readouterr().err
+    assert "niceextract:" in capsys.readouterr().err

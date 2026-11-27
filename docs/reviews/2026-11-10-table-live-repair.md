@@ -1,5 +1,7 @@
 # 审查摘要：真实运行暴露的表格后处理问题
 
+本文中的历史源码路径和行号对应当时尚未提交的工作区。
+
 - 日期：2026-11-10。
 - Git基线：`046ba1ad8c6a95c88b3b0c442f4a12f3634f44f5`；本轮开始时已有上一项表格实验的全部未提交修改，全部保留。
 - 实际比较对象：上一轮冻结实验的代码hash；原核心和报告源码已从对应验收wheel按hash恢复至私有诊断目录，非以Git HEAD冒充原实验代码。
@@ -47,9 +49,9 @@
 
 | 入口 | 需要判断的边界 |
 | --- | --- |
-| [table_routes.py](../../src/attestextract/table_routes.py) 的 `_literal_source` | 宽引文中的单位不能等同整段证据，复合量纲不丢失，数值范围不缩短 |
+| `src/attestextract/table_routes.py` 的 `_literal_source` | 宽引文中的单位不能等同整段证据，复合量纲不丢失，数值范围不缩短 |
 | 同文件 `_correct_relation`、`_prose_records` | 只修可由原格坐标证明的标签错误，不能通过包含关系缩小成员范围或复制隐藏字段 |
-| [table_reporting.py](../../src/attestextract/table_reporting.py) 的 `summarize_table_bundle` | HTTP完成、流程完成、值、引文、原格编号及专家核查不可混为一谈 |
+| `src/attestextract/table_reporting.py` 的 `summarize_table_bundle` | HTTP完成、流程完成、值、引文、原格编号及专家核查不可混为一谈 |
 | [table_route_runner.py](../../scripts/table_route_runner.py) 的 `summarize_bundle` | 旧runtime允许只读，但输入及试次hash必须继续验证；不能重发已消费调用 |
 | [test_table_route_live_regressions.py](../../tests/test_table_route_live_regressions.py) | 独立暴露的误改及新修复风险有正负样例，不按真实结果放宽gold |
 

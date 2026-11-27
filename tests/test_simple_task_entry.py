@@ -7,13 +7,13 @@ import warnings
 import httpx
 import pytest
 
-from attestextract import cli, extract, ExecutionOptions, load_task, RunTrace
-from attestextract.backends import ReplayBackend, OpenAICompatibleBackend
-from attestextract.errors import ConfigurationError, TaskValidationError
-from attestextract.models import BackendResponse
-from attestextract.registry import BackendRegistry
-from attestextract.reporting import render_markdown_report
-from attestextract.task_input import resolve_task, TaskInputWarning
+from niceextract import cli, extract, ExecutionOptions, load_task, RunTrace
+from niceextract.backends import ReplayBackend, OpenAICompatibleBackend
+from niceextract.errors import ConfigurationError, TaskValidationError
+from niceextract.models import BackendResponse
+from niceextract.registry import BackendRegistry
+from niceextract.reporting import render_markdown_report
+from niceextract.task_input import resolve_task, TaskInputWarning
 
 
 SOURCE = "Sample A has mass 17 g."
@@ -39,9 +39,11 @@ def no_network_or_ambient_model(monkeypatch, tmp_path):
         return original_send(client, *args, **kwargs)
 
     monkeypatch.setattr(httpx.Client, "send", mock_only)
-    for key in ("ATTESTEXTRACT_MODEL", "ATTESTEXTRACT_BASE_URL", "ATTESTEXTRACT_API_KEY", "DEEPSEEK_API_KEY"):
-        monkeypatch.delenv(key, raising=False)
-    monkeypatch.setenv("ATTESTEXTRACT_MODEL_CACHE_DIR", str(tmp_path / "model-cache"))
+    for prefix in ("NICEEXTRACT", "ATTESTEXTRACT"):
+        for suffix in ("BASE_URL", "MODEL", "API_KEY"):
+            monkeypatch.delenv(f"{prefix}_{suffix}", raising=False)
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.setenv("NICEEXTRACT_MODEL_CACHE_DIR", str(tmp_path / "model-cache"))
 
 
 def test_python_keywords_and_task_file_agree(tmp_path):
@@ -73,7 +75,7 @@ def test_empty_response_value_retained_but_not_counted_as_valued_observation(val
 
 
 def test_bad_examples_are_rejected_before_backend_selection(monkeypatch):
-    import attestextract.pipeline as pipeline
+    import niceextract.pipeline as pipeline
     monkeypatch.setattr(pipeline, "_selected_backend", lambda *a, **k: pytest.fail("backend configured"))
     bad = deepcopy(TASK)
     bad["examples"][0]["extractions"][0]["quote"] = "Not in the example."
@@ -192,20 +194,36 @@ def test_transport_change_reuses_simple_task_cache_with_preset(tmp_path, monkeyp
     calls = []
 
     def respond(request):
-        calls.append(request)
-        return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(RESPONSE)},
+        payload = json.loads(request.content)
+        user = json.loads(payload["messages"][-1]["content"])
+        if "fields" in user:
+            assert user["fields"] == TASK["field_list"] and SOURCE not in str(user)
+            calls.append("preparation")
+            answer = {"field_types": {key: {"kind": "numeric", "shapes": ["scalar", "range", "bound"]}
+                                      for key in TASK["field_list"]}}
+        else:
+            assert set(user["task"]["field_types"]) == set(TASK["field_list"])
+            calls.append("extraction")
+            answer = RESPONSE
+        return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(answer)},
                                                      "finish_reason": "stop"}]})
 
-    monkeypatch.setattr("attestextract.backends.OpenAICompatibleBackend", lambda **kw:
+    monkeypatch.setattr("niceextract.backends.OpenAICompatibleBackend", lambda **kw:
                         OpenAICompatibleBackend(**kw, transport=httpx.MockTransport(respond)))
     options = {"model": "deepseek:deepseek-flash", "api_key": "synthetic-key",
-               "execution": ExecutionOptions(max_model_calls=1)}
+               "execution": ExecutionOptions(max_model_calls=2)}
     trace = RunTrace(tmp_path / "first")
     first = extract(SOURCE, trace=trace, model_options={"read_timeout": 60}, **options, **TASK)
     trace.finish(first.model_dump(mode="json"))
     resumed = extract(SOURCE, trace=RunTrace(tmp_path / "second"), resume_from=trace.directory,
                       model_options={"read_timeout": 240}, **options, **TASK)
-    assert len(calls) == 1 and resumed.candidates == first.candidates
+    assert calls == ["preparation", "extraction"] and resumed.candidates == first.candidates
+    assert resumed.task.field_types == first.task.field_types
+    for dirname in ("first", "second"):
+        diagnostics = tmp_path / dirname
+        assert json.loads((diagnostics / "field-preparation.json").read_bytes())["calls_reserved"] == 1
+        summary = json.loads((diagnostics / "execution/summary.json").read_bytes())
+        assert summary["calls_reserved"] == summary["max_model_calls"] == 1
 
 
 def test_unregistered_automatic_service_uses_simple_task_and_bound_resume(tmp_path, monkeypatch):
@@ -234,11 +252,14 @@ def test_unregistered_automatic_service_uses_simple_task_and_bound_resume(tmp_pa
     options = {"model": "unregistered-synthetic-model", "base_url": "https://unknown.synthetic.invalid/v1",
                "api_key": "synthetic-only", "execution": ExecutionOptions(max_model_calls=1)}
     trace = RunTrace(tmp_path / "first")
-    result = extract(SOURCE, trace=trace, **TASK, **options)
+    # An existing one-call run predates field preparation. Default resume must
+    # preserve that task and its raw response under the original budget.
+    result = extract(SOURCE, trace=trace, prepare_field_types=False, **TASK, **options)
     trace.finish(result.model_dump(mode="json"))
     assert result.schema_version == "0.5" and len(result.run.generation_attempts) == 1
     reused = extract(SOURCE, trace=RunTrace(tmp_path / "second"), resume_from=trace.directory, **TASK, **options)
     assert reused.candidates == result.candidates and len(calls) == 1
+    assert not reused.task.field_types and not (tmp_path / "second" / "field-preparation.json").exists()
     changed = deepcopy(TASK)
     changed["field_list"]["mass"] = "Dry sample mass"
     with pytest.raises(ConfigurationError, match="identity mismatch"):

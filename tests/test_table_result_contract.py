@@ -6,13 +6,13 @@ from pathlib import Path
 
 import pytest
 
-from attestextract.table_routes import (
+from niceextract.table_routes import (
     build_table_input, evaluate_route, parse_route_response,
     parse_route_response_partial, reconcile_results,
 )
 
 
-EXAMPLES = Path(__file__).resolve().parents[1] / "src/attestextract/examples/table_routes"
+EXAMPLES = Path(__file__).resolve().parents[1] / "src/niceextract/examples/table_routes"
 
 
 def case_named(name):

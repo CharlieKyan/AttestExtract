@@ -10,8 +10,8 @@ import argparse
 import json
 from pathlib import Path
 
-from attestextract.envconfig import load_env_file
-from attestextract.errors import AttestExtractError
+from niceextract.envconfig import load_env_file
+from niceextract.errors import NiceExtractError
 
 from provider_experiment_bundle import prepare_bundle, load_bundle
 from provider_experiment_runner import run_stage, write_report, inspect_experiment, attach_review
@@ -61,7 +61,7 @@ def main(argv=None):
             else:
                 print(json.dumps(inspect_experiment(args.bundle), ensure_ascii=False))
         return 0
-    except AttestExtractError as error:
+    except NiceExtractError as error:
         print(f"Provider experiment: {error}")
         return 1
     except (OSError, ValueError, TypeError, KeyError):

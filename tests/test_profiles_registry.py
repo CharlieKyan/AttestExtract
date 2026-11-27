@@ -4,11 +4,11 @@ import json
 
 import pytest
 
-from attestextract import cli
-from attestextract.config import BackendConfig, resolve_backend_config
-from attestextract.errors import ConfigurationError
-from attestextract.models import BackendResponse
-from attestextract.registry import BackendRegistry, default_registry
+from niceextract import cli
+from niceextract.config import BackendConfig, resolve_backend_config
+from niceextract.errors import ConfigurationError
+from niceextract.models import BackendResponse
+from niceextract.registry import BackendRegistry, default_registry
 
 
 PROFILE = '''[profiles.test]
@@ -31,7 +31,7 @@ def test_explicit_cli_overrides_profile_but_preserves_other_profile_values(tmp_p
     path.write_text(PROFILE)
     config = resolve_backend_config(
         config_path=path, profile="test", environment={
-            "ATTESTEXTRACT_MODEL": "stale-model", "ATTESTEXTRACT_BASE_URL": "https://stale.invalid",
+            "NICEEXTRACT_MODEL": "stale-model", "NICEEXTRACT_BASE_URL": "https://stale.invalid",
         }, overrides={"model": "cli-model", "temperature": 0.0, "structured_output": "off", "format_retries": 0},
     )
     assert config.model == "cli-model"
@@ -43,7 +43,7 @@ def test_explicit_cli_overrides_profile_but_preserves_other_profile_values(tmp_p
 
 def test_legacy_environment_and_defaults_are_preserved():
     config = resolve_backend_config(overrides={"model": "explicit"}, environment={
-        "ATTESTEXTRACT_MODEL": "old", "ATTESTEXTRACT_BASE_URL": "https://synthetic.invalid",
+        "NICEEXTRACT_MODEL": "old", "NICEEXTRACT_BASE_URL": "https://synthetic.invalid",
     })
     assert config.model == "explicit" and config.adapter == "openai-compatible"
     assert config.timeout is None and config.read_timeout is None and config.max_attempts == 1
@@ -117,7 +117,7 @@ def _inputs(tmp_path):
 def test_cli_uses_registered_adapter_and_profile_credentials_without_global_contamination(tmp_path, monkeypatch):
     argv = _inputs(tmp_path)
     env = tmp_path / "settings.env"
-    env.write_text("SYNTHETIC_KEY=file-value\nATTESTEXTRACT_MODEL=stale\nATTESTEXTRACT_BASE_URL=https://stale.invalid")
+    env.write_text("SYNTHETIC_KEY=file-value\nNICEEXTRACT_MODEL=stale\nNICEEXTRACT_BASE_URL=https://stale.invalid")
     monkeypatch.setenv("SYNTHETIC_KEY", "process-value")
     seen = []
 

@@ -10,10 +10,10 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
-from attestextract.errors import ConfigurationError
-from attestextract.evidence import ground_quote
-from attestextract.models import BackendResponse, DocumentChunk, ExtractionRequest, TaskSpec
-from attestextract.pipeline import _parse_response
+from niceextract.errors import ConfigurationError
+from niceextract.evidence import ground_quote
+from niceextract.models import BackendResponse, DocumentChunk, ExtractionRequest, TaskSpec
+from niceextract.pipeline import _parse_response
 
 from provider_experiment_bundle import _read
 from provider_experiment_reporting import PATHS, _contains_value, score_response

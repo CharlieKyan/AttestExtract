@@ -1,5 +1,7 @@
 # 审查摘要：保留 A/B、补齐边界检查并执行新一轮真实调用
 
+本文中的历史源码路径和行号对应当时尚未提交的工作区。
+
 - 基准：`046ba1ad8c6a95c88b3b0c442f4a12f3634f44f5`；保留本轮开始时全部未提交表格实验工作。下述规模相对本轮开始前的私有源码快照，不以 HEAD 冒充上一版实验实现。
 - 目标：当前未提交工作树，运行时 Python 源码 hash 已随新实验冻结；无新提交或标签，包版本仍为 `0.1.0.dev24`。
 - 用户范围：保留 A、B，验证新一轮真实 API 调用。四表一轮最多12次、每次最多4096输出tokens，无重试、无补位；本轮不 commit。
@@ -51,7 +53,7 @@
 
 ## 5. 人工重点（冻结的未提交工作树）
 
-1. [table_routes.py:265](../../src/attestextract/table_routes.py#L265) 的 `_partial_numeric_expression`：局部符号判断不能截掉范围，也不能误伤独立事实或HTML标签。
+1. `src/attestextract/table_routes.py:265` 的 `_partial_numeric_expression`：局部符号判断不能截掉范围，也不能误伤独立事实或HTML标签。
 2. 同文件第405行 `_group_identity_narrowed`：简单群体成员检查不等于任意名称等价推理，不能依赖跨度把群体总量分配给成员。
 3. [table_route_runner.py:95](../../scripts/table_route_runner.py#L95) 的 `_slot_schedule`、第160行 `load_bundle`、第187行 `fork_replay`：一轮必须固定12槽内，旧两轮不被重解释。
 4. [test_table_literal_boundaries.py](../../tests/test_table_literal_boundaries.py) 与 [test_table_single_round.py](../../tests/test_table_single_round.py)：反例与合法正例、上限与恢复分别覆盖。

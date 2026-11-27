@@ -9,9 +9,9 @@ from pathlib import Path
 import httpx
 import pytest
 
-from attestextract import cli
-from attestextract.backends import OpenAICompatibleBackend
-from attestextract.execution import digest
+from niceextract import cli
+from niceextract.backends import OpenAICompatibleBackend
+from niceextract.execution import digest
 
 
 TASK = {"name": "Synthetic power", "record_types": {"power": {
@@ -28,7 +28,7 @@ def response(content):
 @pytest.fixture
 def setup_cli(tmp_path, monkeypatch):
     for key in list(os.environ):
-        if key.startswith(("ATTESTEXTRACT_", "DEEPSEEK_", "QWEN_", "DASHSCOPE_", "VLM_")):
+        if key.startswith(("NICEEXTRACT_", "ATTESTEXTRACT_", "DEEPSEEK_", "QWEN_", "DASHSCOPE_", "VLM_")):
             monkeypatch.delenv(key)
     monkeypatch.setenv("DEEPSEEK_API_KEY", "synthetic-format-guidance-key")
     source = tmp_path / "quoted' source.md"
@@ -45,14 +45,14 @@ def setup_cli(tmp_path, monkeypatch):
         def handle(request):
             calls.append(request)
             return handler(request)
-        monkeypatch.setattr("attestextract.backends.OpenAICompatibleBackend", lambda **kwargs:
+        monkeypatch.setattr("niceextract.backends.OpenAICompatibleBackend", lambda **kwargs:
                             OpenAICompatibleBackend(**kwargs, transport=httpx.MockTransport(handle)))
 
     return args, calls, intercept
 
 
 def command_tokens(terminal):
-    line = next(line for line in terminal.splitlines() if "--resume" in line and "attestextract" in line)
+    line = next(line for line in terminal.splitlines() if "--resume" in line and "niceextract" in line)
     return ([value.replace("''", "'") for value in re.findall(r"'((?:[^']|'')*)'", line)]
             if os.name == "nt" else shlex.split(line))
 

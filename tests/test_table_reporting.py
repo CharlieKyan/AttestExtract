@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from attestextract.table_reporting import render_table_report, score_table_records
+from niceextract.table_reporting import render_table_report, score_table_records
 
 
 def write(path, value):

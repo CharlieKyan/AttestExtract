@@ -3,10 +3,10 @@
 from copy import deepcopy
 import json
 
-from attestextract import ExtractionResult, extract
-from attestextract.annotation_view import save_annotation
-from attestextract.backends import ReplayBackend
-from attestextract.expert_review import build_expert_review
+from niceextract import ExtractionResult, extract
+from niceextract.annotation_view import save_annotation
+from niceextract.backends import ReplayBackend
+from niceextract.expert_review import build_expert_review
 
 
 def table_result(chunk_id, value):

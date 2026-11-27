@@ -8,13 +8,13 @@ from pathlib import Path
 import httpx
 import pytest
 
-from attestextract import create_archive, extract
-from attestextract.adapter_examples import SyntheticEnvelopeBackend, synthetic_factory
-from attestextract.config import BackendConfig
-from attestextract.documents import Document
-from attestextract.errors import BackendError, ConfigurationError, InvalidResponseError
-from attestextract.models import ExtractionRequest, GenerationOptions, TaskSpec
-from attestextract.registry import default_registry
+from niceextract import create_archive, extract
+from niceextract.adapter_examples import SyntheticEnvelopeBackend, synthetic_factory
+from niceextract.config import BackendConfig
+from niceextract.documents import Document
+from niceextract.errors import BackendError, ConfigurationError, InvalidResponseError
+from niceextract.models import ExtractionRequest, GenerationOptions, TaskSpec
+from niceextract.registry import default_registry
 
 
 SCRIPT = Path(__file__).parents[1] / "scripts" / "d2_acceptance.py"

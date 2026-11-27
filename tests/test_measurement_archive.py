@@ -6,11 +6,11 @@ import json
 
 import pytest
 
-from attestextract import extract
-from attestextract.archive import CandidateReview, ExtractionArchive, create_archive
-from attestextract.backends import ReplayBackend
-from attestextract.documents import Document
-from attestextract.models import CandidateLink, EvidenceRef, SourceSpan
+from niceextract import extract
+from niceextract.archive import CandidateReview, ExtractionArchive, create_archive
+from niceextract.backends import ReplayBackend
+from niceextract.documents import Document
+from niceextract.models import CandidateLink, EvidenceRef, SourceSpan
 
 
 def task(*, grouped=True):

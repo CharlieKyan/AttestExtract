@@ -1,12 +1,12 @@
 """Document reports distinguish original tables from their processing windows."""
 
-from attestextract import ExtractionResult, extract
-from attestextract.backends import ReplayBackend
-from attestextract.document_routing import table_input_for_chunk
-from attestextract.models import DocumentChunk
-from attestextract.reporting import render_markdown_report
-from attestextract.structure import build_structure
-from attestextract.table_windows import split_table_chunk
+from niceextract import ExtractionResult, extract
+from niceextract.backends import ReplayBackend
+from niceextract.document_routing import table_input_for_chunk
+from niceextract.models import DocumentChunk
+from niceextract.reporting import render_markdown_report
+from niceextract.structure import build_structure
+from niceextract.table_windows import split_table_chunk
 
 
 SOURCE = ("<table><tr><th>Sample</th><th>Mass/g</th></tr>"

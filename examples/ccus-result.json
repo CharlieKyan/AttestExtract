@@ -1,0 +1,353 @@
+{
+  "schema_version": "0.4",
+  "package_version": "0.1.0a1",
+  "task": {
+    "name": "synthetic-ccus-observations",
+    "description": "Extract each stated pressure observation separately. Keep different temperature conditions as separate observations. Do not infer missing values.",
+    "record_types": {
+      "observation": {
+        "description": "One pressure observation for a sample at a stated temperature.",
+        "fields": {
+          "subject": {
+            "type": "string",
+            "description": "Sample name as stated in the source.",
+            "required": true,
+            "required_when": {},
+            "not_applicable_when": {}
+          },
+          "pressure": {
+            "type": "number",
+            "description": "Stated CO2 adsorption pressure.",
+            "required": true,
+            "required_when": {},
+            "not_applicable_when": {}
+          },
+          "pressure_unit": {
+            "type": "string",
+            "description": "Pressure unit as stated.",
+            "required": true,
+            "required_when": {},
+            "not_applicable_when": {}
+          },
+          "temperature": {
+            "type": "number",
+            "description": "Temperature for this observation.",
+            "required": true,
+            "required_when": {},
+            "not_applicable_when": {}
+          },
+          "temperature_unit": {
+            "type": "string",
+            "description": "Temperature unit as stated.",
+            "required": true,
+            "required_when": {},
+            "not_applicable_when": {}
+          }
+        },
+        "identity_fields": [
+          "subject"
+        ],
+        "condition_fields": [
+          "temperature",
+          "temperature_unit"
+        ],
+        "measurement_groups": {},
+        "comparison_fields": []
+      }
+    }
+  },
+  "source": {
+    "name": "ccus.txt",
+    "sha256": "23242a870206d3ed63bdfe1325485dff99595eb3b9e3049f97015f3813b0a157",
+    "character_count": 86,
+    "document_id": "document-e9e30b1867158f9e5a469d71"
+  },
+  "candidates": [
+    {
+      "candidate_id": "candidate-d4733b538f65efbbaedf5caf",
+      "record_type": "observation",
+      "fields": {
+        "subject": {
+          "value": "样品A",
+          "evidence": {
+            "quote": "样品A在25 °C时的CO2吸附压力为12 bar。",
+            "status": "matched",
+            "start": 32,
+            "end": 58,
+            "matches": [
+              {
+                "start": 32,
+                "end": 58
+              }
+            ],
+            "source_matches": [],
+            "table_refs": []
+          }
+        },
+        "pressure": {
+          "value": 12,
+          "evidence": {
+            "quote": "样品A在25 °C时的CO2吸附压力为12 bar。",
+            "status": "matched",
+            "start": 32,
+            "end": 58,
+            "matches": [
+              {
+                "start": 32,
+                "end": 58
+              }
+            ],
+            "source_matches": [],
+            "table_refs": []
+          }
+        },
+        "pressure_unit": {
+          "value": "bar",
+          "evidence": {
+            "quote": "样品A在25 °C时的CO2吸附压力为12 bar。",
+            "status": "matched",
+            "start": 32,
+            "end": 58,
+            "matches": [
+              {
+                "start": 32,
+                "end": 58
+              }
+            ],
+            "source_matches": [],
+            "table_refs": []
+          }
+        },
+        "temperature": {
+          "value": 25,
+          "evidence": {
+            "quote": "样品A在25 °C时的CO2吸附压力为12 bar。",
+            "status": "matched",
+            "start": 32,
+            "end": 58,
+            "matches": [
+              {
+                "start": 32,
+                "end": 58
+              }
+            ],
+            "source_matches": [],
+            "table_refs": []
+          }
+        },
+        "temperature_unit": {
+          "value": "°C",
+          "evidence": {
+            "quote": "样品A在25 °C时的CO2吸附压力为12 bar。",
+            "status": "matched",
+            "start": 32,
+            "end": 58,
+            "matches": [
+              {
+                "start": 32,
+                "end": 58
+              }
+            ],
+            "source_matches": [],
+            "table_refs": []
+          }
+        }
+      },
+      "chunk_ids": [
+        "chunk-0001"
+      ],
+      "checks": [
+        {
+          "code": "schema_passed",
+          "passed": true,
+          "field": null
+        },
+        {
+          "code": "evidence_matched",
+          "passed": true,
+          "field": "subject"
+        },
+        {
+          "code": "evidence_matched",
+          "passed": true,
+          "field": "pressure"
+        },
+        {
+          "code": "evidence_matched",
+          "passed": true,
+          "field": "pressure_unit"
+        },
+        {
+          "code": "evidence_matched",
+          "passed": true,
+          "field": "temperature"
+        },
+        {
+          "code": "evidence_matched",
+          "passed": true,
+          "field": "temperature_unit"
+        }
+      ],
+      "needs_review": false,
+      "field_status": {
+        "subject": "reported",
+        "pressure": "reported",
+        "pressure_unit": "reported",
+        "temperature": "reported",
+        "temperature_unit": "reported"
+      },
+      "measurements": {},
+      "source_context": []
+    },
+    {
+      "candidate_id": "candidate-a38230e716bc45efc8b6086f",
+      "record_type": "observation",
+      "fields": {
+        "subject": {
+          "value": "样品A",
+          "evidence": {
+            "quote": "样品A在50 °C时的CO2吸附压力为12 bar。",
+            "status": "matched",
+            "start": 59,
+            "end": 85,
+            "matches": [
+              {
+                "start": 59,
+                "end": 85
+              }
+            ],
+            "source_matches": [],
+            "table_refs": []
+          }
+        },
+        "pressure": {
+          "value": 12,
+          "evidence": {
+            "quote": "样品A在50 °C时的CO2吸附压力为12 bar。",
+            "status": "matched",
+            "start": 59,
+            "end": 85,
+            "matches": [
+              {
+                "start": 59,
+                "end": 85
+              }
+            ],
+            "source_matches": [],
+            "table_refs": []
+          }
+        },
+        "pressure_unit": {
+          "value": "bar",
+          "evidence": {
+            "quote": "样品A在50 °C时的CO2吸附压力为12 bar。",
+            "status": "matched",
+            "start": 59,
+            "end": 85,
+            "matches": [
+              {
+                "start": 59,
+                "end": 85
+              }
+            ],
+            "source_matches": [],
+            "table_refs": []
+          }
+        },
+        "temperature": {
+          "value": 50,
+          "evidence": {
+            "quote": "样品A在50 °C时的CO2吸附压力为12 bar。",
+            "status": "matched",
+            "start": 59,
+            "end": 85,
+            "matches": [
+              {
+                "start": 59,
+                "end": 85
+              }
+            ],
+            "source_matches": [],
+            "table_refs": []
+          }
+        },
+        "temperature_unit": {
+          "value": "°C",
+          "evidence": {
+            "quote": "样品A在50 °C时的CO2吸附压力为12 bar。",
+            "status": "matched",
+            "start": 59,
+            "end": 85,
+            "matches": [
+              {
+                "start": 59,
+                "end": 85
+              }
+            ],
+            "source_matches": [],
+            "table_refs": []
+          }
+        }
+      },
+      "chunk_ids": [
+        "chunk-0001"
+      ],
+      "checks": [
+        {
+          "code": "schema_passed",
+          "passed": true,
+          "field": null
+        },
+        {
+          "code": "evidence_matched",
+          "passed": true,
+          "field": "subject"
+        },
+        {
+          "code": "evidence_matched",
+          "passed": true,
+          "field": "pressure"
+        },
+        {
+          "code": "evidence_matched",
+          "passed": true,
+          "field": "pressure_unit"
+        },
+        {
+          "code": "evidence_matched",
+          "passed": true,
+          "field": "temperature"
+        },
+        {
+          "code": "evidence_matched",
+          "passed": true,
+          "field": "temperature_unit"
+        }
+      ],
+      "needs_review": false,
+      "field_status": {
+        "subject": "reported",
+        "pressure": "reported",
+        "pressure_unit": "reported",
+        "temperature": "reported",
+        "temperature_unit": "reported"
+      },
+      "measurements": {},
+      "source_context": []
+    }
+  ],
+  "review": [],
+  "links": [],
+  "run": {
+    "backend": "replay",
+    "mode": "replay",
+    "output_protocol": "flat-v1",
+    "chunk_count": 1,
+    "response_count": 1,
+    "candidate_count": 2,
+    "request_attempts": 1,
+    "model": "replay",
+    "usage": {},
+    "elapsed_seconds": 0.0013066000028629787
+  }
+}

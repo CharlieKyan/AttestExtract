@@ -5,18 +5,18 @@ import json
 
 import pytest
 
-from attestextract import extract
-from attestextract.archive import CandidateReview, ExtractionArchive, create_archive
-from attestextract.backends import ReplayBackend
-from attestextract.documents import Document
-from attestextract.evidence import check_measurement, ground_quote
-from attestextract.identity import grounded_candidate_id
-from attestextract.models import (
+from niceextract import extract
+from niceextract.archive import CandidateReview, ExtractionArchive, create_archive
+from niceextract.backends import ReplayBackend
+from niceextract.documents import Document
+from niceextract.evidence import check_measurement, ground_quote
+from niceextract.identity import grounded_candidate_id
+from niceextract.models import (
     ContextOptions, ContextPassage, ContextSegment, DocumentChunk, FieldValue, MeasurementInput, MeasurementSpec, SourceSpan,
 )
-from attestextract.normalization import normalized_view
-from attestextract.reporting import render_markdown_report
-from attestextract.structure import build_structure
+from niceextract.normalization import normalized_view
+from niceextract.reporting import render_markdown_report
+from niceextract.structure import build_structure
 
 
 def chunk(source):

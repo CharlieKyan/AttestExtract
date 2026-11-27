@@ -15,9 +15,9 @@ import sys
 
 import httpx
 
-import attestextract
-from attestextract import Document, create_archive, backends, cli
-from attestextract.models import ExtractionResult
+import niceextract
+from niceextract import Document, create_archive, backends, cli
+from niceextract.models import ExtractionResult
 
 
 def _read(path):
@@ -44,7 +44,7 @@ def main(argv=None):
     root = parser.parse_args(argv).output_dir.resolve()
     root.mkdir(parents=True, exist_ok=False)
     for key in list(os.environ):
-        if key.startswith(("ATTESTEXTRACT_", "DEEPSEEK_", "QWEN_", "DASHSCOPE_", "VLM_")):
+        if key.startswith(("NICEEXTRACT_", "ATTESTEXTRACT_", "DEEPSEEK_", "QWEN_", "DASHSCOPE_", "VLM_")):
             del os.environ[key]
     os.environ["QWEN_API_KEY"] = "synthetic-key"
     source, task_path = root / "source.md", root / "task.json"
@@ -126,7 +126,7 @@ def main(argv=None):
         assert not any(name == "langextract" or name.startswith("langextract.") for name in sys.modules)
     finally:
         backends.OpenAICompatibleBackend = original
-    summary = {"passed": True, "package_version": attestextract.__version__, "module_path": attestextract.__file__,
+    summary = {"passed": True, "package_version": niceextract.__version__, "module_path": niceextract.__file__,
                "real_endpoint_calls": 0, "mock_http_calls": len(observed), "tls_probe_requests": 0,
                "initial_chunks": 16, "completed_before_timeout": 11, "timeout_requests": 1,
                "offline_check_new_calls": 0, "resume_new_calls": 5, "reused_chunks": 11,
