@@ -4,32 +4,32 @@
 
 # NiceExtract
 
-[English](README.md) · [快速开始](#快速开始) · [任务与标准示例](#定义任务与编写标准示例) · [配置 API](#配置-api-与切换模型) · [多篇文献与 CSV（dev60 预览）](#多篇文献共用一份字段定义)
+[English](README.md) · [快速开始](#快速开始) · [任务与标准示例](#定义任务与编写标准示例) · [配置 API](#配置-api-与切换模型) · [多篇文献与 CSV](#多篇文献共用一份字段定义)
 
 ## 简介
 
-NiceExtract 是一个用语言模型从论文正文和表格中提取观测记录的 Python 框架。你定义要收集的字段，通过命令行或 Python 接口获得带原文引文的候选记录。即将发布的 dev60 增加了组表功能。指定每行代表的对象后，还可以把每篇文献的观测整理成 CSV，再从单元格查回原值、单位和出处。
+NiceExtract 是一个用语言模型从论文正文和表格中提取观测记录的 Python 框架。你定义要收集的字段，通过命令行或 Python 接口获得带原文引文的候选记录。指定每行代表的对象后，还可以把每篇文献的观测整理成 CSV，再从单元格查回原值、单位和出处。
 
 ## 快速开始
 
-使用 Python 3.11 或更高版本，在想保存结果的文件夹里运行下面两条命令。第一条直接从 GitHub 下载并安装公开预览版，第二条离线运行两个随包示例。无需克隆仓库、手动解压或配置 API 密钥。
+先激活一个使用 Python 3.11 或更高版本的新虚拟环境。在想保存结果的文件夹里运行下面两条命令，直接从 GitHub 安装 NiceExtract 0.1.0a1 的 wheel，再运行两个随包示例。演示可以离线运行，无需克隆仓库或配置 API 密钥。
 
 ```sh
-python -m pip install "https://github.com/CharlieKyan/NiceExtract/archive/5b19b8f25b987771beca119c0b7251dd199c6123.zip"
+python -m pip install "https://github.com/CharlieKyan/NiceExtract/releases/download/v0.1.0a1/niceextract-0.1.0a1-py3-none-any.whl"
 niceextract demo --output result.json
 ```
 
-打开当前文件夹中的 `result.json`。演示用科研片段和采购需求两份合成材料回放预设回答。科研示例里，样品 A 在 25 °C 和 50 °C 下的压力都是 12 bar，结果中的两条候选各自保留了对应温度和原句。[示例原文](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/src/niceextract/examples/ccus.txt) · [科研示例 JSON](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/examples/ccus-result.json)
+打开当前文件夹中的 `result.json`。演示用科研片段和采购需求两份合成材料回放预设回答。科研示例里，样品 A 在 25 °C 和 50 °C 下的压力都是 12 bar，结果中的两条候选各自保留了对应温度和原句。[示例原文](https://github.com/CharlieKyan/NiceExtract/blob/v0.1.0a1/src/niceextract/examples/ccus.txt) · [科研示例 JSON](https://github.com/CharlieKyan/NiceExtract/blob/v0.1.0a1/examples/ccus-result.json)
 
-dev60 新增的 CSV 组表功能将在后续版本公开。如果你手头已有 dev60 的 wheel 安装包，可以激活一个新的虚拟环境，在安装包所在目录运行 `python -m pip install ./niceextract-0.1.0a1-py3-none-any.whl`，然后在任意可写目录运行同一条演示命令。
+如果已经下载了 wheel，可以在安装包所在目录运行 `python -m pip install ./niceextract-0.1.0a1-py3-none-any.whl`。发布页也提供源码分发包和 SHA-256 校验清单。[发布附件](https://github.com/CharlieKyan/NiceExtract/releases/tag/v0.1.0a1)
 
 ## 为什么选择 NiceExtract？
 
-- **在多篇文献中沿用同一套字段定义。** 在 dev60 预览中，你可以声明哪些字段收文字、哪些收数值，再用 `prepare-task` 保存给后续文献使用。材料牌号 `003` 可以保留前导零。浓度字段则可区分 `5 ppm`、`2–5 ppm` 和 `≥5 ppm`。
+- **在多篇文献中沿用同一套字段定义。** 你可以声明哪些字段收文字、哪些收数值，再用 `prepare-task` 保存给后续文献使用。材料牌号 `003` 可以保留前导零。浓度字段则可区分 `5 ppm`、`2–5 ppm` 和 `≥5 ppm`。
 - **回到原文核对每个字段。** 正文字段保留引文，成功匹配时还会给出原文位置。缺少引文、同一句话能匹配多处等情况会被标出，方便你有针对性地复核。
 - **正文和表格可以一起读。** 一次运行就能处理正文及其中的 Markdown 或 HTML 表格。两类结果保存在同一份 JSON 中，表格观测还可通过单元格引用追溯到原表的行和列。
 - **保留理解数值所需的上下文。** 核对一个报告值时，可以一起查看它描述的对象、单位和适用条件。即使数值相同，在不同条件下得到的观测也可以分别记录。
-- **长文档中断后可以接着处理。** 你可以设置模型调用次数上限并保存运行记录。恢复时可以复用已完成的片段，省去重复调用。[运行与恢复指南](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/docs/EXECUTION.md)
+- **长文档中断后可以接着处理。** 你可以设置模型调用次数上限并保存运行记录。恢复时可以复用已完成的片段，省去重复调用。[运行与恢复指南](https://github.com/CharlieKyan/NiceExtract/blob/v0.1.0a1/docs/EXECUTION.md)
 
 ## 从原文定位到科研记录
 
@@ -37,10 +37,10 @@ LangExtract 可以在文档中高亮抽取到的文本。在它的 v1.7.2 数据
 
 | 复核时会遇到的问题 | 在 NiceExtract 中怎么查 |
 | --- | --- |
-| **原文有几处相同的表述，这个字段引用了哪一处？** | 正文字段各自记录引文的匹配状态。引文在检索范围内出现多次时，可以查看各个可能的位置。如果只在折叠空白或对齐部分标点后才找到匹配，结果会同时保留模型引文和原文片段，供你对照。[引文定位说明](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/docs/D4_EVIDENCE.md) |
-| **这个表头的单位适用于哪一列数值？** | 沿着单元格引用，可以从数值查到为它引用的表头、单位或脚注。结果分别记录引文是否找到、行列位置是否符合局部规则。遇到跨列表头时，可以回到原表判断这个单位是否适用。[表格检查说明](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/docs/TABLE_EXTRACTION.md) |
-| **轴承的温度能填进整台电机的温度栏吗？** | 以 dev60 的组表功能为例。假设原文写“电机 M4 的轴承 B7 达到 60 °C”。字段允许收录部件温度时，可以在 M4 下查到这条观测，直接测量对象仍是 B7。若字段要求整机平均温度，且该读数已判定不适用，主表相应格留空，明细仍保留轴承的 60 °C 及引文。指定 `--table-subject` 后，可在设定的查证预算内回读原文，归属有歧义时保留待核状态。[预览 CSV 组表流程](#多篇文献共用一份字段定义) |
-| **如果模型的回答只写到表格中间，怎么办？** | 当服务明确报告输出达到长度上限时，框架可以把整张表按行拆成几次抽取，必要时再细分到单元格。每次重试仍能看到原表及表头，所有重试共用本次运行的调用预算。截断的回答不会进入抽取结果。[表格恢复说明](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/docs/TABLE_EXTRACTION.md#预算格式错误与恢复) |
+| **原文有几处相同的表述，这个字段引用了哪一处？** | 正文字段各自记录引文的匹配状态。引文在检索范围内出现多次时，可以查看各个可能的位置。如果只在折叠空白或对齐部分标点后才找到匹配，结果会同时保留模型引文和原文片段，供你对照。[引文定位说明](https://github.com/CharlieKyan/NiceExtract/blob/v0.1.0a1/docs/D4_EVIDENCE.md) |
+| **这个表头的单位适用于哪一列数值？** | 沿着单元格引用，可以从数值查到为它引用的表头、单位或脚注。结果分别记录引文是否找到、行列位置是否符合局部规则。遇到跨列表头时，可以回到原表判断这个单位是否适用。[表格检查说明](https://github.com/CharlieKyan/NiceExtract/blob/v0.1.0a1/docs/TABLE_EXTRACTION.md) |
+| **轴承的温度能填进整台电机的温度栏吗？** | 假设原文写“电机 M4 的轴承 B7 达到 60 °C”。字段允许收录部件温度时，可以在 M4 下查到这条观测，直接测量对象仍是 B7。若字段要求整机平均温度，且该读数已判定不适用，主表相应格留空，明细仍保留轴承的 60 °C 及引文。指定 `--table-subject` 后，可在设定的查证预算内回读原文，归属有歧义时保留待核状态。[组表与查询示例](https://github.com/CharlieKyan/NiceExtract/blob/v0.1.0a1/docs/dataset-assembly.md) |
+| **如果模型的回答只写到表格中间，怎么办？** | 当服务明确报告输出达到长度上限时，框架可以把整张表按行拆成几次抽取，必要时再细分到单元格。每次重试仍能看到原表及表头，所有重试共用本次运行的调用预算。截断的回答不会进入抽取结果。[表格恢复说明](https://github.com/CharlieKyan/NiceExtract/blob/v0.1.0a1/docs/TABLE_EXTRACTION.md#预算格式错误与恢复) |
 
 ## 浏览示例
 
@@ -48,13 +48,13 @@ LangExtract 可以在文档中高亮抽取到的文本。在它的 v1.7.2 数据
 
 | 你想收集什么？ | 可以看哪里？ |
 | --- | --- |
-| 测量结果和实验条件 | 对照[研究片段](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/src/niceextract/examples/ccus.txt)和[抽取结果 JSON](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/examples/ccus-result.json)，看同一样品的两次测量如何分别记录。 |
-| 物品、数量和交付要求 | 对照[采购需求](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/src/niceextract/examples/procurement.md)和[任务定义](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/src/niceextract/examples/procurement.task.json)，看换一组字段后如何处理另一类文档。 |
-| 原文明示的关系 | 对照[原句](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/src/niceextract/examples/d1/relation/source.txt)和[人工编写的预期记录](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/src/niceextract/examples/d1/relation/expected.json)，看如何表达谁供应什么。 |
+| 测量结果和实验条件 | 对照[研究片段](https://github.com/CharlieKyan/NiceExtract/blob/v0.1.0a1/src/niceextract/examples/ccus.txt)和[抽取结果 JSON](https://github.com/CharlieKyan/NiceExtract/blob/v0.1.0a1/examples/ccus-result.json)，看同一样品的两次测量如何分别记录。 |
+| 物品、数量和交付要求 | 对照[采购需求](https://github.com/CharlieKyan/NiceExtract/blob/v0.1.0a1/src/niceextract/examples/procurement.md)和[任务定义](https://github.com/CharlieKyan/NiceExtract/blob/v0.1.0a1/src/niceextract/examples/procurement.task.json)，看换一组字段后如何处理另一类文档。 |
+| 原文明示的关系 | 对照[原句](https://github.com/CharlieKyan/NiceExtract/blob/v0.1.0a1/src/niceextract/examples/d1/relation/source.txt)和[人工编写的预期记录](https://github.com/CharlieKyan/NiceExtract/blob/v0.1.0a1/src/niceextract/examples/d1/relation/expected.json)，看如何表达谁供应什么。 |
 
 ## 抽取自己的文档
 
-在同一目录准备两个文件。`paper.md` 放这次要处理的原文，保存为 UTF-8 文本或 Markdown。`task.json` 保存本研究的抽取规则，换一篇论文时也可以继续用。如果从 PDF 开始，请先转换，并核对需要的表格是否保留为 Markdown 或 HTML 表格。[表格抽取指南](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/docs/TABLE_EXTRACTION.md)
+在同一目录准备两个文件。`paper.md` 放这次要处理的原文，保存为 UTF-8 文本或 Markdown。`task.json` 保存本研究的抽取规则，换一篇论文时也可以继续用。如果从 PDF 开始，请先转换，并核对需要的表格是否保留为 Markdown 或 HTML 表格。[表格抽取指南](https://github.com/CharlieKyan/NiceExtract/blob/v0.1.0a1/docs/TABLE_EXTRACTION.md)
 
 ### 定义任务与编写标准示例
 
@@ -68,6 +68,10 @@ LangExtract 可以在文档中高亮抽取到的文本。在它的 v1.7.2 数据
   "field_list": {
     "dry_mass": "试样干燥后测得的质量。排除干燥前的测量值。",
     "thickness": "原文报告的试样厚度，保留测量时的条件。"
+  },
+  "field_types": {
+    "dry_mass": {"kind": "numeric"},
+    "thickness": {"kind": "numeric"}
   },
   "examples": [
     {
@@ -100,7 +104,7 @@ LangExtract 可以在文档中高亮抽取到的文本。在它的 v1.7.2 数据
 python -c "from niceextract import load_task; print(list(load_task('task.json').record_types))"
 ```
 
-上例应输出 `['dry_mass', 'thickness']`。如果标注用了未声明的字段，或引文在示例原文中找不到，错误会指出对应条目。引文的含义是否支持这条标注，仍由你判断。若需要记录“主体—关系—客体”等自定义结构，可参考关系任务。[另一份质量与长度任务](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/src/niceextract/examples/observations.task.json) · [关系任务](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/src/niceextract/examples/d1/relation/task.json) · [任务编写指南](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/docs/SIMPLE_TASKS.md)
+上例应输出 `['dry_mass', 'thickness']`。如果标注用了未声明的字段，或引文在示例原文中找不到，错误会指出对应条目。引文的含义是否支持这条标注，仍由你判断。若需要记录“主体—关系—客体”等自定义结构，可参考关系任务。[另一份质量与长度任务](https://github.com/CharlieKyan/NiceExtract/blob/v0.1.0a1/src/niceextract/examples/observations.task.json) · [关系任务](https://github.com/CharlieKyan/NiceExtract/blob/v0.1.0a1/src/niceextract/examples/d1/relation/task.json) · [任务编写指南](https://github.com/CharlieKyan/NiceExtract/blob/v0.1.0a1/docs/SIMPLE_TASKS.md)
 
 ## 配置 API 与切换模型
 
@@ -110,7 +114,7 @@ python -c "from niceextract import load_task; print(list(load_task('task.json').
 
 先为打算使用的服务配置密钥。可以设置系统环境变量，也可以将密钥放在私有的 `.env` 文件里。以下示例显式读取该文件。如果只用环境变量，命令行省略 `--env-file .env`，Python 省略 `env_file=".env"`。同名变量以当前进程环境中的值为准。
 
-| 预览版内置连接 | 模型标识 | 密钥变量 |
+| 内置连接 | 模型标识 | 密钥变量 |
 | --- | --- | --- |
 | DeepSeek Chat | `deepseek:deepseek-flash` | `DEEPSEEK_API_KEY` |
 | DeepSeek Responses | `deepseek-responses:deepseek-flash` | `DEEPSEEK_API_KEY` |
@@ -152,13 +156,13 @@ print(result.model_dump_json(indent=2))
 
 ### 接入实验室网关或复用团队配置
 
-**自定义兼容接口。** 如果服务支持非流式、使用 Bearer 密钥的 OpenAI 兼容 Chat Completions 接口，填写服务的 API 基础地址和原始模型名即可。将下面的示例地址和模型名替换为服务商给出的值，并将该端点的密钥保存在 `LAB_MODEL_KEY` 变量中。在 Python 里，同一个 `extract()` 接受 `base_url`、原始模型名 `model` 和 `api_key_env="LAB_MODEL_KEY"`。[兼容接口接入说明](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/docs/MINIMAL_API.md)
+**自定义兼容接口。** 如果服务支持非流式、使用 Bearer 密钥的 OpenAI 兼容 Chat Completions 接口，填写服务的 API 基础地址和原始模型名即可。将下面的示例地址和模型名替换为服务商给出的值，并将该端点的密钥保存在 `LAB_MODEL_KEY` 变量中。在 Python 里，同一个 `extract()` 接受 `base_url`、原始模型名 `model` 和 `api_key_env="LAB_MODEL_KEY"`。[兼容接口接入说明](https://github.com/CharlieKyan/NiceExtract/blob/v0.1.0a1/docs/MINIMAL_API.md)
 
 ```sh
 niceextract extract --input paper.md --task task.json --env-file .env --base-url https://gateway.example/v1 --model lab-model --api-key-env LAB_MODEL_KEY --output gateway.json
 ```
 
-**团队共用配置。** 如果要共用端点、超时或生成参数，可以把它们存成 TOML 文件里的命名配置。要运行下面的示例，请把链接中的配置文件保存为 `backends.toml`，与 `task.json` 放在同一目录。其中的 `qwen` 配置从环境变量或私有 `.env` 中读取 `DASHSCOPE_API_KEY`。[下载配置文件示例](https://raw.githubusercontent.com/CharlieKyan/NiceExtract/5b19b8f25b987771beca119c0b7251dd199c6123/examples/backends.toml) · [模型与配置指南](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/docs/BACKENDS.md)
+**团队共用配置。** 如果要共用端点、超时或生成参数，可以把它们存成 TOML 文件里的命名配置。要运行下面的示例，请把链接中的配置文件保存为 `backends.toml`，与 `task.json` 放在同一目录。其中的 `qwen` 配置从环境变量或私有 `.env` 中读取 `DASHSCOPE_API_KEY`。[下载配置文件示例](https://raw.githubusercontent.com/CharlieKyan/NiceExtract/v0.1.0a1/examples/backends.toml) · [模型与配置指南](https://github.com/CharlieKyan/NiceExtract/blob/v0.1.0a1/docs/BACKENDS.md)
 
 ```sh
 niceextract extract --input paper.md --task task.json --env-file .env --config backends.toml --profile qwen --output profile-result.json
@@ -166,16 +170,7 @@ niceextract extract --input paper.md --task task.json --env-file .env --config b
 
 ## 多篇文献共用一份字段定义
 
-**dev60 功能预览。** 以下命令适用于 dev60 发布后的版本。届时可在上文的任务顶层添加 `field_types`。像下面这样把两个字段都声明为数值型，就可以离线准备共用任务。数值型默认接受单值、范围和单侧界限。
-
-```json
-{
-  "field_types": {
-    "dry_mass": {"kind": "numeric"},
-    "thickness": {"kind": "numeric"}
-  }
-}
-```
+上面的任务已用 `field_types` 把干质量和厚度声明为数值字段。数值字段默认接受单值、范围和单侧界限。只收单值的字段可加 `"shapes": ["scalar"]`。全部字段都已声明时，可以离线准备一份共用任务。
 
 ```sh
 niceextract prepare-task --task task.json --output-dir prepared
@@ -191,7 +186,7 @@ niceextract extract --input paper.md --task prepared/task.json --env-file .env -
 
 在上例的 `run/dataset/` 中，打开 `main.csv` 查看各字段的值、依据和引文状态。要核对某个单元格，在 `lineage.json` 的 `rows` 数组中找到与 CSV 数据行同序的一行，从该行的 `cells[字段名]` 取得观测编号。再用编号到 `observations.csv` 或 `dataset.json` 查看原值、单位、直接对象与证据。“引文已定位”说明能在原文中找到这段文字。它是否支持这项判断，仍可回到原文核对。
 
-对于仍有争议的观测，`niceextract review-dataset` 可将本地模型的复核意见写入独立目录。使用时需另行准备可信的 Intern-Decision-4B 检查点、配套推理代码和运行环境。
+对于仍有争议的观测，`niceextract review-dataset` 可将本地模型的复核意见写入独立目录。使用时需另行准备可信的 Intern-Decision-4B 检查点、配套推理代码和运行环境。[组表与本地复核指南](https://github.com/CharlieKyan/NiceExtract/blob/v0.1.0a1/docs/dataset-assembly.md)
 
 ## 核对抽取结果
 
@@ -203,8 +198,8 @@ niceextract demo --example ccus --output demo-run/ccus-result.json
 niceextract export-review --input demo-run/ccus-result.json --output-dir review-example
 ```
 
-打开 `review-example/annotation.md`，即可一起阅读字段、原值、条件和原文引句。同一份内容也会保存为 `annotation.json`。复核自己的 `deepseek.json` 或 `qwen.json` 时，请在输入 JSON 所在目录之外选择新的输出目录。[结果复核指南](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/docs/EXPERT_REVIEW.md)
+打开 `review-example/annotation.md`，即可一起阅读字段、原值、条件和原文引句。同一份内容也会保存为 `annotation.json`。复核自己的 `deepseek.json` 或 `qwen.json` 时，请在输入 JSON 所在目录之外选择新的输出目录。[结果复核指南](https://github.com/CharlieKyan/NiceExtract/blob/v0.1.0a1/docs/EXPERT_REVIEW.md)
 
 ## 许可证
 
-上文提供的预览版源码使用 Apache License 2.0。版权所有 © 2026 Yuzhi Kuang。[Apache License 2.0](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/LICENSE) · [署名声明](https://github.com/CharlieKyan/NiceExtract/blob/5b19b8f25b987771beca119c0b7251dd199c6123/NOTICE)
+版权所有 © 2026 Yuzhi Kuang。[Apache License 2.0](https://github.com/CharlieKyan/NiceExtract/blob/v0.1.0a1/LICENSE) · [署名声明](https://github.com/CharlieKyan/NiceExtract/blob/v0.1.0a1/NOTICE)
