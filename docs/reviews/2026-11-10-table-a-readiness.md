@@ -1,5 +1,7 @@
 # 审查摘要：A 路线提交前的证据边界检查
 
+本文中的历史源码路径和行号对应当时尚未提交的工作区。
+
 后续状态：本页保留发现当时的事实；两类反例的修复与新一轮真实验证见[后续摘要](2026-11-10-table-fresh-live.md)。两条路线均保留，仍未正式提交。
 
 - 基准：`046ba1ad8c6a95c88b3b0c442f4a12f3634f44f5`；目标为当前未提交表格实验工作树，无目标提交或新标签。
@@ -22,9 +24,9 @@
 
 | 入口 | 发现与审阅重点 |
 | --- | --- |
-| [table_routes.py:265](../../src/attestextract/table_routes.py#L265) | `_literal_boundary_problem` 未识别上述数值限定信息；非单位引用在第 320 行直接保留 |
-| [table_routes.py:489](../../src/attestextract/table_routes.py#L489) | 群体检查关注格子的跨度，未阻止同格群体身份缩为成员 |
-| [table_routes.py:701](../../src/attestextract/table_routes.py#L701) | 漏检记录进入当前结果，影响实际输出 |
+| `src/attestextract/table_routes.py:265` | `_literal_boundary_problem` 未识别上述数值限定信息；非单位引用在第 320 行直接保留 |
+| `src/attestextract/table_routes.py:489` | 群体检查关注格子的跨度，未阻止同格群体身份缩为成员 |
+| `src/attestextract/table_routes.py:701` | 漏检记录进入当前结果，影响实际输出 |
 | [test_table_route_live_regressions.py:162](../../tests/test_table_route_live_regressions.py#L162) | 现有测试只改候选值，仍引用完整数值格；未覆盖模型直接给窄引文 |
 | [test_table_route_live_regressions.py:171](../../tests/test_table_route_live_regressions.py#L171) | 群体身份缩窄保护测试只覆盖 B2，未覆盖 A |
 

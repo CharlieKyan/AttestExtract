@@ -40,6 +40,13 @@ TASK = {"prompt_description": "Extract each directly reported yield, preserving 
         "field_list": {"yield": "Reported yield of each object", "mass": "Reported mass, if present"}}
 
 
+def owns_quote(payload, quote):
+    source = payload["source"]
+    if isinstance(source, str):
+        return quote in source
+    return any(part["role"] == "body" and quote in part["text"] for part in source)
+
+
 def read(path):
     return json.loads(path.read_text(encoding="utf-8"))
 
@@ -75,7 +82,7 @@ class Service:
             self.calls.append("extraction")
             records = []
             for quote, entity, value, conditions in CLAIMS:
-                if quote not in payload["source"]:
+                if not owns_quote(payload, quote):
                     continue
                 values = {"entity": entity, "value": value, "unit": "%", "conditions": conditions}
                 records.append({"record_type": "yield", "values": values,
@@ -118,7 +125,7 @@ class Service:
                 {"object_id": "east", "name": "R", "kind": "instance", "scope": "East",
                  "is_table_subject": True, "mentions": [cite(EAST)]},
                 {"object_id": "west", "name": "R", "kind": "instance", "scope": "West",
-                 "is_table_subject": True, "mentions": [cite(WEST)]},
+                 "is_table_subject": True, "mentions": [cite(WEST), cite("West reactor R")]},
                 {"object_id": "sample", "name": "S1", "kind": "sample", "scope": "West sample",
                  "is_table_subject": False, "mentions": [cite(SAMPLE)]},
         ]
@@ -293,7 +300,7 @@ class ScopeService(Service):
             self.calls.append("extraction")
             records = []
             for quote, entity, value in SCOPE_CLAIMS:
-                if quote not in payload["source"]:
+                if not owns_quote(payload, quote):
                     continue
                 values = {"entity": entity, "value": value, "unit": "g", "conditions": None}
                 records.append({"record_type": "mass", "values": values,
@@ -475,7 +482,7 @@ class AmbiguityService(Service):
             self.calls.append("extraction")
             records = []
             for quote, entity, value in AMBIGUITY_CLAIMS:
-                assert quote in payload["source"]
+                assert owns_quote(payload, quote)
                 values = {"entity": entity, "value": value, "unit": "g", "conditions": None}
                 records.append({"record_type": "mass", "values": values,
                                 "quotes": {key: quote if val is not None else "" for key, val in values.items()}})

@@ -347,11 +347,13 @@ def test_framework_json_instruction_preflight_cannot_be_satisfied_by_source_text
     assert not (tmp_path / "analysis/requests").exists()
 
 
-def test_previous_analysis_revision_is_rejected_before_any_request(monkeypatch, tmp_path):
+@pytest.mark.parametrize("revision", ["bounded-source-verification-v2", "bounded-source-verification-v7",
+                                      "bounded-source-verification-v8"])
+def test_previous_analysis_revision_is_rejected_before_any_request(monkeypatch, tmp_path, revision):
     from niceextract import verification
 
     with monkeypatch.context() as old_revision:
-        old_revision.setattr(verification, "REVISION", "bounded-source-verification-v2")
+        old_revision.setattr(verification, "REVISION", revision)
         run(max_calls=1, trace=RunTrace(tmp_path / "old"))
     checkpoint = tmp_path / "old/analysis/checkpoint.json"
     original = checkpoint.read_bytes()

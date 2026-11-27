@@ -488,7 +488,8 @@ def test_public_automatic_prompt_rejection_keeps_mode_and_credentials(tmp_path, 
     monkeypatch.setattr(httpx, "Client", client)
     with pytest.raises(BackendError) as caught:
         extract("Sample A has mass 3 g.",
-                {"prompt_description": "Extract sample mass.", "field_list": {"mass": "Sample mass and unit"}},
+                {"prompt_description": "Extract sample mass.", "field_list": {"mass": "Sample mass and unit"},
+                 "field_types": {"mass": {"kind": "numeric"}}},
                 model="unregistered-json-model", base_url="https://primary.invalid/v1",
                 api_key="synthetic-primary-json-secret", output_dir=tmp_path / "run", progress="quiet",
                 fallback=ModelConnection(model="unused-backup", base_url="https://backup.invalid/v1",

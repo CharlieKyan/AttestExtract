@@ -10,6 +10,7 @@ import hashlib
 import json
 from pathlib import Path
 from typing import Any, Literal
+from typing_extensions import NotRequired, TypedDict
 
 from pydantic import Field, ValidationError
 
@@ -17,7 +18,7 @@ from .diagnostics import RunTrace
 from .errors import BackendError, ConfigurationError, InvalidResponseError
 from .models import (BackendResponse, ContextOptions, ContractModel, DocumentChunk, ExecutionOptions,
                      GenerationOptions, OutputProtocol, SourceSpan, TaskSpec)
-from .planning import plan_chunks, split_chunk
+from .planning import plan_chunks, split_chunk, split_at_sentence_boundary
 from .output_protocol import output_protocol_for_backend
 # Hold the concrete built-in type, not a mutable registry/factory replacement.
 from .backends import OpenAICompatibleBackend as _CompatibleBackend
@@ -26,6 +27,7 @@ from .responses_backend import DeepSeekResponsesBackend as _ResponsesBackend
 # Change this when prompts, planning, parsing, or evidence semantics change.
 # Transport-only releases deliberately retain the dev19 extraction revision.
 ENGINE_REVISION = "dev19-extraction-1"
+SIMPLE_TASK_REVISION = "scoped-observations-1"
 
 
 def digest(value: Any) -> str:
@@ -72,6 +74,16 @@ class _Node(ContractModel):
     table_original_hash: str | None = None
 
 
+class _ProseSyntaxSplit(TypedDict):
+    kind: Literal["prose-syntax-split-v1"]
+    chunk_id: str
+    source_diagnostics: str | None
+    attempt_diagnostics: NotRequired[list[str | None]]
+    split_policy: NotRequired[Literal["sentence-midpoint-v1"]]
+    response_sha256: list[str]
+    children: list[str]
+
+
 class _State(ContractModel):
     checkpoint_version: Literal["2", "3"] = "3"
     fingerprint: str
@@ -79,7 +91,7 @@ class _State(ContractModel):
     package_version: str | None = None
     transport_settings: dict[str, Any] = Field(default_factory=dict)
     transport_changes: list[dict[str, Any]] = Field(default_factory=list)
-    migrations: list[dict[str, str]] = Field(default_factory=list)
+    migrations: list[dict[str, str] | _ProseSyntaxSplit] = Field(default_factory=list)
     output_protocol: OutputProtocol = "native-v1"
     roots: list[str]
     nodes: dict[str, _Node]
@@ -170,6 +182,8 @@ class ExecutionSession:
         self.table_originals: dict[str, BackendResponse] = {}
         self.chunks = {chunk.chunk_id: chunk for chunk in chunks}
         self.cached: dict[str, BackendResponse] = {}
+        self.format_recoveries: dict[str, dict] = {}
+        self.syntax_hashes: dict[tuple[str, int], str | None] = {}
         self.reused = 0
         self.state = _State(fingerprint=fingerprint, output_protocol=output_protocol, roots=list(self.chunks),
                             package_version=__version__, transport_settings=transport_settings or {},
@@ -197,6 +211,8 @@ class ExecutionSession:
                 self._write_cache(chunk_id, response)
             for chunk_id, response in self.table_originals.items():
                 trace.write_json(f"execution/table-original/{chunk_id}.json", response.model_dump(mode="json"))
+            for key, bundle in self.format_recoveries.items():
+                trace.write_json(f"execution/format-recovery/{key}.json", bundle)
         self.save()
 
     def _load(self, resume_from: str | Path) -> None:
@@ -221,6 +237,10 @@ class ExecutionSession:
                 raise ConfigurationError("Resume identity mismatch: use the same source, task, engine revision, output protocol, model, endpoint and generation/planning settings. Connection settings, total call budget and format-retry allowance may change; consumed allowances are retained.")
             pending = [(self.chunks[key], 0) for key in state.roots]
             visited = set()
+            from .format_recovery import recovery_entries, read_recovery_cache
+            recovered = recovery_entries(state)
+            sentence_splits = {e["chunk_id"]: e for e in state.migrations
+                               if e.get("kind") == "prose-syntax-split-v1" and e.get("split_policy") == "sentence-midpoint-v1"}
             while pending:
                 chunk, depth = pending.pop(0)
                 key = chunk.chunk_id
@@ -233,7 +253,7 @@ class ExecutionSession:
                 if (node.format_failures > node.calls or
                         node.format_failures > 1 + node.format_retries_reserved or
                         node.format_retries_reserved and (not node.format_failures or node.calls < 2) or
-                        node.status == "completed" and node.format_failures > 1 or
+                        node.status == "completed" and node.format_failures > 1 and key not in recovered or
                         bool(node.format_feedback) != bool(node.format_failures)):
                     raise ValueError("format retry ledger")
                 visited.add(key)
@@ -243,6 +263,13 @@ class ExecutionSession:
                     if is_table_chunk(chunk) and node.error_code != "truncated_response":
                         raise ValueError("table split requires a known truncation")
                     children = self._split_children(chunk)
+                    if key in sentence_splits:
+                        entry = sentence_splits.pop(key)
+                        if (children or is_table_chunk(chunk) or node.error_code != "invalid_response"
+                                or node.calls != 2 or node.format_failures != 2 or node.format_retries_reserved != 1
+                                or entry["children"] != node.children or len(entry["response_sha256"]) != 2):
+                            raise ValueError("invalid sentence subdivision receipt")
+                        children = split_at_sentence_boundary(self.text, chunk, self.structure)
                     if depth >= self.options.max_split_depth or not children or node.children != [c.chunk_id for c in children]:
                         raise ValueError("split tree")
                     pending[0:0] = [(child, depth + 1) for child in children]
@@ -259,6 +286,17 @@ class ExecutionSession:
                     if response.finish_reason not in (None, "stop"):
                         raise ValueError("incomplete cache")
                     self.cached[key] = response
+                    if key in recovered:
+                        self.format_recoveries[key] = read_recovery_cache(path, key, recovered[key], response)
+                    reread_key = key + ".coverage"
+                    if reread_key in state.nodes:
+                        from .document_routing import is_table_chunk
+                        child = state.nodes[reread_key]
+                        if (not is_table_chunk(chunk) or not self.task or not self.task.input_materials
+                                or child.calls > 1 or child.children or child.format_failures
+                                or child.table_retry_pending or child.table_original_hash):
+                            raise ValueError("invalid table coverage reread")
+                        pending.append((chunk.model_copy(update={"chunk_id": reread_key}), depth))
                 elif node.cache_hash is not None:
                     raise ValueError("unexpected cache")
                 if node.table_original_hash is not None:
@@ -268,7 +306,7 @@ class ExecutionSession:
                     self.table_originals[key] = read_original(path.parent, key, node, table_input=table_input, task=self.task)
                 elif node.table_retry_pending or node.table_retries_reserved:
                     raise ValueError("missing original table response")
-            if visited != set(state.nodes) or sum(n.calls for n in state.nodes.values()) != state.calls_used:
+            if sentence_splits or visited != set(state.nodes) or sum(n.calls for n in state.nodes.values()) != state.calls_used:
                 raise ValueError("call ledger")
             if state.calls_used > state.max_model_calls or any(v < 0 for v in state.usage.values()):
                 raise ValueError("budget ledger")
@@ -302,6 +340,22 @@ class ExecutionSession:
                 result.append(key)
         return result
 
+    def coverage_job(self, parent):
+        """A reread has independent receipts but consumes the ordinary generation budget."""
+        key = parent + ".coverage"
+        if key not in self.state.nodes:
+            chunk = self.chunks[parent].model_copy(update={"chunk_id": key})
+            self.chunks[key] = chunk
+            self.state.nodes[key] = _Node(segments=chunk.segments, body_segments=chunk.body_segments,
+                                          depth=self.state.nodes[parent].depth)
+            self.save()
+        return self.chunks[key]
+
+    def finish_interrupted_coverage(self, key, code):
+        node = self.state.nodes[key]
+        node.status, node.error_code = "failed", code
+        self.save()
+
     def summary(self) -> dict[str, Any]:
         leaves = [self.state.nodes[key] for key in self.leaves()]
         return {"budget_unit": "backend.generate invocations", "max_model_calls": self.state.max_model_calls,
@@ -321,7 +375,8 @@ class ExecutionSession:
                 "transport_changes": self.state.transport_changes,
                 "migrations": self.state.migrations,
                 "table_retry_chunks": [key for key in self.leaves() if self.state.nodes[key].table_retry_pending],
-                "table_retries_reserved": sum(node.table_retries_reserved for node in leaves)}
+                "table_retries_reserved": sum(node.table_retries_reserved for node in leaves),
+                "coverage_reread_calls": sum(n.calls for k, n in self.state.nodes.items() if k.endswith(".coverage"))}
 
     def table_retry_allowed(self, chunk_id: str) -> bool:
         node = self.state.nodes[chunk_id]
@@ -413,7 +468,7 @@ class ExecutionSession:
         node.status, node.error_code = "completed", None
         self.save()
 
-    def subdivide(self, chunk_id: str) -> list[str]:
+    def subdivide(self, chunk_id: str, *, syntax_receipt: dict | None = None) -> list[str]:
         node = self.state.nodes[chunk_id]
         from .document_routing import is_table_chunk
         if is_table_chunk(self.chunks[chunk_id]) and (
@@ -421,6 +476,10 @@ class ExecutionSession:
             self.event("unsplittable", chunk_id=chunk_id, reason="no_known_table_truncation")
             return []
         children = [] if node.depth >= self.options.max_split_depth else self._split_children(self.chunks[chunk_id])
+        if not children and syntax_receipt and node.depth < self.options.max_split_depth:
+            children = split_at_sentence_boundary(self.text, self.chunks[chunk_id], self.structure)
+            if children:
+                syntax_receipt = {**syntax_receipt, "split_policy": "sentence-midpoint-v1"}
         if not children:
             self.event("unsplittable", chunk_id=chunk_id, depth=node.depth)
             return []
@@ -429,8 +488,11 @@ class ExecutionSession:
         for child in children:
             self.chunks[child.chunk_id] = child
             self.state.nodes[child.chunk_id] = _Node(segments=child.segments, body_segments=child.body_segments, depth=node.depth + 1)
+        if syntax_receipt:
+            self.state.migrations.append({**syntax_receipt, "children": node.children})
         self.save()
-        self.event("split", chunk_id=chunk_id, children=node.children, leaf_chunks=len(self.leaves()))
+        self.event("split", chunk_id=chunk_id, children=node.children, leaf_chunks=len(self.leaves()),
+                   reason=node.error_code)
         return node.children
 
     def _split_children(self, chunk: DocumentChunk) -> list[DocumentChunk]:
@@ -456,7 +518,15 @@ def prepare_execution(text: str, task: TaskSpec, backend: Any, generation: Gener
                       source_name: str | None = None, backend_identity: str | None = None,
                       trace: RunTrace | None = None, resume_from: str | Path | None = None,
                       context: ContextOptions | None = None, structure=None,
-                      table_mode: str = "text", retry_tables: bool = False) -> ExecutionSession:
+                      table_mode: str = "text", retry_tables: bool = False,
+                      recover_format_from: str | Path | None = None, retry_prose_syntax: bool = False) -> ExecutionSession:
+    if retry_prose_syntax and (resume_from is None or task.statement_protocol != "source-v2"):
+        raise ConfigurationError("Retrying an exhausted prose syntax failure requires its source-v2 resume checkpoint.")
+    if recover_format_from is not None:
+        if resume_from is not None:
+            raise ConfigurationError("Choose either format recovery into a fresh run or ordinary resume.")
+        if trace is not None and trace.directory is not None:
+            check_resume_paths(recover_format_from, [trace.directory])
     from .document_routing import ROUTING_REVISION, routing_structure
     routed = routing_structure(text, table_mode, structure)
     if routed is not None:
@@ -484,6 +554,8 @@ def prepare_execution(text: str, task: TaskSpec, backend: Any, generation: Gener
                           "max_chars": max_chars, "table_rows_per_chunk": table_rows_per_chunk,
                           "context": (context or ContextOptions()).model_dump(),
                           "structure": structure.model_dump(mode="json") if structure is not None else None}
+    if task.input_materials is not None:
+        identity["simple_task_revision"] = SIMPLE_TASK_REVISION
     if routed is not None:
         identity["table_routing"] = {"mode": "auto", "revision": ROUTING_REVISION}
     transport = {key: getattr(backend, key, None) for key in (
@@ -500,14 +572,29 @@ def prepare_execution(text: str, task: TaskSpec, backend: Any, generation: Gener
         from .table_window_migration import TableWindowMigration
         table_migration = TableWindowMigration(backend, task, generation, identity, text, structure,
                                               allow_dev30=retry_tables and type(backend) is _CompatibleBackend)
-    session = ExecutionSession(text, chunks, options, digest(identity), trace=trace, resume_from=resume_from,
+    # An unsuccessful import must never publish a fresh zero-spend checkpoint
+    # that ordinary resume could use instead of the two historical reservations.
+    session = ExecutionSession(text, chunks, options, digest(identity), trace=None if recover_format_from else trace,
+                            resume_from=resume_from,
                             format_retries=format_retries, output_protocol=output_protocol, structure=structure,
                             transport_settings=transport, legacy_compatibility=legacy_compatibility,
                             table_migration=table_migration, task=task)
+    if recover_format_from is not None:
+        from .format_recovery import recover_format
+        session.trace = trace
+        recover_format(recover_format_from, session, identity, backend, generation)
     if not retry_tables and any(node.table_retry_pending for node in session.state.nodes.values()):
         # A preview is a saved plan, not authorization to generate. Reject before
         # the processing loop can mark a still-unreserved retry as failed.
         raise ConfigurationError("This checkpoint contains planned table retries; use retry_tables=True or --retry-tables with an explicit cumulative budget to execute them.")
+    if resume_from and task.statement_protocol == "source-v2":
+        from .prose_syntax_retry import split_verified_syntax_failure
+        failing = [key for key in session.leaves() if session.state.nodes[key].status == "failed"]
+        if retry_prose_syntax and len(failing) != 1:
+            raise ConfigurationError("Explicit prose syntax recovery requires one failed prose leaf.")
+        planned = [key for key in failing if split_verified_syntax_failure(session, key)]
+        if retry_prose_syntax and not planned:
+            raise ConfigurationError("This recovery requires one failed prose leaf with two known JSON syntax failures and a valid subdivision.")
     if retry_tables:
         from .table_retry import select_table_retries
         select_table_retries(session)

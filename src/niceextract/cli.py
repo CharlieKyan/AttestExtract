@@ -24,7 +24,7 @@ from .diagnostics import RunTrace
 from .envconfig import connection_env_prefix, load_env_file
 from .errors import NiceExtractError, ConfigurationError, InvalidResponseError
 from .execution import _read_state, check_resume_paths, digest, prepare_execution
-from .models import ContextOptions, ExecutionOptions, ExtractionResult, TaskSpec
+from .models import ExecutionOptions, ExtractionResult, TaskSpec
 from .documents import Document
 from .structure import build_structure
 from .contextual_chunking import coverage_report
@@ -58,6 +58,46 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=__version__)
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("models", help="List built-in model selectors without network access or credentials")
+    field_task = commands.add_parser("prepare-task", help="Prepare shared field types once for a batch of papers")
+    field_task.add_argument("--task", required=True, type=Path)
+    field_task.add_argument("--model-id", help="Provider:model selector to interpret any undeclared fields")
+    field_task.add_argument("--env-file", type=Path)
+    field_task.add_argument("--output-dir", type=Path, required=True, help="New directory for task.json and model receipts")
+
+    assemble = commands.add_parser("assemble-dataset", help="Build a dataset offline from a frozen run")
+    assemble.add_argument("--input", required=True, type=Path, help="Original UTF-8 text or Markdown")
+    assemble.add_argument("--run-dir", required=True, type=Path, help="Run containing result.json and analysis/analysis.json")
+    assemble.add_argument("--output-dir", required=True, type=Path, help="New directory for the dataset")
+    assemble.add_argument("--result", type=Path, help="Override the result.json path")
+    assemble.add_argument("--analysis", type=Path, help="Override the analysis.json path")
+    assemble.add_argument("--reading-review", type=Path, help="Apply saved source-grounded reading decisions to the frozen observations")
+    assemble.add_argument("--raw-only", action="store_true", help="Explicitly assemble from raw candidates without analysis")
+    assemble.add_argument("--dataset-config", type=Path, help="JSON with row subject, identity options and field policies")
+
+    query = commands.add_parser("query-dataset", help="Browse a subject and its evidenced descendants offline")
+    query.add_argument("--dataset", type=Path, required=True, help="dataset.json or its directory")
+    query.add_argument("--subject", required=True, help="Subject label or ID")
+    query.add_argument("--field", help="Optional extracted field")
+    query.add_argument("--self-only", action="store_true", help="Only observations directly about this subject")
+    query.add_argument("--output", type=Path, help="Save the selection to a new UTF-8 CSV file")
+
+    supplement = commands.add_parser("supplement-dataset", help="Check unresolved evidence with an explicit cumulative model budget")
+    supplement.add_argument("--input", required=True, type=Path)
+    supplement.add_argument("--run-dir", required=True, type=Path)
+    supplement.add_argument("--dataset-config", type=Path)
+    supplement.add_argument("--raw-only", action="store_true", help="Review a dataset built without a saved analysis")
+    supplement.add_argument("--ledger", required=True, type=Path, help="Dedicated .sqlite ledger for this review")
+    supplement.add_argument("--max-calls", type=int, required=True, help="Cumulative generation limit, including previous attempts")
+    supplement.add_argument("--model-id", help="Built-in provider:model preset; required with a positive budget")
+    supplement.add_argument("--env-file", type=Path, help="Explicit credentials file")
+
+    jev = commands.add_parser("review-dataset", help="Score every pending observation using local Intern-Decision-4B and write a new final table")
+    jev.add_argument("--input", required=True, type=Path, help="Original UTF-8 source")
+    jev.add_argument("--dataset", required=True, type=Path, help="Frozen dataset.json or its directory")
+    jev.add_argument("--checkpoint", type=Path, help="Trusted local model directory with inference.py (or NICEEXTRACT_JEV_CHECKPOINT)")
+    jev.add_argument("--output-dir", required=True, type=Path, help="Fresh final dataset directory outside the baseline")
+    jev.add_argument("--ledger", type=Path, help="Reusable local .sqlite ledger; defaults to a sibling of the output")
+    jev.add_argument("--device", choices=("cpu", "cuda"), default="cuda")
 
     review = commands.add_parser("export-review", help="Export compact expert review rows from an existing result; no model calls")
     review.add_argument("--input", type=Path, required=True, help="Saved result.json or its run directory")
@@ -123,18 +163,27 @@ def _parser() -> argparse.ArgumentParser:
     live.add_argument("--chunking", choices=("adaptive", "fixed"), default="adaptive",
                       help="Output-complexity planning (default: adaptive); fixed retains the character target")
     live.add_argument("--max-chunk-chars", type=int, default=6000, help="Initial chunk character target (default: 6000; atomic table rows may exceed it)")
-    live.add_argument("--context", choices=("none", "structure", "neighbors"), default="none",
-                      help="Source context policy; neighbors includes structure (default: none until quality validation)")
+    live.add_argument("--context", choices=("none", "structure", "neighbors"),
+                      help="New observation tasks include adjacent paragraphs; resume keeps the saved context policy")
     live.add_argument("--tables", choices=("auto", "text"), default="auto",
                       help="Recognized complete tables use route A by default; text explicitly retains the older prose protocol")
-    live.add_argument("--neighbor-chars", type=int, default=500, help="Maximum characters per neighboring paragraph side (default: 500)")
+    live.add_argument("--neighbor-chars", type=int, help="Maximum characters per neighboring paragraph side (default: 500)")
     live.add_argument("--mineru-content-list", type=Path, help="Optional MinerU content_list JSON mapped to the unchanged input")
     live.add_argument("--structure-hints", type=Path, help="Optional JSON table header_rows/row_header_columns hints")
     live.add_argument("--max-model-calls", type=int, help="Total generation-call budget including retries and prior resumed calls (default: 3 x initial planned chunks)")
-    live.add_argument("--max-split-depth", type=int, default=3, help="Maximum truncation subdivision depth (default: 3; 0 disables subdivision)")
+    live.add_argument("--max-split-depth", type=int, default=3, help="Maximum subdivision depth for truncation or two verified prose JSON syntax errors (default: 3; 0 disables subdivision)")
     live.add_argument("--resume", type=Path, help="Previous run directory, diagnostics directory or execution/checkpoint.json; saves a new run")
+    live.add_argument("--recover-format-from", type=Path, help="Revalidate both saved prose attempts from an exhausted legacy format failure in a fresh run; their calls count against the total budget")
+    live.add_argument("--retry-prose-syntax", action="store_true",
+                      help="Require a verified double JSON syntax failure on resume. Ordinary source-v2 runs and resumes already split eligible prose automatically.")
     live.add_argument("--retry-tables", action="store_true", help="With --resume, explicitly retry quarantined table responses once within the cumulative budget; never retry unknown outcomes")
     live.add_argument("--table-subject", help="Enable extra document-level identity/binding analysis; describe what one output table row represents")
+    live.add_argument("--row-relation-evidence", action="store_true", default=None,
+                      help="Select the earlier evidence-v1 wire format for source-cited row links")
+    live.add_argument("--observation-protocol", choices=("source-v2", "source-v1", "legacy"),
+                      help="New field-list tasks use source-v2; earlier saved protocols can be selected explicitly")
+    live.add_argument("--dataset-config", type=Path,
+                      help="JSON for offline assembly of a simple task; adds no model calls")
     live.add_argument("--max-analysis-calls", type=int, default=12,
                       help="Separate cumulative analysis generation budget (default: 12), in addition to extraction's --max-model-calls")
     live.add_argument("--analysis-max-steps", type=int, default=4,
@@ -233,7 +282,7 @@ def _check_output_paths(args: argparse.Namespace, *, require_parents: bool = Tru
         protected.add(args.env_file.resolve())
     if args.config is not None:
         protected.add(args.config.resolve())
-    for name in ("mineru_content_list", "structure_hints"):
+    for name in ("mineru_content_list", "structure_hints", "dataset_config"):
         path = getattr(args, name, None)
         if path is not None:
             protected.add(path.resolve())
@@ -254,7 +303,7 @@ def _resume_command(args: argparse.Namespace, checkpoint: Path) -> str:
     import shlex
 
     command = [str(Path(sys.executable).resolve()), "-m", "niceextract", "extract"]
-    omitted = {"command", "output", "output_dir", "report", "log_dir", "resume", "check"}
+    omitted = {"command", "output", "output_dir", "report", "log_dir", "resume", "recover_format_from", "retry_prose_syntax", "check"}
     for name, value in vars(args).items():
         if name in omitted or value is None:
             continue
@@ -418,12 +467,136 @@ def _offline_decisions(args: argparse.Namespace) -> int:
     return code
 
 
+def _dataset_summary(dataset: dict) -> str:
+    rows = dataset["lineage"]["rows"]
+    confirmed = sum(row["delivery"] == "confirmed" for row in rows)
+    detail = sum(obs["delivery"] == "detail" for obs in dataset["observations"])
+    return f"Main rows: {confirmed} confirmed, {len(rows) - confirmed} provisional | detail-only observations: {detail}"
+
+
+def _supplement_dataset(args: argparse.Namespace, registry: BackendRegistry | None, environment, trace: RunTrace) -> int:
+    from .dataset_io import assemble_from_files, load_dataset_options
+    from .dataset_supplement import run_supplement
+
+    if args.max_calls < 0:
+        raise ConfigurationError("--max-calls must be nonnegative.")
+    if args.max_calls and not args.model_id:
+        raise ConfigurationError("A positive --max-calls budget requires --model-id.")
+    ledger = args.ledger.resolve()
+    protected = [args.input, args.run_dir / "result.json", args.run_dir / "analysis/analysis.json",
+                 args.env_file, args.dataset_config]
+    if ledger.suffix.lower() != ".sqlite" or ledger in [path.resolve() for path in protected if path is not None]:
+        raise ConfigurationError("Use a separate .sqlite path for the supplement ledger.")
+    data = assemble_from_files(args.input, args.run_dir, raw_only=args.raw_only, **load_dataset_options(args.dataset_config))
+    source = args.input.read_bytes().decode("utf-8")
+    backend = None
+    if args.max_calls:
+        config = resolve_model_config(args.model_id, environment=environment, overrides={"max_attempts": 1})
+        key = resolve_model_credentials(config, environment)
+        trace.add_secrets(key)
+        backend = (registry if registry is not None else default_registry()).create(
+            config.adapter, config=config, api_key=key)
+    import sqlite3
+    try:
+        report = run_supplement(data, source, ledger_path=ledger, max_calls=args.max_calls,
+                                backend=backend, secrets=trace._secrets)
+    except sqlite3.Error as exc:
+        raise ConfigurationError("Could not access the supplement ledger.") from exc
+    print(trace._mask_text(json.dumps(report, ensure_ascii=False, indent=2, allow_nan=False)))
+    unresolved_failures = {entry["job_id"] for entry in report["failures"]} & {
+        entry["job_id"] for entry in report["pending"]}
+    return 2 if unresolved_failures else 0
+
+
+def _prepare_task(args, registry, environment, command_trace):
+    from .field_planning import missing_types, prepare_types
+    task = load_task(args.task)
+    if not task.input_materials:
+        raise ConfigurationError("prepare-task requires a field_list task.")
+    missing = missing_types(task)
+    backend = config = None
+    key = None
+    if missing:
+        if not args.model_id:
+            raise ConfigurationError("Supply --model-id to prepare undeclared field types.")
+        config = resolve_model_config(args.model_id, environment=environment, overrides={"max_attempts": 1})
+        key = resolve_model_credentials(config, environment)
+        command_trace.add_secrets(key)
+    args.output_dir.mkdir(parents=True, exist_ok=False)
+    trace = RunTrace(args.output_dir / "diagnostics", secrets=command_trace._secrets)
+    try:
+        if missing:
+            backend = (registry or default_registry()).create(config.adapter, config=config, api_key=key, trace=trace)
+        prepared = prepare_types(task, backend, generation=config.generation if config else None, trace=trace)
+    except (Exception, KeyboardInterrupt) as exc:
+        trace.fail(exc)
+        raise
+    (args.output_dir / "task.json").write_text(prepared.model_dump_json(indent=2), encoding="utf-8")
+    receipt = {"calls_reserved": int(bool(missing)), "model_id": args.model_id if missing else None,
+               "user_fields": list(task.input_materials.field_types), "model_fields": missing}
+    (args.output_dir / "preparation.json").write_text(trace._mask_text(json.dumps(receipt, ensure_ascii=False, indent=2)), encoding="utf-8")
+    trace.finish(receipt)
+    print(trace._mask_text(f"Prepared {args.output_dir / 'task.json'}; model calls reserved: {receipt['calls_reserved']}"))
+    return 0
+
+
 def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = None) -> int:
     args = _parser().parse_args(argv)
     api_key = None
     trace = None
     progress = None
     try:
+        if args.command in ("prepare-task", "supplement-dataset"):
+            trace = RunTrace(None)
+            trace.add_env_secrets(os.environ)
+            environment = load_env_file(args.env_file) if args.env_file else os.environ
+            trace.add_env_secrets(environment)
+            if args.command == "prepare-task":
+                return _prepare_task(args, registry, environment, trace)
+            return _supplement_dataset(args, registry, environment, trace)
+        if args.command == "query-dataset":
+            from .dataset import query_dataset
+            from .dataset_io import export_observations
+            path = args.dataset / "dataset.json" if args.dataset.is_dir() else args.dataset
+            dataset = json.loads(path.read_text(encoding="utf-8-sig"))
+            filters = {"field": args.field, "include_descendants": True, "self_only": args.self_only}
+            if args.output:
+                print(export_observations(dataset, args.output, args.subject, **filters))
+            else:
+                scope = {"self": "本级", "descendant": "下属", "associated": "关联", "pending": "归属待定"}
+                for item in query_dataset(dataset, args.subject, **filters):
+                    print(f"{scope[item['query_scope']]} | {item['entity']} | {item['field']} | "
+                          f"{item['value']} {item.get('unit') or ''} | {item['observation_id']}")
+            return 0
+        if args.command == "assemble-dataset":
+            from .dataset_io import assemble_from_files, load_dataset_options
+            options = load_dataset_options(args.dataset_config)
+            if args.reading_review is not None:
+                options["reading_review"] = args.reading_review
+            dataset = assemble_from_files(args.input, args.run_dir, result_path=args.result,
+                analysis_path=args.analysis, output_dir=args.output_dir, raw_only=args.raw_only, **options)
+            print(f"Wrote {len(dataset['rows'])} rows and {len(dataset['observations'])} observations to {args.output_dir}")
+            print(_dataset_summary(dataset))
+            return 0
+        if args.command == "review-dataset":
+            import sqlite3
+            from .jev_backend import LocalJev
+            from .jev_review import review_dataset
+            checkpoint = args.checkpoint or os.environ.get("NICEEXTRACT_JEV_CHECKPOINT", os.environ.get("ATTESTEXTRACT_JEV_CHECKPOINT"))
+            if not checkpoint:
+                raise ConfigurationError("Specify --checkpoint or NICEEXTRACT_JEV_CHECKPOINT.")
+            def notify(done, total, state):
+                if done in (1, total) or done % 10 == 0 or state == "error":
+                    print(f"Jev {done}/{total} | {state}", flush=True)
+            try:
+                output, report = review_dataset(args.input, args.dataset, args.output_dir,
+                                                LocalJev(checkpoint, device=args.device),
+                                                ledger_path=args.ledger, progress=notify)
+            except (sqlite3.Error, RuntimeError) as exc:
+                raise ConfigurationError(f"Local Jev review stopped; completed ledger entries can be reused: {exc}") from exc
+            print(f"Wrote {output} | rows {report['baseline_rows']} -> {report['final_rows']} | scored {report['scored']}/{report['queued']} | "
+                  f"cached {report['cached']} | errors {report['errors']}")
+            return 2 if report["errors"] else 0
         if args.command == "export-review":
             return _export_review(args)
         if args.command in {"prepare-decisions", "check-decisions"}:
@@ -460,12 +633,15 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
             return 0
 
         default_directory = _default_outputs(args)
-        if args.resume is not None:
-            check_resume_paths(args.resume, [path for path in (args.output, args.report, args.log_dir) if path is not None])
+        if args.recover_format_from is not None and args.resume is not None:
+            raise ConfigurationError("Choose either --recover-format-from or --resume.")
+        prior = args.resume or args.recover_format_from
+        if prior is not None:
+            check_resume_paths(prior, [path for path in (args.output, args.report, args.log_dir) if path is not None])
         if default_directory is not None:
             if args.output_dir is not None:
                 _check_output_paths(args, require_parents=False)
-                prepare_run_directory(default_directory, resume_from=args.resume)
+                prepare_run_directory(default_directory, resume_from=prior)
             else:
                 default_directory.mkdir(parents=True, exist_ok=False)
         _check_output_paths(args)
@@ -482,9 +658,15 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
                 raise ConfigurationError("Analysis output directory already exists; choose a new --output-dir.")
             if args.max_attempts not in (None, 1):
                 raise ConfigurationError("Document analysis requires --max-attempts 1.")
+        if args.table_subject is not None or args.dataset_config is not None:
+            bundle = args.output.resolve().parent / "dataset"
+            reserved = (args.report, args.output, args.log_dir)
+            if (bundle.exists() or bundle.is_symlink()
+                    or any(path and path.resolve().is_relative_to(bundle) for path in reserved)):
+                raise ConfigurationError("Dataset output needs a new, separate dataset/ directory.")
         if args.max_chunk_chars < 1:
             raise ConfigurationError("--max-chunk-chars must be positive.")
-        if args.resume is not None and args.log_dir is None:
+        if prior is not None and args.log_dir is None:
             raise ConfigurationError("Resume requires persistent diagnostics: omit --output or supply a new --log-dir.")
         execution = ExecutionOptions(adaptive_chunking=args.chunking == "adaptive",
                                      max_model_calls=args.max_model_calls, max_split_depth=args.max_split_depth)
@@ -515,6 +697,13 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
             trace.add_secrets(environment.get(profile_config.api_key_env))
         trace.event("configuration", "task_validation_started")
         task = load_task(args.task)
+        from .field_planning import inherited_preparation, account_preparation, missing_types
+        preparation_receipt = None
+        if args.resume:
+            task, preparation_receipt = inherited_preparation(task, args.resume)
+        from .dataset_io import load_dataset_options, check_dataset_request
+        dataset_options = load_dataset_options(args.dataset_config) if args.dataset_config else None
+        check_dataset_request(task, dataset_options)
         trace.write_json("task.json", task.model_dump(mode="json"))
         automatic_backend = None
         automatic = (registry is None and args.base_url is not None and args.model is not None
@@ -579,12 +768,23 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
         if trace is not None:
             trace.event("document", "started")
         text = args.input.read_bytes().decode("utf-8")
-        context = ContextOptions(mode=args.context, neighbor_chars=args.neighbor_chars)
         sidecars = {}
         for name in ("mineru_content_list", "structure_hints"):
             path = getattr(args, name)
             sidecars[name] = (json.loads(path.read_bytes().decode("utf-8"), object_pairs_hook=_unique_object,
                                          parse_constant=_reject_constant) if path is not None else None)
+        if trace is not None:
+            trace.event("configuration", "backend_validation_started")
+        backend = automatic_backend or (registry if registry is not None else default_registry()).create(
+            config.adapter, config=config, api_key=api_key, trace=trace,
+        )
+        from .pipeline import configure_observation_task
+        task = configure_observation_task(task, row_subject=args.table_subject, row_relation_evidence=args.row_relation_evidence,
+                                          dataset_row_subject=(dataset_options or {}).get("row_subject"),
+                                          observation_protocol=args.observation_protocol, resume_from=args.resume,
+                                          replay=getattr(backend, "mode", None) == "replay")
+        from .contextual_chunking import extraction_context
+        context = extraction_context(task, resume_from=args.resume, mode=args.context, neighbor_chars=args.neighbor_chars)
         structure = None
         if context.mode != "none" or any(value is not None for value in sidecars.values()):
             structure = build_structure(text, mineru_content=sidecars["mineru_content_list"],
@@ -592,11 +792,7 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
         document = Document.from_text(text, source_name=args.input.name,
                                       representation="text/markdown" if args.input.suffix.lower() == ".md" else "text/plain",
                                       structure=structure)
-        if trace is not None:
-            trace.event("configuration", "backend_validation_started")
-        backend = automatic_backend or (registry if registry is not None else default_registry()).create(
-            config.adapter, config=config, api_key=api_key, trace=trace,
-        )
+        trace.write_json("task.json", task.model_dump(mode="json"))
         if isinstance(backend, AutomaticBackend):
             backend_identity = None
         elif type(backend) in (OpenAICompatibleBackend, DeepSeekResponsesBackend):
@@ -632,6 +828,10 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
                         read_timeout=config.read_timeout or config.timeout or 180,
                         tls_mode=config.tls_mode)
         if args.check:
+            pending_plan = bool(registry is None and prior is None and task.statement_protocol == "source-v2"
+                                and missing_types(task))
+            preparation_cost = int(pending_plan) if not preparation_receipt else preparation_receipt["calls_reserved"]
+            execution = account_preparation(execution, preparation_cost)
             if args.table_subject is not None:
                 from .pipeline import validate_analysis_request
                 validate_analysis_request(text, task, args.table_subject, args.max_analysis_calls,
@@ -642,13 +842,18 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
             trace.event("configuration", "task_ready", **task_summary(task))
             prepare = prepare_execution
             if automatic:
+                if args.retry_prose_syntax:
+                    raise ConfigurationError("Prose syntax recovery requires the original single backend.")
+                if args.recover_format_from is not None:
+                    raise ConfigurationError("Format recovery requires a single named backend.")
                 from .automatic_execution import prepare_automatic_execution
                 prepare = prepare_automatic_execution
             session = prepare(text, task, backend, config.generation, execution,
                                         max_chars=args.max_chunk_chars, format_retries=config.format_retries,
                                         source_name=args.input.name, backend_identity=backend_identity,
                                         resume_from=args.resume, context=context, structure=structure, table_mode=args.tables,
-                                        retry_tables=args.retry_tables)
+                                        retry_tables=args.retry_tables, **({"retry_prose_syntax": True} if args.retry_prose_syntax else {}),
+                                        **({"recover_format_from": args.recover_format_from} if args.recover_format_from else {}))
             from .pipeline import _validate_cached_responses
             from .document_routing import table_input_for_chunk
             table_inputs = {key: value for key, chunk in session.chunks.items()
@@ -666,8 +871,9 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
                     "coverage": coverage_report(text, [session.chunks[key] for key in session.leaves()], max_chars=args.max_chunk_chars),
                     "structure_diagnostics": structure.diagnostics if structure is not None else [],
                     "execution": session.summary(), "execution_options": execution.model_dump(mode="json"),
-                    "resume": {"requested": args.resume is not None, "reusable_chunks": len(session.cached),
-                               "remaining_chunks": len(session.leaves()) - len(session.cached),
+                    "resume": {"requested": args.resume is not None,
+                               "reusable_chunks": sum(key in session.cached for key in session.leaves()),
+                               "remaining_chunks": sum(key not in session.cached for key in session.leaves()),
                                "remaining_call_budget": session.state.max_model_calls - session.state.calls_used},
                     "max_http_attempts_upper_bound": (session.state.request_attempts +
                                                       (session.state.max_model_calls - session.state.calls_used) * backend.max_attempts
@@ -685,6 +891,21 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
                     "output": str(args.output.resolve()), "report": str(args.report.resolve()) if args.report else None,
                     "diagnostics": str(trace.directory) if trace.directory else None,
                     "notice": "Local validation only; credentials, endpoint availability and model output are not verified."}
+            if pending_plan or preparation_receipt:
+                plan["field_preparation"] = {"additional_calls": int(pending_plan),
+                                             "prior_calls_reserved": preparation_receipt["calls_reserved"] if preparation_receipt else 0,
+                                             "fields_needing_interpretation": missing_types(task)}
+                if pending_plan and plan["max_http_attempts_upper_bound"] is not None:
+                    plan["max_http_attempts_upper_bound"] += (len(backend.routes) if automatic and
+                        args.max_model_calls is None else backend.max_attempts)
+            if args.recover_format_from:
+                plan["format_recovery"] = {
+                    "prior_calls_charged": session.state.calls_used,
+                    "source": str(args.recover_format_from.resolve()),
+                    "chunks": {key: {"original_attempts": len(bundle["attempts"]),
+                                     "input_records": sum(map(len, bundle["record_origins"])),
+                                     "merged_records": len(bundle["record_origins"])}
+                               for key, bundle in session.format_recoveries.items()}}
             if args.table_subject is not None:
                 plan["analysis"] = {"enabled": True, "table_subject": args.table_subject,
                     "max_analysis_calls": args.max_analysis_calls,
@@ -699,6 +920,7 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
                 analysis_check = check_analysis_resume(
                     text, task, backend=backend, generation=config.generation,
                     table_subject=args.table_subject, max_calls=args.max_analysis_calls,
+                    label_field=(dataset_options or {}).get("subject_label_field"),
                     resume_from=args.resume, analysis_resume_from=args.analysis_resume,
                     backend_identity=backend_identity, extraction_reserved=session.state.calls_used,
                     max_steps=args.analysis_max_steps, input_budget=args.analysis_input_budget,
@@ -706,17 +928,23 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
                 )
                 if analysis_check is not None:
                     plan["analysis"]["resume"] = analysis_check
+            if args.table_subject is not None or dataset_options is not None:
+                plan["dataset"] = {"output": str(args.output.resolve().parent / "dataset"),
+                                   "additional_model_calls": 0}
             trace.checked(plan)
             print(json.dumps(trace._mask(plan), ensure_ascii=False, indent=2))
             return 0
         result = extract(document, task, backend=backend, source_name=args.input.name, trace=trace,
                          format_retries=config.format_retries, generation=config.generation,
-                         execution=execution, resume_from=args.resume, backend_identity=backend_identity,
+                         execution=execution, resume_from=args.resume, recover_format_from=args.recover_format_from,
+                         backend_identity=backend_identity,
                          max_chunk_chars=args.max_chunk_chars, context=context, table_mode=args.tables,
-                         retry_tables=args.retry_tables, table_subject=args.table_subject,
+                         retry_tables=args.retry_tables, retry_prose_syntax=args.retry_prose_syntax, table_subject=args.table_subject,
+                         observation_protocol=args.observation_protocol, row_relation_evidence=args.row_relation_evidence,
+                         prepare_field_types=registry is None,
                          max_analysis_calls=args.max_analysis_calls, analysis_resume_from=args.analysis_resume,
                          analysis_max_steps=args.analysis_max_steps, analysis_input_budget=args.analysis_input_budget,
-                         retry_analysis_jobs=args.retry_analysis_jobs)
+                         retry_analysis_jobs=args.retry_analysis_jobs, dataset_options=dataset_options)
         payload = result.model_dump(mode="json")
         if (default_directory is not None
                 and args.report.resolve() == (default_directory / "report.md").resolve()):
@@ -741,6 +969,11 @@ def main(argv: list[str] | None = None, *, registry: BackendRegistry | None = No
             if result.analysis is not None:
                 from .analysis_export import save_analysis
                 save_analysis(result.analysis, args.output.resolve().parent / "analysis", secrets=trace._secrets)
+            if result.dataset is not None:
+                from .dataset_io import save_dataset
+                save_dataset(trace._mask(result.dataset), args.output.resolve().parent / "dataset")
+                if args.progress != "quiet":
+                    print(_dataset_summary(result.dataset), file=sys.stderr)
             if trace is not None:
                 trace.finish(payload, analysis=result.analysis)
         if trace is not None:

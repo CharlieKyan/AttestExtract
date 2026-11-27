@@ -14,11 +14,16 @@ import math
 import re
 from typing import Literal
 
-from pydantic import Field, ValidationError, model_validator
+from pydantic import Field, ValidationError, model_serializer, model_validator
 
-from .models import ContractModel, ExtractionRequest, GenerationOptions, Scalar, TaskSpec
+from .models import (ContractModel, ExtractionRequest, GenerationOptions, NameHandling, ReportedUse,
+                     RowRelationProposal, Scalar, StatementBasis, TaskSpec, ModelValueRole)
 from .evidence import is_missing
-from .prompting import SIMPLE_OBSERVATION_INSTRUCTIONS
+from .prompting import (NAME_HANDLING_INSTRUCTIONS, SIMPLE_OBSERVATION_INSTRUCTIONS, VALUE_ROLE_INSTRUCTIONS,
+                        name_handling_schema, value_role_property)
+from .row_relations import (INSTRUCTIONS as RELATION_INSTRUCTIONS, OPEN_RELATION_INSTRUCTIONS, SOURCE_RELATION_INSTRUCTIONS,
+                            STATEMENT_INSTRUCTIONS, legacy_relation_mismatch, read_open_relation,
+                            response_property, statement_properties, table_relation_receipts)
 from .structure import build_structure, validate_structure
 
 
@@ -54,6 +59,55 @@ class TableRecord(ContractModel):
 
 class DirectOutput(ContractModel):
     records: list[TableRecord]
+
+
+class NamedTableRecord(TableRecord):
+    name_handling: NameHandling
+
+
+class NamedOutput(ContractModel):
+    records: list[NamedTableRecord | TableRecord]
+
+
+class RelatedTableRecord(NamedTableRecord):
+    row_relation: RowRelationProposal | None
+
+    @model_validator(mode="after")
+    def require_legacy_citations(self):
+        if legacy_relation_mismatch(self.row_relation):
+            raise ValueError("The original evidence-v1 contract requires citations and has no target_basis.")
+        return self
+
+
+class SourceTableRecord(TableRecord):
+    statement_basis: StatementBasis = "unknown"
+    reported_use: ReportedUse = "unspecified"
+    source_property: str | None = Field(default=None, min_length=1)
+    value_role: ModelValueRole | None = None
+
+    @model_serializer(mode="wrap")
+    def _serialize_source_record(self, handler):
+        record = handler(self)
+        if self.value_role is None:
+            record.pop("value_role", None)
+        return record
+
+
+class SourceRelatedTableRecord(SourceTableRecord):
+    name_handling: NameHandling = "uncertain"
+    row_relation: RowRelationProposal | None = None
+
+
+class SourceOutput(ContractModel):
+    records: list[SourceTableRecord]
+
+
+class SourceRelatedOutput(ContractModel):
+    records: list[SourceRelatedTableRecord]
+
+
+class RelatedOutput(ContractModel):
+    records: list[RelatedTableRecord]
 
 
 def build_route_schema() -> dict:
@@ -188,9 +242,36 @@ def _build_table_request(task: dict, table_input: dict, *, chunk_id: str,
                          legacy: bool) -> ExtractionRequest:
     spec = TaskSpec.model_validate(task)
     schema = DirectOutput.model_json_schema() if legacy else build_route_schema()
+    if spec.row_subject and spec.input_materials:
+        record_schema = schema["$defs"]["TableRecord"]
+        record_schema["properties"]["name_handling"] = name_handling_schema()
+        record_schema["required"].append("name_handling")
+        if spec.row_relation_protocol == "evidence-v1":
+            record_schema["properties"]["row_relation"] = response_property(source_statements=bool(spec.statement_protocol))
+            record_schema["required"].append("row_relation")
+    if spec.statement_protocol:
+        properties = statement_properties()
+        if spec.field_types:
+            properties["value_role"] = value_role_property()
+        record_schema = schema["$defs"]["TableRecord"]
+        record_schema["properties"].update(properties)
+        record_schema["required"].extend(properties)
+    if spec.row_relation_protocol == "explanation-v1":
+        linked = deepcopy(schema["$defs"]["TableRecord"])
+        linked["properties"]["row_relation"] = response_property(source_statements=True, open_relation=True)
+        linked["required"].append("row_relation")
+        schema["$defs"]["RowLinkedRecord"] = linked
+        schema["properties"]["records"]["items"] = {"anyOf": [
+            {"$ref": "#/$defs/TableRecord"}, {"$ref": "#/$defs/RowLinkedRecord"}]}
     payload = {"task": {name: value for name, value in task.items() if name != "input_materials"},
                "table": table_input, "schema": schema}
     instructions = _COMMON
+    if any(entry["kind"] in {"neighbor_before", "neighbor_after"} for entry in table_input.get("entries", [])):
+        instructions += (
+            "Adjacent paragraphs (neighbor_before/neighbor_after) may identify the object, archive row, "
+            "unit, or conditions. Cite them with relation=context. Extract only readings anchored "
+            "in the table's own value cells.\n"
+        )
     from .table_windows import window_owned_refs
     if window_owned_refs(table_input) is not None:
         instructions += (
@@ -208,8 +289,44 @@ def _build_table_request(task: dict, table_input: dict, *, chunk_id: str,
         instructions += _FORMAT_INSTRUCTIONS
         payload["table_request_revision"] = TABLE_REQUEST_REVISION
         payload["format_example"] = _format_example()
+    if table_input.get("coverage_targets"):
+        instructions += (
+            "\nThis is a single targeted reread. table.coverage_targets maps task record type to "
+            "{value cell reference: header reference}. Return only genuinely supported observations "
+            "of those types anchored at those named value cells. All other cells, including footnotes "
+            "and row or column titles, are shared context. Return an empty records list if unsupported.\n"
+        )
     if spec.input_materials is not None:
         instructions += SIMPLE_OBSERVATION_INSTRUCTIONS
+        if spec.statement_protocol == "source-v2":
+            instructions += (
+                "Check what each field definition asks the value itself to describe. A column heading can name "
+                "a material, category, component or condition while the number underneath measures its amount. "
+                "A bare amount cannot answer a request for the category name. Use the label's own cell as anchor "
+                "if it reports the requested fact about the row subject. A measured category appearing only in a "
+                "header does not by itself establish its presence in every sample. For a requested amount, retain both its "
+                "number and the measured component or condition. A related table can yield no matching records.\n"
+            )
+        if spec.statement_protocol:
+            instructions += STATEMENT_INSTRUCTIONS
+            if spec.field_types:
+                instructions += VALUE_ROLE_INSTRUCTIONS
+            if "format_example" in payload:
+                for record in payload["format_example"]["response"]["records"]:
+                    record.update(statement_basis="reported", reported_use="unspecified", source_property=None)
+                    if spec.field_types:
+                        record["value_role"] = "unknown"
+        if spec.row_subject:
+            instructions += NAME_HANDLING_INSTRUCTIONS
+            if "format_example" in payload:
+                for record in payload["format_example"]["response"]["records"]:
+                    record["name_handling"] = "as_reported"
+                    if spec.row_relation_protocol == "evidence-v1":
+                        record["row_relation"] = None
+            if spec.row_relation_protocol:
+                instructions += OPEN_RELATION_INSTRUCTIONS if spec.row_relation_protocol == "explanation-v1" else RELATION_INSTRUCTIONS
+                if spec.statement_protocol:
+                    instructions += SOURCE_RELATION_INSTRUCTIONS
         if spec.input_materials.examples:
             instructions += (
                 "task_examples are USER-LABELLED TASK SEMANTIC GUIDANCE ONLY, not actual table "
@@ -242,19 +359,27 @@ def _finite_float(text: str) -> float:
     return value
 
 
-def parse_route_response(stage: str, text: str) -> dict:
+def parse_route_response(stage: str, text: str, *, row_relations=False, source_statements=False) -> dict:
     if stage != "A":
         raise ValueError("Only table route A is supported")
+    if row_relations == "explanation-v1":
+        parsed = parse_route_response_partial(stage, text, row_relations=row_relations, source_statements=source_statements)
+        if parsed["rejections"]:
+            raise ValueError("A table observation fails the response contract.")
+        return {"records": parsed["records"]}
     raw = json.loads(text, object_pairs_hook=_unique_pairs, parse_float=_finite_float,
                      parse_constant=lambda _: (_ for _ in ()).throw(ValueError("Nonfinite JSON number")))
-    parsed = DirectOutput.model_validate(raw).model_dump(mode="json")
+    contract = RelatedOutput if row_relations else NamedOutput
+    if source_statements:
+        contract = SourceRelatedOutput if row_relations else SourceOutput
+    parsed = contract.model_validate(raw).model_dump(mode="json")
     ids = [r["record_id"] for r in parsed["records"]]
     if len(ids) != len(set(ids)):
         raise ValueError("Duplicate record_id")
     return parsed
 
 
-def parse_route_response_partial(stage: str, text: str) -> dict:
+def parse_route_response_partial(stage: str, text: str, *, row_relations=False, source_statements=False) -> dict:
     """Isolate invalid records without salvaging malformed JSON or its envelope.
 
     Array indices always refer to the original response. Duplicate IDs quarantine
@@ -275,7 +400,23 @@ def parse_route_response_partial(stage: str, text: str) -> dict:
         if isinstance(item, dict) and isinstance(item.get("record_id"), str) and counts[item["record_id"]] > 1:
             errors.append({"loc": ["record_id"], "msg": "Duplicate record_id", "type": "duplicate_record_id"})
         try:
-            parsed = TableRecord.model_validate(item).model_dump(mode="json")
+            contract = NamedTableRecord if isinstance(item, dict) and "name_handling" in item else TableRecord
+            if row_relations:
+                contract = RelatedTableRecord
+            if source_statements:
+                contract = SourceRelatedTableRecord if row_relations else SourceTableRecord
+            if row_relations == "explanation-v1" and isinstance(item, dict):
+                base = dict(item)
+                relation, issues = read_open_relation(base.pop("row_relation", None))
+                parsed = SourceRelatedTableRecord.model_validate(base).model_dump(mode="json", exclude={"row_relation"})
+                if isinstance(relation, list):
+                    parsed["row_relation"] = {"alternatives": [option.model_dump() for option in relation]}
+                elif relation is not None:
+                    parsed["row_relation"] = relation.model_dump()
+                if issues:
+                    parsed["row_relation_issues"] = [issue.model_dump() for issue in issues]
+            else:
+                parsed = contract.model_validate(item).model_dump(mode="json")
         except ValidationError as exc:
             errors.extend({"loc": list(error["loc"]), "msg": error["msg"], "type": error["type"]}
                           for error in exc.errors(include_url=False, include_context=False, include_input=False))
@@ -338,7 +479,7 @@ def _overlap(a: dict, b: dict, axis: str, span: str) -> bool:
 
 def _related(source: dict, anchor: dict, relation: str) -> bool:
     if relation == "context":
-        return source["kind"] in {"heading", "caption", "footnote"}
+        return source["kind"] in {"heading", "caption", "footnote", "neighbor_before", "neighbor_after"}
     if source["kind"] != "cell" or anchor["kind"] != "cell":
         return False
     if relation in {"anchor", "cell"}:
@@ -522,6 +663,8 @@ def _mixed_condition_issues(fields: dict, spec, record_id: str) -> list[dict]:
 def _check_record(record: dict, table_input: dict, task: TaskSpec) -> dict:
     record = deepcopy(record)
     lookup = {entry["ref"]: entry for entry in table_input["entries"]}
+    if record.get("row_relation") is not None:
+        record["row_relations"] = table_relation_receipts(record, table_input)
     rid = record["record_id"]
     issues, fields, anchors, scope_entries, literal_checks, literal_evidence = [], {}, [], [], {}, {}
     spec = task.record_types.get(record["record_type"])
@@ -588,11 +731,16 @@ def _check_record(record: dict, table_input: dict, task: TaskSpec) -> dict:
             except ValueError as exc:
                 issues.append(_problem(str(exc), rid, name, source=deepcopy(selection)))
         fields[name] = {**binding, "resolved_sources": sources}
+        if (task.statement_protocol == "source-v2" and task.input_materials and name == "value"
+                and sources and len(sources) == len(binding["sources"])
+                and all(s["kind"] in {"neighbor_before", "neighbor_after"} for s in sources)):
+            issues.append(_problem("value_only_in_context", rid, name))
         if spec is not None and record["scope"] == "group" and name in spec.identity_fields:
             if _group_identity_narrowed(value, sources):
                 issues.append(_problem("group_identity_narrowed", rid, name))
         types = {"string": (str,), "number": (int, float), "integer": (int,), "boolean": (bool,)}
-        type_valid = field_spec is None or type(value) in types[field_spec.type]
+        type_valid = (field_spec is None or type(value) in types[field_spec.type]
+                      or task.typed_value(record["record_type"], name) and type(value) in (int, float))
         if not type_valid:
             issues.append(_problem("field_type_mismatch", rid, name))
         if is_missing(value):
@@ -606,7 +754,10 @@ def _check_record(record: dict, table_input: dict, task: TaskSpec) -> dict:
             issues.append(_problem("literal_source_not_unique", rid, name))
         elif type_valid:
             try:
-                support = _literal_support(sources[0], value, unit=name in unit_fields, field_type=field_spec.type)
+                literal_type = field_spec.type
+                if task.typed_value(record["record_type"], name) and record.get("value_role") == "quantity" and type(value) in (int, float):
+                    literal_type = "number"
+                support = _literal_support(sources[0], value, unit=name in unit_fields, field_type=literal_type)
                 literal_evidence[name] = support
                 if name in value_fields and not any(anchor["ref"] == support["ref"] and
                         anchor["selected_start"] <= support["selected_start"] and
@@ -760,8 +911,9 @@ def evaluate_route(stage: str, parsed: dict, table_input: dict, task: dict) -> d
     indices = deepcopy(parsed.get("record_indices", list(range(len(parsed["records"])))))
     if len(indices) != len(parsed["records"]) or any(type(i) is not int or i < 0 for i in indices):
         raise ValueError("Invalid original record indices")
-    parsed = parse_route_response(stage, json.dumps({"records": parsed["records"]}, ensure_ascii=False))
     spec = TaskSpec.model_validate(task)
+    parsed = parse_route_response(stage, json.dumps({"records": parsed["records"]}, ensure_ascii=False),
+                                  row_relations=spec.row_relation_protocol, source_statements=bool(spec.statement_protocol))
     records = [_check_record(record, table_input, spec) for record in parsed["records"]]
     evidence_id = f'{table_input["source_sha256"]}:{table_input["table_id"]}'
     candidates = _candidate_view(records, parsed["records"], indices, evidence_id, spec, table_input)

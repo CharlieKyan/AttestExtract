@@ -6,6 +6,91 @@
 - Custom connections now use `NICEEXTRACT_*` environment variables. Legacy-only configurations still work. The default route preference cache starts in `~/.niceextract/cache`; an explicitly configured legacy cache directory is still honored. Existing result files and supported checkpoints keep their original formats. [Connection settings](docs/BACKENDS.md)
 - The English and Chinese homepages now walk through a synthetic example, from a reported measurement to its source quotation, and show how to extract your own fields into JSON.
 
+- Field-list tasks can declare the kind of each field or prepare the remaining types once for several papers. Source-linked dataset tables retain the measured object, the filing subject, the original value and its reported meaning. A local checkpoint can review unresolved observations in a separate output. [Dataset guide](docs/dataset-assembly.md)
+
+The development milestones below use their original identifiers. The public release candidate is built from the dev60 runtime.
+
+## 0.1.0.dev60
+
+- Field-list tasks may declare text, numeric, mixed and unknown fields. A fresh model-backed run prepares undeclared fields together. The `prepare-task` command produces a plan that can be shared across documents.
+- Prose and tables carry the meaning of a particular reported value, separately from its spelling. Numeric observations can carry a scalar, a range or a one-sided bound. Source values, units, statistical meanings, uncertainties and filing subjects remain available.
+- A conflict with a model-inferred type can remain visible for review. Explicit task requirements and source-backed exclusions are applied separately.
+
+## 0.1.0.dev59
+
+- On a source-v2 single-backend prose run, two complete replies with verified JSON syntax failures can trigger a smaller source block automatically. The original replies, completed work, split limits and spent calls remain in the execution record.
+- Field policies can distinguish descriptions, standalone numbers and quantities. Explicit, cited field rejections are respected in annotated views. An observation excluded from a column remains in the detailed data with its original source and value.
+- A supported verification binding to a registered row may resolve a first-pass uncertainty. Optional relation evidence in source-v2 accepts the model's quotation strings and displayed table references, with source positions checked on replay.
+
+## 0.1.0.dev58
+
+- New field-list tasks read adjacent source paragraphs by default, including the introduction to a routed table. Rows and value cells retain their original source positions and ownership.
+- Direct observations can omit a filing relationship. A different requested row can carry the model's own explanation, its evidence and whether the field permits the reading. A damaged optional explanation is recorded on its observation.
+- Saved prose responses rejected by the earlier relation contract can be recovered in a separate run with their original source ranges, response provenance and previously spent calls.
+- An explicit syntax retry can split a prose block after two known JSON syntax failures. Subject queries distinguish a direct observation, an associated observation, a documented descendant and a pending filing proposal.
+
+## 0.1.0.dev57
+
+- Fresh field-list extractions carry the model's interpretation of each field, its reported use and local subject. For a configured table subject, the model can also supply a filing relationship.
+- Main CSVs expose the interpretation and citation status beside each displayed value. Recoverable citations can be repaired from the original document. Unverified proposals remain visible with their evidence history.
+- Frozen run directories can replay archived rejected relationships and accept a source-bound rereading. Subject queries, statistic columns and local review exports retain the individual observation references.
+
+## 0.1.0.dev56
+
+- Account separately for first-pass ownership and scheduled verification jobs. A fully processed run with isolated review items can return exit code 3 when both paths were used.
+- Verification can cite an original source span by a reference supplied in its request. The console identifies the active verification job while waiting for a response.
+
+## 0.1.0.dev55
+
+- Verification requests have one place to report relations. A source can refer to a name in one observation or to a registered object. The former keeps its original scope and evidence.
+- An invalid optional relation in an otherwise complete decision goes to review individually. Independent observation bindings retain their values, evidence and qualifiers. Historical analysis exports remain readable. Resume verification checkpoints with their matching package version.
+
+## 0.1.0.dev54
+
+- Clarify the distinction between a mention's name resolution and a sourced object-to-object relation in verification prompts. Enum retry feedback identifies the permitted choices for the field that failed.
+- New verification runs use revision v7. Use the matching package for an older verification checkpoint. Historical exported observations remain available for offline assembly.
+
+## 0.1.0.dev53
+
+- Use the observation's cited assignment to resolve an owner in a longer sentence. Retain scoped registry identifiers and searchable designations on delivered observations.
+- Group compatible properties from one source statement. A shared setting can appear once with its explicitly documented members and be retrieved through any member.
+- Export reported lower and upper limits, their operator and any supported qualifier. Query the documented use of a value with `measurement_use`, including classification cutoffs and sensitivity inputs.
+
+## 0.1.0.dev52
+
+- Carry a source-linked observation's direct owner and qualified target into the same row and lookup. Reuse scoped binding evidence for shared-subject prose and explicit parameter/value pairs.
+- Export the reported range endpoints, mean and unit in the main CSV, with per-cell provenance. Related measurements retain their direct object, statistical context and use.
+- Preserve corroborating prose and table citations for a single model setting. Location evidence and simulation conditions retain their reported roles.
+
+## 0.1.0.dev51
+
+- Rebuild frozen observations with local evidence for ownership, row membership and field scope. Retain original checks, including resolved Markdown escapes and qualified table unit references.
+- Report the direct owner and its evidence status in the observations view. Related and unresolved rows carry explicit qualifications in the main view.
+- Add an opt-in first-pass row-relation protocol for simple observation tasks, with scoped source citations and per-observation alternatives. Prompt comparisons use separate execution fingerprints.
+
+## 0.1.0.dev50
+
+- Keep the extracted owner for direct observations and spend the existing verification
+  budget on unresolved names, related rows, field scope and evidence conflicts.
+- Resolve a name at an occurrence or within a cited scope, retaining source mentions,
+  competing interpretations and measurement context in exports.
+- Match bounded numeric ranges against original Unicode and interpret complete table
+  labels when targeting missing cells. Older completed observation-first runs can be
+  reassembled offline. Resume an unfinished dev49 verification with its original wheel.
+
+## 0.1.0.dev49
+
+- Review every pending dev48 observation with a local Intern-Decision-4B checkpoint. Save the resulting dataset separately, with grounded choices, per-observation receipts and a resumable local ledger.
+
+## 0.1.0.dev48
+
+- On the observation-first branch, preserve locally supported names and competing row subjects. Export confirmed and provisional rows with a final CSV status column and separate strict-query semantics.
+- Check task-declared property qualifications and exclusions against source evidence. Reread clearly missing table values at most once per local region within the existing extraction budget.
+
+## 0.1.0.dev42
+
+- Assemble frozen observations into schema-ordered rows, searchable details and source lineage. Resolve scoped names, local table roles and supported associations offline. Review unresolved claims and coverage gaps with a separately budgeted, resumable supplement.
+
 ## 0.1.0.dev41
 
 - Extend explicit `format_retries=1` to bounded verification: one fresh generation per job for a complete response with JSON syntax or structural-contract errors. It consumes the existing step and cumulative call limits; unknown transport outcomes, truncation, scope and evidence failures do not qualify.

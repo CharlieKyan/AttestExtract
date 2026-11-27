@@ -40,6 +40,9 @@ class Answers:
             answer["bindings"] = []
         if mode == "contract":
             answer["neighbors"] = "not-an-integer"
+        if mode == "wrong_enum":
+            answer["relations"] = [{"source_kind": "object", "source_id": "specimen", "target_id": "specimen",
+                                    "predicate": "private unrecognized relation", "evidence": [evidence]}]
         text = json.dumps(answer)
         if mode == "bad":
             text = text[:-1] + ', "objects": []}'
@@ -53,6 +56,29 @@ def run(path, backend, *, count=1, secrets=(), **kwargs):
 
 def files(path):
     return {str(p.relative_to(path)): p.read_bytes() for p in path.rglob("*") if p.is_file()}
+
+
+def test_unknown_relation_is_reviewed_without_regenerating_the_bindings_and_replays(tmp_path):
+    backend = Answers("wrong_enum")
+    package = run(tmp_path / "first", backend, count=2, format_retries=1, max_calls=2)
+    assert len(backend.requests) == package["budget"]["reserved"] == 1
+    request, = backend.requests
+    contract = json.loads(request.messages[-1]["content"])["response_contract"]
+    assert "relations" in contract["properties"] and "name_resolution" not in json.dumps(contract)
+    assert "name_resolution" not in request.messages[0]["content"]
+    assert package["format_retries_reserved"] == 0
+    assert package["status"] == "partial" and package["review_only"]
+    assert package["relations"] == []
+    assert [obs["binding_status"] for obs in package["observations"]] == ["supported", "supported"]
+    group, = package["review_groups"]
+    review, = group["diagnostic"]["reviews"]
+    assert review["proposal_type"] == "relation" and review["path"] == "relations[0]"
+    assert review["raw_proposal"] == json.loads(group["response_text"])["relations"][0]
+    assert group["observation_ids"] == []
+    resumed = Answers()
+    verified = run(tmp_path / "replayed", resumed, count=2, format_retries=1, max_calls=2,
+                   resume_from=tmp_path / "first/analysis/checkpoint.json")
+    assert resumed.requests == [] and verified["review_groups"] == package["review_groups"]
 
 
 def migrate_fixture(path):

@@ -379,7 +379,8 @@ def _prepare_decision_bundle(run_dir: str | Path) -> DecisionBundle:
             from .pipeline import _parse_response, _check_task_records
             from .errors import BackendError
             try:
-                raw = _parse_response(response.text, output_protocol=state.output_protocol)
+                raw = _parse_response(response.text, output_protocol=state.output_protocol,
+                                      row_relation_protocol=task.row_relation_protocol)
                 _check_task_records(raw, task, trace=None, chunk_id=key, output_protocol=state.output_protocol)
             except BackendError:
                 raise ValueError("Completed cache does not match the extraction response contract") from None

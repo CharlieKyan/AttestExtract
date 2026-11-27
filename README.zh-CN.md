@@ -1,6 +1,6 @@
 # NiceExtract
 
-[English](README.md) · [快速开始](#快速开始) · [任务与标准示例](#定义任务与编写标准示例) · [配置 API 与切换模型](#配置-api-与切换模型)
+[English](README.md) · [快速开始](#快速开始) · [任务与标准示例](#定义任务与编写标准示例) · [配置 API](#配置-api-与切换模型) · [多篇文献与 CSV](#多篇文献共用一份字段定义)
 
 ## 简介
 
@@ -27,7 +27,7 @@ LangExtract 可以在文档中高亮抽取到的文本。在它的 v1.7.2 数据
 
 ## 快速开始
 
-下载并解压 [NiceExtract 0.1.0a1 源码 ZIP](https://github.com/CharlieKyan/NiceExtract/archive/refs/tags/v0.1.0a1.zip)。在包含 `pyproject.toml` 的目录使用 Python 3.11 或更高版本运行以下命令。
+解压随候选包提供的 NiceExtract 0.1.0a1 源码，或在发布后下载[对应 GitHub 标签的源码 ZIP](https://github.com/CharlieKyan/NiceExtract/archive/refs/tags/v0.1.0a1.zip)。在包含 `pyproject.toml` 的目录使用 Python 3.11 或更高版本运行以下命令。
 
 ```sh
 python -m pip install .
@@ -157,6 +157,19 @@ niceextract extract --input paper.md --task task.json --env-file .env --base-url
 ```sh
 niceextract extract --input paper.md --task task.json --env-file .env --config examples/backends.toml --profile qwen --output profile-result.json
 ```
+
+## 多篇文献共用一份字段定义
+
+例如，材料牌号中的 `316` 是名称，浓度中的 `0.5–1.0` 是范围。你可以在字段清单任务中增加 `field_types`，声明哪些字段接收文字、数值或两者。对其余字段，模型可以在抽取前根据任务说明集中判断一次。准备后的任务会保留每个类型来自用户声明还是模型判断。字段未全部声明时，准备步骤会调用模型，可能产生费用。
+
+```sh
+niceextract prepare-task --task task.json --model-id deepseek:deepseek-flash --env-file .env --output-dir prepared
+niceextract extract --input paper.md --task prepared/task.json --env-file .env --model-id deepseek:deepseek-flash --table-subject "单个试样" --output-dir run
+```
+
+下一篇文章继续使用 `prepared/task.json`，另选一个空输出目录。指定行主体后，打开 `run/dataset/main.csv` 查看候选值、直接测量对象、引文状态与待核原因。按观测编号到 `observations.csv` 或 `dataset.json` 核对原值、单位、出处和限定条件。原文中的范围和单侧界限保留原写法。遇到字段类型与模型判断冲突时，可回到观测明细复核。
+
+对于仍有争议的观测，`niceextract review-dataset` 可从已保存的数据集读取记录，将复核意见写入独立目录。使用这项可选功能时，需另行准备可信的本地 Intern-Decision-4B 检查点、配套推理代码和运行环境。命令和文件说明见[组表与本地复核指南](docs/dataset-assembly.md)。
 
 ## 核对抽取结果
 

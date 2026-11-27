@@ -16,6 +16,8 @@ from .config import BackendConfig, resolve_backend_config
 from .registry import BackendRegistry, default_registry
 from .providers import available_models, resolve_model_config
 from .automatic import ModelConnection
+from .dataset import assemble_dataset, query_dataset
+from .dataset_io import assemble_from_files, export_observations, save_dataset
 
 __version__ = "0.1.0a1"
 
@@ -34,4 +36,5 @@ __all__ = [
     "OutputProtocol", "RangeBinding",
     "ModelConnection",
     "TableExtractionResult",
+    "assemble_dataset", "query_dataset", "assemble_from_files", "save_dataset", "export_observations",
 ]

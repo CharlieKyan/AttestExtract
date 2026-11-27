@@ -291,7 +291,8 @@ jobs:
               subprocess.run([str(python), str(scripts / "user_entry_smoke.py"),
                               "--output-dir", str(user_output)], check=True, cwd=root, env=env)
               user = json.loads((user_output / "summary.json").read_text(encoding="utf-8"))
-              assert user["passed"] and user["mock_model_posts"] == 3
+              assert user["passed"] and user["mock_model_posts"] == 6
+              assert user["mock_planning_posts"] == user["mock_extraction_posts"] == 3
               assert user["real_model_calls"] == user["network_attempts"] == 0
               assert user["completed_resume_new_calls"] == 0 and user["failure_checkpoint_saved"]
               assert user["python_cli_candidates_equal"] and user["historical_artifacts_unchanged"]

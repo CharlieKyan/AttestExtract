@@ -7,6 +7,18 @@ import re
 from .models import ContextOptions, ContextSegment, DocumentChunk, SourceSpan
 
 
+def extraction_context(task, *, resume_from=None, mode=None, neighbor_chars=None) -> ContextOptions:
+    """Use the saved policy on resume and neighbor context for new observation runs."""
+    policy = ContextOptions(mode="neighbors" if task.statement_protocol == "source-v2" else "none")
+    if resume_from is not None:
+        from .execution import _checkpoint_path
+        path = _checkpoint_path(resume_from).parent.parent / "context-policy.json"
+        if path.is_file():
+            policy = ContextOptions.model_validate_json(path.read_bytes())
+    return ContextOptions(mode=policy.mode if mode is None else mode,
+                          neighbor_chars=policy.neighbor_chars if neighbor_chars is None else neighbor_chars)
+
+
 def merge_spans(spans: list[SourceSpan]) -> list[SourceSpan]:
     result: list[SourceSpan] = []
     for span in sorted(spans, key=lambda item: (item.start, item.end)):
@@ -96,9 +108,23 @@ def enrich_chunk(text: str, chunk: DocumentChunk, structure, context: ContextOpt
             next_tables = [table.span.start for table in structure.tables if table.span.start >= body[-1].end]
             section_start = max([section_start, *previous_tables])
             section_end = min([section_end, *next_tables])
-            paragraphs = _paragraphs(text, section_start, section_end, structure.tables)
-            before = [span for span in paragraphs if span.end <= body[0].start]
-            after = [span for span in paragraphs if span.start >= body[-1].end]
+            left, right = body[0].start, body[-1].end
+            # Table windows share the original table's introduction and following notes.
+            # Splitting at its boundaries also handles HTML tables without blank lines.
+            for table in structure.tables:
+                if left < table.span.end and table.span.start < right:
+                    left, right = min(left, table.span.start), max(right, table.span.end)
+            if chunk.chunk_id.startswith("table-"):
+                structural_spans = [item.span for item in extras if item.role in {
+                    "heading", "table_caption", "table_footnote"}]
+                before = [span for span in _paragraphs(text, section_start, left, structure.tables)
+                          if span not in structural_spans]
+                after = [span for span in _paragraphs(text, right, section_end, structure.tables)
+                         if span not in structural_spans]
+            else:
+                paragraphs = _paragraphs(text, section_start, section_end, structure.tables)
+                before = [span for span in paragraphs if span.end <= body[0].start]
+                after = [span for span in paragraphs if span.start >= body[-1].end]
             for role, choices, backwards in (("neighbor_before", before[-1:], True),
                                               ("neighbor_after", after[:1], False)):
                 if choices:

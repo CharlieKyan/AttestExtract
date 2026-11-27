@@ -9,9 +9,9 @@ import os
 from pathlib import Path
 import re
 import time
-from typing import Any
+from typing import Any, get_args
 
-from pydantic import Field, StrictStr, ValidationError
+from pydantic import Field, PrivateAttr, StrictStr, ValidationError
 
 from .chunking import chunk_document
 from .contextual_chunking import coverage_report
@@ -24,6 +24,7 @@ from .identity import can_ground_fields, grounded_candidate_id
 from .evidence import ground_quote as _ground_quote, check_measurement, is_missing, link_candidates, rule_matches
 from .json_validation import JSONValidationError, load_json as _load_json
 from .prompting import build_messages, build_output_schema
+from .row_relations import legacy_relation_mismatch, locate_relation, read_open_relation
 from .structure_diagnostics import OBSERVED_OBJECT_MESSAGE, diagnose_structure
 from .output_protocol import output_protocol_for_backend
 from .schema_diagnostics import assess_schema_compliance
@@ -31,9 +32,9 @@ from .task_input import resolve_task, task_from_json, task_summary
 from .validation import contract_details, details, error_path, issue
 from .models import (
     BackendResponse, Candidate, CheckResult, ContextOptions, ContextPassage, ContractModel, DocumentChunk, EvidenceRef,
-    ExtractionBackend, ExtractionRequest, ExtractionResult, FieldValue,
+    ExtractionBackend, ExtractionRequest, ExtractionResult, FieldValue, NameHandling, RowRelationProposal,
     ExecutionOptions, GenerationOptions, MeasurementInput, OutputProtocol, ReviewItem, RunInfo, Scalar, SourceInfo, TaskSpec,
-    TableExtractionResult,
+    TableExtractionResult, StatementBasis, ReportedUse, ModelValueRole,
 )
 
 
@@ -44,8 +45,16 @@ class _RawField(ContractModel):
 
 class _RawRecord(ContractModel):
     record_type: StrictStr
+    name_handling: NameHandling | None = None
+    row_relation: RowRelationProposal | None = None
+    statement_basis: StatementBasis | None = None
+    reported_use: ReportedUse | None = None
+    source_property: str | None = Field(default=None, min_length=1)
+    value_role: ModelValueRole | None = None
     fields: dict[str, _RawField]
     measurements: dict[str, MeasurementInput] = Field(default_factory=dict)
+    _open_relation = PrivateAttr(default=None)
+    _relation_issues = PrivateAttr(default_factory=list)
 
 
 class _RawResponse(ContractModel):
@@ -54,6 +63,12 @@ class _RawResponse(ContractModel):
 
 class _FlatRecord(ContractModel):
     record_type: StrictStr
+    name_handling: NameHandling | None = None
+    row_relation: RowRelationProposal | None = None
+    statement_basis: StatementBasis | None = None
+    reported_use: ReportedUse | None = None
+    source_property: str | None = Field(default=None, min_length=1)
+    value_role: ModelValueRole | None = None
     values: dict[str, Scalar]
     quotes: dict[str, StrictStr]
     measurements: dict[str, MeasurementInput] = Field(default_factory=dict)
@@ -107,12 +122,13 @@ def _parse_response(
     text: str, *, trace: RunTrace | None = None, chunk_id: str | None = None,
     format_attempt: int = 1, allowed_keys: set[str] | None = None,
     output_protocol: OutputProtocol = "flat-v1", artifact_stem: str | None = None,
+    row_relation_protocol: str | None = None,
 ) -> _RawResponse:
     original_text = text
     if output_protocol not in ("flat-v1", "native-v1"):
         raise ConfigurationError("Unsupported extraction output protocol.")
     if allowed_keys is not None:
-        allowed_keys = allowed_keys | {"values", "quotes"}
+        allowed_keys = allowed_keys | {"values", "quotes", "name_handling", "statement_basis", "reported_use", "source_property", "value_role"}
     offset = len(text) - len(text.lstrip())
     text = text.strip()
     fence = re.fullmatch(r"```(?:json)?\s*\n([\s\S]*?)\n```", text, flags=re.IGNORECASE)
@@ -149,9 +165,18 @@ def _parse_response(
         )])
         raise _response_error(message, diagnostic, trace=trace, chunk_id=chunk_id,
                               format_attempt=format_attempt, artifact_stem=artifact_stem) from None
+    open_relations = {}
+    if row_relation_protocol == "explanation-v1" and isinstance(payload, dict) and isinstance(payload.get("records"), list):
+        for index, entry in enumerate(payload["records"]):
+            if isinstance(entry, dict) and "row_relation" in entry:
+                open_relations[index] = read_open_relation(entry.pop("row_relation"))
     try:
         if output_protocol == "native-v1":
-            return _RawResponse.model_validate(payload)
+            raw = _RawResponse.model_validate(payload)
+            for index, (relation, issues) in open_relations.items():
+                raw.records[index]._open_relation = relation
+                raw.records[index]._relation_issues = issues
+            return raw
         flat = _FlatResponse.model_validate(payload)
     except ValidationError as exc:
         raise _response_error(message, contract_details(exc, payload, allowed_keys=allowed_keys), trace=trace, chunk_id=chunk_id,
@@ -171,8 +196,35 @@ def _parse_response(
         # Absence is meaningful: an undeclared empty measurements object is invalid.
         if "measurements" in record.model_fields_set:
             item["measurements"] = record.measurements
-        records.append(_RawRecord.model_validate(item))
+        if record.name_handling is not None:
+            item["name_handling"] = record.name_handling
+        if "row_relation" in record.model_fields_set:
+            item["row_relation"] = record.row_relation
+        for key in ("statement_basis", "reported_use", "source_property", "value_role"):
+            if key in record.model_fields_set:
+                item[key] = getattr(record, key)
+        parsed = _RawRecord.model_validate(item)
+        if index in open_relations:
+            parsed._open_relation, parsed._relation_issues = open_relations[index]
+        records.append(parsed)
     return _RawResponse(records=records)
+
+
+def _value_body_location(text, value_field, chunk):
+    """Classify the cited value's original occurrence, independently of the owner, unit and condition."""
+    from .value_location import value_occurrences
+    if value_field is None:
+        return "unverified"
+    evidence = value_field.evidence
+    spans = [*evidence.matches, *(item.span for item in evidence.source_matches)]
+    positions = {(item["start"], item["end"]) for span in spans
+                 for item in value_occurrences(text, value_field.value, span.start, span.end)}
+    if any(body.start <= left and right <= body.end for left, right in positions for body in chunk.body_segments):
+        return "body"
+    if positions and all(any(part.span.start <= left and right <= part.span.end for part in chunk.context_segments)
+                         for left, right in positions):
+        return "context"
+    return "unverified"
 
 
 def _request(task: TaskSpec, chunk: DocumentChunk, generation: GenerationOptions,
@@ -188,6 +240,36 @@ def _check_task_records(raw: _RawResponse, task: TaskSpec, *, trace: RunTrace | 
                         artifact_stem: str | None = None) -> None:
     errors = []
     for index, record in enumerate(raw.records):
+        if not task.statement_protocol and "value_role" in record.model_fields_set:
+            errors.append(issue(("records", index, "value_role"), "statement_contract",
+                                "a source observation", record.value_role, "value_role requires source observations."))
+        if not task.statement_protocol and "source_property" in record.model_fields_set:
+            errors.append(issue(("records", index, "source_property"), "statement_contract",
+                                "source-v1", record.source_property, "source_property requires source-v1."))
+        for key, missing in (("statement_basis", "unknown"), ("reported_use", "unspecified")):
+            if task.statement_protocol and key not in record.model_fields_set:
+                # A provider omitting a classification has given no opinion. Keep the reading.
+                setattr(record, key, missing)
+            elif ((task.statement_protocol and getattr(record, key) is None)
+                  or (not task.statement_protocol and key in record.model_fields_set)):
+                errors.append(issue(("records", index, key), "statement_contract",
+                                    "a source-v1 classification", getattr(record, key),
+                                    f"{key} must follow the selected observation protocol."))
+        if not task.statement_protocol and legacy_relation_mismatch(record.row_relation):
+            errors.append(issue(("records", index, "row_relation"), "row_relation_contract",
+                                "a cited legacy relation", None,
+                                "The original evidence-v1 contract requires citations and has no target_basis."))
+        if task.statement_protocol and task.row_relation_protocol and "name_handling" not in record.model_fields_set:
+            record.name_handling = "uncertain"
+        if task.row_relation_protocol and record.name_handling is None:
+            errors.append(issue(("records", index, "name_handling"), "missing_name_handling",
+                                "a declared name handling option", None,
+                                "Choose name handling for the observation under evidence-v1."))
+        if (bool(task.row_relation_protocol) != ("row_relation" in record.model_fields_set)
+                and not (task.statement_protocol and task.row_relation_protocol)):
+            errors.append(issue(("records", index, "row_relation"), "row_relation_contract",
+                                "a row_relation key only in evidence-v1", record.row_relation,
+                                "row_relation must follow the selected extraction protocol."))
         if record.record_type not in task.record_types:
             errors.append(issue(("records", index, "record_type"), "undeclared_record_type",
                                 "declared record type", record.record_type, "Model returned an undeclared record type."))
@@ -204,7 +286,8 @@ def _check_task_records(raw: _RawResponse, task: TaskSpec, *, trace: RunTrace | 
             if name not in spec.fields:
                 errors.append(issue(("records", index, container, "<undeclared>"), "undeclared_field", "declared field", field.model_dump(),
                                     "Model returned an undeclared field."))
-            elif not _value_has_type(field.value, spec.fields[name].type):
+            elif not (_value_has_type(field.value, spec.fields[name].type)
+                      or task.typed_value(record.record_type, name) and type(field.value) in (int, float)):
                 errors.append(issue(location if output_protocol == "flat-v1" else (*location, "value"), "incorrect_field_type",
                                     spec.fields[name].type + " or null", field.value,
                                     "Model returned a value with an incorrect task field type."))
@@ -229,6 +312,12 @@ def _format_feedback(diagnostic: dict[str, Any], task: TaskSpec,
                      output_protocol: OutputProtocol = "flat-v1") -> list[dict[str, Any]]:
     """Send bounded structural hints without reflecting undeclared property names."""
     known_paths = {"$", "records", "records[0]", "records[0].record_type", "records[0].measurements"}
+    enum_choices = {}
+    if task.statement_protocol == "source-v2":
+        enum_choices = {error_path(("records", 0, name)): ", ".join(get_args(spec)) for name, spec in (
+            ("name_handling", NameHandling), ("statement_basis", StatementBasis), ("reported_use", ReportedUse))}
+        known_paths.update(enum_choices)
+        known_paths.add("records[0].source_property")
     containers = ("values", "quotes") if output_protocol == "flat-v1" else ("fields",)
     known_paths.update(error_path(("records", 0, name)) for name in containers)
     for record in task.record_types.values():
@@ -249,7 +338,8 @@ def _format_feedback(diagnostic: dict[str, Any], task: TaskSpec,
         if normalized not in known_paths:
             path = "$"
         feedback.append({"path": path[:256], "code": error["code"][:256],
-                         "expected": error["expected"][:256]})
+                         "expected": (enum_choices.get(normalized, error["expected"])
+                                      if error["code"] == "literal_error" else error["expected"])[:256]})
         if error["code"] == "invalid_json" and "line" in error:
             feedback[-1].update(line=error["line"], column=error["column"],
                                 reason=error["message"][:256])
@@ -396,7 +486,7 @@ def _validated_response(
                                        code="truncated_response" if response.finish_reason == "length" else "invalid_response")
         try:
             if table_input is not None:
-                raw = _parse_table_response(response.text, trace=trace, chunk_id=chunk.chunk_id, artifact_stem=stem)
+                raw = _parse_table_response(response.text, task=task, trace=trace, chunk_id=chunk.chunk_id, artifact_stem=stem)
                 from .table_windows import filter_window_records
                 raw = filter_window_records(raw, table_input, task)
                 if trace is not None:
@@ -410,7 +500,7 @@ def _validated_response(
                 return raw, responses
             raw = _parse_response(response.text, trace=trace, chunk_id=chunk.chunk_id,
                                   format_attempt=format_attempt, allowed_keys=allowed_keys, output_protocol=output_protocol,
-                                  artifact_stem=stem)
+                                  artifact_stem=stem, row_relation_protocol=task.row_relation_protocol)
             if trace is not None:
                 trace.event("validation", "json_parsed", chunk_id=chunk.chunk_id,
                             format_attempt=format_attempt, record_count=len(raw.records))
@@ -421,6 +511,10 @@ def _validated_response(
                 raise
             feedback = _format_feedback(exc.validation_details, task, output_protocol)
             if session is not None:
+                if isinstance(session, ExecutionSession) and task.statement_protocol == "source-v2":
+                    known_syntax = response.finish_reason == "stop" and (exc.validation_details or {}).get("phase") == "json_syntax"
+                    session.syntax_hashes[chunk.chunk_id, format_attempt] = (
+                        hashlib.sha256(response.text.encode("utf-8")).hexdigest() if known_syntax else None)
                 session.reject_format(chunk.chunk_id, feedback)
             if format_attempt > format_retries:
                 if trace is not None and format_attempt > 1:
@@ -449,10 +543,11 @@ def _validated_response(
     raise AssertionError("Unreachable format retry state")  # pragma: no cover
 
 
-def _parse_table_response(text: str, *, trace=None, chunk_id=None, artifact_stem=None) -> dict:
+def _parse_table_response(text: str, *, task, trace=None, chunk_id=None, artifact_stem=None) -> dict:
     from .table_routes import parse_route_response_partial
     try:
-        return parse_route_response_partial("A", text)
+        return parse_route_response_partial("A", text, row_relations=task.row_relation_protocol,
+                                            source_statements=bool(task.statement_protocol))
     except ValueError as exc:
         artifact = f"validation/{artifact_stem or chunk_id}.errors.json" if trace is not None else None
         if trace is not None:
@@ -468,13 +563,30 @@ def _validate_cached_responses(task: TaskSpec, session: ExecutionSession, table_
                     for name in (*record.fields, *record.measurement_groups)}
     protocol = session.state.output_protocol
     for key, response in session.cached.items():
+        if key in getattr(session, "format_recoveries", {}):
+            from .format_recovery import merge_recovered
+            checked[key], _ = merge_recovered(session.format_recoveries[key], task)
+            continue
+        if key.endswith(".coverage"):
+            continue  # Validate using the parent's checked response and regenerated target map below.
         if key in (table_inputs or {}):
             from .table_windows import filter_window_records
-            checked[key] = filter_window_records(_parse_table_response(response.text), table_inputs[key], task)
+            checked[key] = filter_window_records(_parse_table_response(response.text, task=task), table_inputs[key], task)
             continue
-        raw = _parse_response(response.text, output_protocol=protocol, allowed_keys=allowed_keys)
+        raw = _parse_response(response.text, output_protocol=protocol, allowed_keys=allowed_keys,
+                              row_relation_protocol=task.row_relation_protocol)
         _check_task_records(raw, task, trace=None, chunk_id=key, output_protocol=protocol)
         checked[key] = raw
+    from .table_coverage import coverage_targets
+    for key, node in session.state.nodes.items():
+        if key.endswith(".coverage"):
+            parent = key.removesuffix(".coverage")
+            table = (table_inputs or {}).get(parent)
+            if not table or parent not in checked or not coverage_targets(task, table, checked[parent]):
+                raise ConfigurationError("Table reread has no verified original gap.")
+            if node.status == "completed":
+                from .table_windows import filter_window_records
+                checked[key] = filter_window_records(_parse_table_response(session.cached[key].text, task=task), table, task)
     return checked
 
 
@@ -496,7 +608,8 @@ def _validated_automatic_response(task: TaskSpec, chunk: DocumentChunk,
 
 def _responses_for_chunks(task: TaskSpec, chunks: list[DocumentChunk], backend: ExtractionBackend,
                           trace: RunTrace | None, format_retries: int, generation: GenerationOptions,
-                          session: ExecutionSession | None, table_inputs: dict | None = None):
+                          session: ExecutionSession | None, table_inputs: dict | None = None,
+                          coverage_checks: dict | None = None, resume_analysis: bool = False):
     table_inputs = table_inputs or {}
     if session is None:
         for chunk in chunks:
@@ -519,6 +632,8 @@ def _responses_for_chunks(task: TaskSpec, chunks: list[DocumentChunk], backend: 
         if key in checked:
             session.reused += 1
             session.event("reused", chunk_id=key)
+            if key in getattr(session, "format_recoveries", {}):
+                chunk = DocumentChunk.model_validate(session.format_recoveries[key]["source_chunk"])
             yield chunk, checked[key], [session.cached[key]]
             continue
         try:
@@ -541,6 +656,13 @@ def _responses_for_chunks(task: TaskSpec, chunks: list[DocumentChunk], backend: 
         except Exception as exc:
             failed_stage = trace.stage if trace is not None else None
             session.failed(key, exc)
+            if (not isinstance(backend, AutomaticBackend) and task.statement_protocol == "source-v2"
+                    and isinstance(exc, InvalidResponseError) and key not in table_inputs):
+                from .prose_syntax_retry import split_verified_syntax_failure
+                children = split_verified_syntax_failure(session, key)
+                if children:
+                    queue[0:0] = children
+                    continue
             if isinstance(exc, BackendError) and exc.code == "truncated_response":
                 children = session.subdivide(key)
                 if children:
@@ -561,8 +683,69 @@ def _responses_for_chunks(task: TaskSpec, chunks: list[DocumentChunk], backend: 
                 trace.stage = saved_stage
             raise
         yield chunk, raw, responses
+    if table_inputs and task.input_materials and coverage_checks is not None:
+        yield from _reread_table_gaps(task, session, checked, table_inputs, backend, trace, generation,
+                                      coverage_checks, resume_analysis)
     session.save()
     session.event("finished", **session.summary())
+
+
+def _reread_table_gaps(task, session, checked, table_inputs, backend, trace, generation, checks, resume_analysis):
+    from .table_coverage import coverage_targets, filter_reread, remaining_targets
+    from .table_windows import filter_window_records
+
+    for parent in session.leaves():
+        table = table_inputs.get(parent)
+        if not table or session.retry_tables:
+            continue
+        first = checked.get(parent)
+        if first is None:
+            first = filter_window_records(_parse_table_response(session.cached[parent].text, task=task), table, task)
+        targets = coverage_targets(task, table, first)
+        if not targets:
+            continue
+        check = checks[parent] = {"targets": targets, "remaining": remaining_targets(targets, first)}
+        key = parent + ".coverage"
+        node = session.state.nodes.get(key)
+        if key not in checked and node and node.calls:
+            check["status"] = node.error_code or "interrupted"
+            session.finish_interrupted_coverage(key, check["status"])
+            continue
+        if key not in checked and session.state.calls_used >= session.state.max_model_calls:
+            check["status"] = "budget_exhausted"
+            continue
+        if key not in checked and resume_analysis:
+            # Saved verification jobs identify observations by the frozen extraction.
+            # Preserve their ledger and the previously reported gap on analysis resume.
+            check["status"] = "retained_for_verification_resume"
+            continue
+        chunk = session.coverage_job(parent)
+        local = table_inputs[key] = {**table, "coverage_targets": targets}
+        if trace:
+            trace.write_json(f"tables/{key}/input.json", local)
+        if key in checked:
+            parsed, responses = checked[key], [session.cached[key]]
+            session.reused += 1
+        else:
+            session.event("table_coverage_reread", chunk_id=key, target_fields=list(targets))
+            adapter, ledger, options = backend, session, generation
+            if isinstance(backend, AutomaticBackend):
+                route = session.route_for(key)
+                adapter, ledger, options = route.backend, session.attempt_session(key, route.route_id), route.generation
+            try:
+                parsed, responses = _validated_response(task, chunk, adapter, trace, 0, options, ledger, table_input=local)
+            except BackendError as exc:
+                session.finish_interrupted_coverage(key, exc.code)
+                if not isinstance(exc, InvalidResponseError):
+                    raise
+                check["status"] = exc.code
+                continue
+        parsed, repeats = filter_reread(parsed, targets, first, table)
+        check["ignored_repeats"] = repeats
+        check["ignored_repeat_count"] = len(repeats)
+        check.update(remaining=remaining_targets(targets, parsed), reread_chunk=key)
+        check["status"] = "unresolved" if check["remaining"] else "reported"
+        yield chunk, parsed, responses
 
 
 def _model_environment(env_file, trace, api_key, api_key_env, model_options, fallback):
@@ -665,12 +848,54 @@ def _selected_backend(
     return backend, config.generation
 
 
+def configure_observation_task(task, *, row_subject=None, dataset_row_subject=None, row_relation_evidence=None,
+                               observation_protocol=None, resume_from=None, replay=False):
+    """Bind live prompts to the task before fingerprints, validation, or request creation."""
+    if row_subject and task.input_materials:
+        task = task.model_copy(update={"row_subject": row_subject})
+    if row_relation_evidence and (not task.row_subject or task.input_materials is None):
+        raise ConfigurationError("row_relation_evidence requires a field_list task with a table subject.")
+    if observation_protocol not in (None, "legacy", "source-v1", "source-v2"):
+        raise ConfigurationError("observation_protocol must be legacy, source-v1, or source-v2.")
+    if task.input_materials is None:
+        if observation_protocol in ("source-v1", "source-v2"):
+            raise ConfigurationError("Source statements require a field_list task.")
+        return task
+    if observation_protocol is None and row_relation_evidence is None:
+        if task.statement_protocol and (task.row_subject or dataset_row_subject):
+            return task.model_copy(update={"row_subject": task.row_subject or dataset_row_subject,
+                                           "row_relation_protocol": ("explanation-v1" if task.statement_protocol == "source-v2"
+                                                                     else "evidence-v1")})
+        if task.statement_protocol or task.row_relation_protocol:
+            return task
+        if resume_from:
+            from .execution import _checkpoint_path
+            previous = _checkpoint_path(resume_from).parent.parent / "task.json"
+            if previous.is_file():
+                saved = load_task(previous)
+                if saved.statement_protocol and not task.row_subject and dataset_row_subject:
+                    task = task.model_copy(update={"row_subject": dataset_row_subject})
+                return task.model_copy(update={"statement_protocol": saved.statement_protocol,
+                                               "row_relation_protocol": saved.row_relation_protocol})
+            return task
+    modern = observation_protocol in ("source-v1", "source-v2") or (
+        observation_protocol is None and row_relation_evidence is None and not replay)
+    if modern and not task.row_subject and dataset_row_subject:
+        task = task.model_copy(update={"row_subject": dataset_row_subject})
+    relations = bool(row_relation_evidence) or (modern and task.row_subject is not None)
+    statement_protocol = (observation_protocol or "source-v2") if modern else None
+    relation_protocol = "explanation-v1" if statement_protocol == "source-v2" else "evidence-v1"
+    return task.model_copy(update={"statement_protocol": statement_protocol,
+                                   "row_relation_protocol": relation_protocol if relations else None})
+
+
 def extract(
     text: str | Document,
     task: TaskSpec | dict[str, Any] | None = None,
     *,
     prompt_description: str | None = None,
     field_list: dict[str, str] | None = None,
+    field_types: dict | None = None,
     examples: list[dict[str, Any]] | None = None,
     backend: ExtractionBackend | None = None,
     model: str | None = None,
@@ -691,16 +916,22 @@ def extract(
     generation: GenerationOptions | None = None,
     execution: ExecutionOptions | None = None,
     resume_from: str | Path | None = None,
+    recover_format_from: str | Path | None = None,
     backend_identity: str | None = None,
     context: ContextOptions | None = None,
     table_mode: str = "auto",
     retry_tables: bool = False,
+    retry_prose_syntax: bool = False,
     table_subject: str | None = None,
+    row_relation_evidence: bool | None = None,
+    observation_protocol: str | None = None,
+    prepare_field_types: bool | None = None,
     max_analysis_calls: int = 12,
     analysis_max_steps: int = 4,
     analysis_input_budget: int = 48000,
     analysis_resume_from: str | Path | None = None,
     retry_analysis_jobs: list[str] | None = None,
+    dataset_options: dict | None = None,
 ) -> ExtractionResult:
     """Extract candidates. Matching evidence does not establish factual validity.
 
@@ -742,12 +973,25 @@ def extract(
     ``analysis_max_steps`` limits each verification job. ``analysis_input_budget``
     bounds serialized model-request UTF-8 bytes, not tokens; source passages are
     read on demand instead of repeatedly sending the whole document.
+    Live field_list extraction requests source-reported versus inferred meaning and
+    use. A row subject also requests the direct owner's links to that row. Raw
+    ReplayBackend answers default to the legacy protocol unless a versioned task
+    or observation_protocol="source-v2" selects the current format. source-v1
+    reconstructs earlier source-statement requests. Explicit
+    row_relation_evidence=True selects the earlier evidence-v1 relation format.
     ``result.analysis`` and saved analysis tables are model proposals, not expert
     acceptance. Simple tasks are required. Original extraction JSON and checkpoint
     formats are unchanged; historical analysis checkpoints keep their old policy.
+    The resulting frozen observations are also assembled offline in
+    ``result.dataset``. ``dataset_options`` may specify identity_fields, subject_label_field,
+    row_subject and field_policies. An output directory includes both CSV views
+    and their JSON provenance under ``dataset/``.
     """
-    if resume_from is not None and trace is not None and trace.directory is not None:
-        check_resume_paths(resume_from, [trace.directory])
+    if recover_format_from is not None and resume_from is not None:
+        raise ConfigurationError("Choose either recover_format_from or resume_from.")
+    prior = resume_from or recover_format_from
+    if prior is not None and trace is not None and trace.directory is not None:
+        check_resume_paths(prior, [trace.directory])
     console = None
     directory = None
     owns_trace = False
@@ -760,7 +1004,17 @@ def extract(
         if progress is not None and progress not in ("normal", "quiet", "verbose"):
             raise ConfigurationError("progress must be normal, quiet or verbose.")
         task = resolve_task(task, prompt_description=prompt_description,
-                            field_list=field_list, examples=examples)
+                            field_list=field_list, examples=examples, field_types=field_types)
+        from .field_planning import inherited_preparation, account_preparation, missing_types, prepare_types
+        preparation_receipt = None
+        if resume_from is not None:
+            task, preparation_receipt = inherited_preparation(task, resume_from)
+        from .dataset_io import check_dataset_request
+        check_dataset_request(task, dataset_options)
+        task = configure_observation_task(task, row_subject=table_subject, row_relation_evidence=row_relation_evidence,
+                                          dataset_row_subject=(dataset_options or {}).get("row_subject"),
+                                          observation_protocol=observation_protocol, resume_from=resume_from,
+                                          replay=getattr(backend, "mode", None) == "replay")
         if table_subject is not None:
             validate_analysis_request(text, task, table_subject, max_analysis_calls,
                                       max_steps=analysis_max_steps, input_budget=analysis_input_budget)
@@ -780,20 +1034,24 @@ def extract(
             raise ConfigurationError("table_mode must be auto or text.")
         if type(retry_tables) is not bool:
             raise ConfigurationError("retry_tables must be a boolean.")
+        if type(retry_prose_syntax) is not bool or retry_prose_syntax and resume_from is None:
+            raise ConfigurationError("retry_prose_syntax requires an explicit boolean and a matching resume checkpoint.")
         if retry_tables and (resume_from is None or table_mode != "auto"):
             raise ConfigurationError("retry_tables requires resume_from and automatic table routing.")
         if any(type(value) is not int or value < 1 for value in (max_chunk_chars, table_rows_per_chunk)):
             raise ConfigurationError("Chunk character and table-row limits must be positive integers.")
         if context is not None and not isinstance(context, ContextOptions):
             raise ConfigurationError("context must be a ContextOptions instance.")
-        context = ContextOptions.model_validate(context.model_dump()) if context is not None else ContextOptions()
-        if execution is None and (resume_from is not None or model is not None or output_dir is not None):
+        from .contextual_chunking import extraction_context
+        context = (ContextOptions.model_validate(context.model_dump()) if context is not None
+                   else extraction_context(task, resume_from=resume_from))
+        if execution is None and (prior is not None or model is not None or output_dir is not None):
             execution = ExecutionOptions()
         if execution is not None:
             if not isinstance(execution, ExecutionOptions):
                 raise ConfigurationError("execution must be an ExecutionOptions instance.")
             execution = ExecutionOptions.model_validate(execution.model_dump())
-        if resume_from is not None and output_dir is None and (trace is None or trace.directory is None):
+        if prior is not None and output_dir is None and (trace is None or trace.directory is None):
             raise ConfigurationError("Resuming extraction needs a new output_dir or persistent RunTrace directory.")
         if type(format_retries) is not int or format_retries not in (0, 1):
             raise ConfigurationError("format_retries must be 0 or 1.")
@@ -814,7 +1072,7 @@ def extract(
             from .run_output import prepare_run_directory
 
             if output_dir is not None:
-                directory = prepare_run_directory(output_dir, resume_from=resume_from)
+                directory = prepare_run_directory(output_dir, resume_from=prior)
             console = ConsoleProgress(progress or "normal")
             trace = RunTrace(directory / "diagnostics" if directory is not None else None,
                              secrets=[api_key] if api_key else [], on_event=console)
@@ -828,25 +1086,42 @@ def extract(
                 generation=options if generation is not None else None,
                 format_retries=format_retries, trace=trace, fallback=fallback,
             )
+        infer_types = model is not None if prepare_field_types is None else prepare_field_types
+        should_prepare = bool(infer_types and prior is None and task.statement_protocol == "source-v2"
+                              and missing_types(task))
+        if should_prepare:
+            account_preparation(execution, 1)
+        elif preparation_receipt:
+            execution = account_preparation(execution, preparation_receipt["calls_reserved"])
+        resume_analysis = False
         if table_subject is not None:
             routes = [route.backend for route in backend.routes.values()] if isinstance(backend, AutomaticBackend) else [backend]
             if any(getattr(route, "max_attempts", 1) != 1 for route in routes):
                 raise ConfigurationError("Document analysis requires max_attempts=1; each request has one budget reservation.")
-            check_analysis_resume(
+            resume_analysis = check_analysis_resume(
                 text.text if isinstance(text, Document) else text, task,
                 backend=backend, generation=options, table_subject=table_subject,
                 max_calls=max_analysis_calls, resume_from=resume_from,
+                label_field=(dataset_options or {}).get("subject_label_field"),
                 analysis_resume_from=analysis_resume_from, backend_identity=backend_identity,
                 max_steps=analysis_max_steps, input_budget=analysis_input_budget,
                 format_retries=format_retries, retry_failed_jobs=retry_analysis_jobs,
-            )
+            ) is not None
+        if preparation_receipt is not None and trace is not None:
+            trace.write_json("field-preparation.json", preparation_receipt, atomic=True)
+        if should_prepare:
+            preparation_receipt = {}
+            limit = execution.max_model_calls - 1 if execution and execution.max_model_calls else None
+            task = prepare_types(task, backend, generation=options, trace=trace, receipt=preparation_receipt, limit=limit)
+            execution = account_preparation(execution, preparation_receipt["calls_reserved"])
         execution_summary = {}
         result = _extract(
             text, task, backend=backend, source_name=source_name,
             max_chunk_chars=max_chunk_chars, table_rows_per_chunk=table_rows_per_chunk,
             trace=trace, format_retries=format_retries, generation=options,
             execution=execution, resume_from=resume_from, backend_identity=backend_identity, context=context,
-            table_mode=table_mode, retry_tables=retry_tables, execution_summary=execution_summary,
+            table_mode=table_mode, retry_tables=retry_tables, retry_prose_syntax=retry_prose_syntax, execution_summary=execution_summary,
+            resume_analysis=resume_analysis, recover_format_from=recover_format_from,
         )
         if table_subject is not None:
             from .analysis import build_analysis
@@ -864,11 +1139,18 @@ def extract(
                 text.text if isinstance(text, Document) else text, result,
                 table_subject=table_subject, backend=backend, generation=options,
                 trace=trace, max_calls=max_analysis_calls, resume_from=prior_analysis,
+                label_field=(dataset_options or {}).get("subject_label_field"),
                 backend_identity=backend_identity,
                 extraction_reserved=execution_summary.get("calls_reserved"),
                 max_steps=analysis_max_steps, input_budget=analysis_input_budget,
                 format_retries=format_retries, retry_failed_jobs=retry_analysis_jobs,
             )
+        have_observations = result.analysis is not None and "observations" in result.analysis
+        if have_observations or dataset_options is not None:
+            from .dataset import assemble_dataset
+            source = text.text if isinstance(text, Document) else text
+            result.dataset = assemble_dataset(source, result.model_dump(mode="json"),
+                                              result.analysis, **(dataset_options or {}))
         if directory is not None:
             from .run_output import save_run_result
 
@@ -904,7 +1186,8 @@ def validate_analysis_request(text: str | Document, task: TaskSpec,
 def check_analysis_resume(text, task, *, backend, generation, table_subject, max_calls,
                           resume_from=None, analysis_resume_from=None,
                           backend_identity=None, extraction_reserved=None,
-                          max_steps=4, input_budget=48000, format_retries=0, retry_failed_jobs=None):
+                          max_steps=4, input_budget=48000, format_retries=0, retry_failed_jobs=None,
+                          label_field=None):
     """Check the analysis cache alongside an already validated extraction resume."""
     from .analysis import build_analysis
     from .execution import _checkpoint_path
@@ -928,6 +1211,7 @@ def check_analysis_resume(text, task, *, backend, generation, table_subject, max
     return build_analysis(text, saved, table_subject=table_subject, backend=backend,
                           generation=generation, max_calls=max_calls, resume_from=prior,
                           backend_identity=backend_identity, check_only=True,
+                          label_field=label_field,
                           extraction_reserved=extraction_reserved,
                           max_steps=max_steps, input_budget=input_budget,
                           format_retries=format_retries, retry_failed_jobs=retry_failed_jobs)
@@ -946,10 +1230,13 @@ def _extract(
     generation: GenerationOptions,
     execution: ExecutionOptions | None = None,
     resume_from: str | Path | None = None,
+    recover_format_from: str | Path | None = None,
     backend_identity: str | None = None,
     context: ContextOptions | None = None,
     table_mode: str = "auto",
     retry_tables: bool = False,
+    retry_prose_syntax: bool = False,
+    resume_analysis: bool = False,
     execution_summary: dict | None = None,
 ) -> ExtractionResult:
     started = time.perf_counter()
@@ -996,18 +1283,24 @@ def _extract(
         trace.event("chunking", "started", max_chunk_chars=max_chunk_chars, table_rows_per_chunk=table_rows_per_chunk)
     session = None
     automatic = isinstance(backend, AutomaticBackend)
-    if (automatic or routed_tables) and execution is None:
+    if execution is None and (automatic or routed_tables or spec.statement_protocol == "source-v2" and format_retries):
         execution = ExecutionOptions()
     if execution is not None:
         prepare = prepare_execution
         if automatic:
+            if retry_prose_syntax:
+                raise ConfigurationError("Prose syntax recovery requires the original single backend.")
+            if recover_format_from is not None:
+                raise ConfigurationError("Format recovery requires a single named backend.")
             from .automatic_execution import prepare_automatic_execution
             prepare = prepare_automatic_execution
         session = prepare(text, spec, backend, generation, execution, max_chars=max_chunk_chars,
                                     table_rows_per_chunk=table_rows_per_chunk, format_retries=format_retries,
                                     source_name=source_name, backend_identity=backend_identity, trace=trace,
                                     resume_from=resume_from, context=context, structure=chunk_structure,
-                                    table_mode=table_mode, retry_tables=retry_tables)
+                                    table_mode=table_mode, retry_tables=retry_tables,
+                                    **({"retry_prose_syntax": True} if retry_prose_syntax else {}),
+                                    **({"recover_format_from": recover_format_from} if recover_format_from is not None else {}))
         chunks = [session.chunks[key] for key in session.state.roots]
     else:
         chunks = chunk_document(text, max_chars=max_chunk_chars, table_rows_per_chunk=table_rows_per_chunk,
@@ -1049,8 +1342,10 @@ def _extract(
     request_attempts = 0
     usage: dict[str, int] = {}
     model: str | None = None
+    coverage_checks = {}
     for chunk, raw, responses in _responses_for_chunks(spec, chunks, backend, trace, format_retries, generation, session,
-                                                       table_inputs=table_inputs):
+                                                       table_inputs=table_inputs, coverage_checks=coverage_checks,
+                                                       resume_analysis=resume_analysis):
         response_count += len(responses)
         for response in responses:
             request_attempts += response.attempts
@@ -1127,23 +1422,41 @@ def _extract(
                                     f"Measurement group {name} failed a mechanical check; inspect its context and token evidence.", "review"))
             if not any(not is_missing(field.value) for field in fields.values()):
                 pending.append(("empty_record", None, "The record contains no extracted fields.", "review"))
+            if spec.statement_protocol == "source-v2":
+                from .value_location import conflicting_coded_owner
+                rival = conflicting_coded_owner(text, fields, chunk)
+                if rival:
+                    checks.append(CheckResult(code="value_owner_conflict", field="entity", passed=False))
+                    pending.append(("value_owner_conflict", "entity",
+                                    f"The cited value statement names {rival} as a competing owner; verify direct ownership.", "review"))
             body_anchor = True
             if chunk.context_policy is not None and chunk.context_policy.mode != "none":
-                eligible = set(fields) - set(record_spec.identity_fields) - set(record_spec.condition_fields)
-                eligible = eligible or set(fields)
-                body_anchor = any(
-                    not is_missing(fields[name].value) and any(
-                        body.start <= span.start and span.end <= body.end
-                        for span in [*fields[name].evidence.matches, *(item.span for item in fields[name].evidence.source_matches)]
-                        for body in chunk.body_segments)
-                    for name in eligible)
+                if spec.statement_protocol == "source-v2":
+                    location = _value_body_location(text, fields.get("value"), chunk)
+                    body_anchor = location == "body"
+                    if location == "context":
+                        checks.append(CheckResult(code="value_only_in_context", field="value", passed=False))
+                    if not body_anchor:
+                        message = ("The cited value occurs only in auxiliary source ranges." if location == "context"
+                                   else "The cited value could not be located in the owned body.")
+                        pending.append(("value_only_in_context" if location == "context" else "value_body_location_unverified",
+                                        "value", message, "review"))
+                else:
+                    eligible = set(fields) - set(record_spec.identity_fields) - set(record_spec.condition_fields)
+                    eligible = eligible or set(fields)
+                    body_anchor = any(
+                        not is_missing(fields[name].value) and any(
+                            body.start <= span.start and span.end <= body.end
+                            for span in [*fields[name].evidence.matches, *(item.span for item in fields[name].evidence.source_matches)]
+                            for body in chunk.body_segments)
+                        for name in eligible)
                 if measurements:
                     body_anchor = body_anchor and all(any(
                         body.start <= span.start and span.end <= body.end
                         for span in measurement.value.matches for body in chunk.body_segments)
                         for measurement in measurements.values())
                 checks.append(CheckResult(code="body_evidence", passed=body_anchor))
-                if not body_anchor:
+                if not body_anchor and spec.statement_protocol != "source-v2":
                     pending.append(("context_only_candidate", None,
                                     "No observation evidence anchors this candidate in the owned body; auxiliary context is not an extraction target.", "review"))
             stable_fields = {
@@ -1162,16 +1475,34 @@ def _extract(
             else:
                 encoded = json.dumps(identity, sort_keys=True, ensure_ascii=False, allow_nan=False)
                 identifier = "candidate-" + hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:24]
+            shown = chunk.segments
+            if record._open_relation and chunk.context_policy and chunk.context_policy.mode != "none":
+                shown = [*chunk.body_segments, *(item.span for item in chunk.context_segments)]
+            receipts = locate_relation(record._open_relation or record.row_relation, (
+                (None, segment.start, text[segment.start:segment.end]) for segment in shown))
             if can_dedup and identifier in dedup:
                 prior = dedup[identifier]
+                if prior.statement_basis != record.statement_basis:
+                    prior.statement_basis = "unknown"
+                if prior.reported_use != record.reported_use:
+                    prior.reported_use = "unspecified"
+                if prior.source_property != record.source_property:
+                    prior.source_property = None
+                if record.value_role is not None and prior.value_role != record.value_role:
+                    prior.value_role = "unknown" if prior.value_role is not None else record.value_role
+                prior.row_relations.extend(r for r in receipts if r not in prior.row_relations)
+                prior.row_relation_issues.extend(r for r in record._relation_issues if r not in prior.row_relation_issues)
+                if prior.name_handling != record.name_handling and record.name_handling is not None:
+                    prior.name_handling = "uncertain" if prior.name_handling else record.name_handling
                 for item in chunk.context_segments:
                     passage = ContextPassage(role=item.role, span=item.span, quote=text[item.span.start:item.span.end])
                     if passage not in prior.source_context:
                         prior.source_context.append(passage)
                 if body_anchor and any(check.code == "body_evidence" and not check.passed for check in prior.checks):
-                    prior.checks = [check for check in prior.checks if check.code != "body_evidence"]
+                    prior.checks = [check for check in prior.checks if check.code not in {"body_evidence", "value_only_in_context"}]
                     prior.checks.append(CheckResult(code="body_evidence", passed=True))
-                    review[:] = [item for item in review if not (item.candidate_id == identifier and item.code == "context_only_candidate")]
+                    cleared = {"context_only_candidate", "value_only_in_context", "value_body_location_unverified"}
+                    review[:] = [item for item in review if not (item.candidate_id == identifier and item.code in cleared)]
                     prior.needs_review = any(item.candidate_id == identifier and item.severity == "review" for item in review)
                 if chunk.chunk_id not in prior.chunk_ids:
                     prior.chunk_ids.append(chunk.chunk_id)
@@ -1180,6 +1511,10 @@ def _extract(
                 continue
             candidate = Candidate(
                 candidate_id=identifier, record_type=record.record_type, fields=fields,
+                name_handling=record.name_handling if task.row_subject else None,
+                row_relations=receipts, row_relation_issues=record._relation_issues,
+                statement_basis=record.statement_basis, reported_use=record.reported_use, source_property=record.source_property,
+                value_role=record.value_role,
                 chunk_ids=[chunk.chunk_id], checks=checks, needs_review=any(item[3] == "review" for item in pending),
                 field_status=field_status, measurements=measurements,
                 source_context=[ContextPassage(role=item.role, span=item.span, quote=text[item.span.start:item.span.end])
@@ -1204,6 +1539,9 @@ def _extract(
             trace.event("chunk", "completed", chunk_id=chunk.chunk_id,
                         candidate_count=len(chunk_candidates), review_count=sum(item.severity == "review" for item in chunk_reviews),
                         info_count=sum(item.severity == "info" for item in chunk_reviews))
+    for table_result in table_results:
+        if table_result.chunk_id in coverage_checks:
+            table_result.evidence["coverage_reread"] = coverage_checks[table_result.chunk_id]
     if trace is not None:
         trace.event("extraction", "completed", candidate_count=len(candidates) + sum(len(t.candidates) for t in table_results),
                     table_count=len(table_results),
@@ -1231,7 +1569,7 @@ def _extract(
         table_results=table_results, format_status=format_status,
         run=RunInfo(
             backend=backend.name, mode=mode, output_protocol=output_protocol,
-            chunk_count=len(session.leaves()) if session else len(chunks), response_count=response_count,
+            chunk_count=(len(session.cached) if session else len(chunks)), response_count=response_count,
             candidate_count=len(candidates) + sum(len(table.candidates) for table in table_results), request_attempts=request_attempts,
             model=None if automatic else model, usage=usage, elapsed_seconds=time.perf_counter() - started,
             **provenance,

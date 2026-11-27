@@ -40,6 +40,7 @@ def main() -> None:
     root = parser.parse_args().output_dir.resolve()
     root.mkdir(parents=True, exist_ok=False)
     calls = []
+    planning_calls = []
     network_attempts = []
     fail = False
 
@@ -50,6 +51,15 @@ def main() -> None:
     def handle(request):
         if request.method == "GET":
             return httpx.Response(401)
+        payload = json.loads(request.content)
+        user = json.loads(payload["messages"][-1]["content"])
+        if "fields" in user and "source" not in user:
+            assert set(user["fields"]) == set(TASK["field_list"])
+            planning_calls.append(request)
+            plan = {"field_types": {name: {"kind": "numeric", "shapes": ["scalar", "range", "bound"]}
+                                    for name in user["fields"]}}
+            return httpx.Response(200, json={"model": "synthetic-reported-model", "choices": [
+                {"message": {"content": json.dumps(plan)}, "finish_reason": "stop"}]})
         calls.append(request)
         if fail:
             raise httpx.ReadTimeout("synthetic timeout", request=request)
@@ -75,7 +85,7 @@ def main() -> None:
         assert checkpoint.is_file()
         history = hashes(root / "python")
         resumed = extract(SOURCE, output_dir=root / "resumed", resume_from=checkpoint, **TASK, **options)
-        assert resumed.candidates == first.candidates and len(calls) == 1
+        assert resumed.candidates == first.candidates and len(calls) == len(planning_calls) == 1
         assert hashes(root / "python") == history
         try:
             extract(SOURCE, output_dir=root / "python", **TASK, **options)
@@ -83,7 +93,7 @@ def main() -> None:
             pass
         else:
             raise AssertionError("Existing output must be rejected")
-        assert len(calls) == 1
+        assert len(calls) == len(planning_calls) == 1
         source = root / "paper.md"
         source.write_bytes(SOURCE.encode("utf-8"))
         task = root / "task.json"
@@ -91,12 +101,12 @@ def main() -> None:
         args = ["extract", "--input", str(source), "--task", str(task),
                 "--model-id", "deepseek:deepseek-flash", "--progress", "quiet"]
         status = cli.main([*args, "--output-dir", str(root / "cli")])
-        assert status == 0 and len(calls) == 2
+        assert status == 0 and len(calls) == len(planning_calls) == 2
         cli_result = json.loads((root / "cli/result.json").read_text(encoding="utf-8"))
         assert cli_result["candidates"] == first.model_dump(mode="json")["candidates"]
         with redirect_stdout(io.StringIO()):
             assert cli.main([*args, "--output-dir", str(root / "checked"), "--check"]) == 0
-        assert len(calls) == 2
+        assert len(calls) == len(planning_calls) == 2
         fail = True
         try:
             extract(SOURCE, output_dir=root / "failed", **TASK, **options)
@@ -104,13 +114,14 @@ def main() -> None:
             pass
         else:
             raise AssertionError("Read timeout must fail")
-        assert len(calls) == 3
+        assert len(calls) == len(planning_calls) == 3
         manifest = json.loads((root / "failed/diagnostics/manifest.json").read_text(encoding="utf-8"))
         assert manifest["status"] == "failed" and not (root / "failed/result.json").exists()
         assert (root / "failed/diagnostics/execution/checkpoint.json").is_file()
     assert not network_attempts
     summary = {"passed": True, "package_version": niceextract.__version__,
-               "module_path": niceextract.__file__, "mock_model_posts": len(calls),
+               "module_path": niceextract.__file__, "mock_model_posts": len(calls) + len(planning_calls),
+               "mock_extraction_posts": len(calls), "mock_planning_posts": len(planning_calls),
                "real_model_calls": 0, "network_attempts": 0, "cli_exit_status": status,
                "completed_resume_new_calls": 0, "historical_artifacts_unchanged": True,
                "failure_checkpoint_saved": True, "python_cli_candidates_equal": True}

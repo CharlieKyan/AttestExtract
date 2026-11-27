@@ -1,6 +1,6 @@
 # NiceExtract
 
-[简体中文](README.zh-CN.md) · [Quick start](#quick-start) · [Tasks and examples](#define-a-task-and-label-examples) · [API setup and model switching](#configure-the-api-and-switch-models)
+[简体中文](README.zh-CN.md) · [Quick start](#quick-start) · [Tasks and examples](#define-a-task-and-label-examples) · [API setup](#configure-the-api-and-switch-models) · [Multi-paper tasks and CSV](#prepare-one-task-for-several-papers)
 
 ## Introduction
 
@@ -27,7 +27,7 @@ LangExtract can highlight where an extraction appears in a document. In its v1.7
 
 ## Quick start
 
-Download and unpack the [source ZIP for NiceExtract 0.1.0a1](https://github.com/CharlieKyan/NiceExtract/archive/refs/tags/v0.1.0a1.zip). With Python 3.11 or newer, run these commands in the directory containing `pyproject.toml`.
+Unpack the NiceExtract 0.1.0a1 source archive supplied with this candidate or, after publication, download [the tagged source from GitHub](https://github.com/CharlieKyan/NiceExtract/archive/refs/tags/v0.1.0a1.zip). With Python 3.11 or newer, run these commands in the directory containing `pyproject.toml`.
 
 ```sh
 python -m pip install .
@@ -157,6 +157,19 @@ niceextract extract --input paper.md --task task.json --env-file .env --base-url
 ```sh
 niceextract extract --input paper.md --task task.json --env-file .env --config examples/backends.toml --profile qwen --output profile-result.json
 ```
+
+## Prepare one task for several papers
+
+If your project records specimen grade and concentration, `316` can be a grade while `0.5–1.0` is a concentration range. Add `field_types` to your field-list task to declare which fields accept text, numbers, or both. Unspecified fields can be interpreted together from the task description before extraction. The prepared task records who supplied each type. The preparation uses the model and can incur charges when declarations are incomplete.
+
+```sh
+niceextract prepare-task --task task.json --model-id deepseek:deepseek-flash --env-file .env --output-dir prepared
+niceextract extract --input paper.md --task prepared/task.json --env-file .env --model-id deepseek:deepseek-flash --table-subject "individual specimens" --output-dir run
+```
+
+Reuse `prepared/task.json` with a fresh output directory for each paper. With a row subject configured, open `run/dataset/main.csv` to see candidate values, the directly measured object, and citation and review status. Follow an observation ID into `observations.csv` or `dataset.json` to check the original value, unit, evidence and qualification. A reported range or bound retains the source wording. A conflict with a model-inferred field type can stay visible for review.
+
+For an optional second opinion on pending observations, `niceextract review-dataset` reads a frozen dataset and writes its decisions to a separate directory. This adapter requires a separately obtained, trusted local Intern-Decision-4B checkpoint, its inference code and a compatible environment. See the [dataset and local review guide](docs/dataset-assembly.md).
 
 ## Review a result
 

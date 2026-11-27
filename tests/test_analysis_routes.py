@@ -9,7 +9,7 @@ from niceextract import ExecutionOptions, extract
 
 
 TASK = {"prompt_description": "Extract directly reported sample mass without changing units.",
-        "field_list": {"mass": "Original mass and unit of each sample"}}
+        "field_list": {"mass": "Original mass and unit of each sample"}, "field_types": {"mass": {"kind": "numeric"}}}
 
 
 def envelope(payload, *, finish="stop"):
@@ -67,6 +67,60 @@ def quoted(payload, quote):
         passages.extend(frame["result"].get("passages", []))
     passage = next(item for item in passages if quote in item["text"])
     return {"passage_id": passage["passage_id"], "quote": quote, "occurrence": None}
+
+
+def test_automatic_field_plan_negotiates_once_and_resumes_inside_total_budget(tmp_path, monkeypatch):
+    def respond(body, payload):
+        mode = body["response_format"]["type"]
+        if mode == "json_schema":
+            assert "fields" in payload
+            return httpx.Response(400, json={"error": {"code": "unsupported_value", "param": "response_format",
+                                                       "message": "json_schema is not supported"}})
+        assert mode == "json_object"
+        if "fields" in payload:
+            return envelope({"field_types": {"mass": {"kind": "numeric"}}})
+        assert payload["task"]["field_types"]["mass"]["source"] == "model"
+        return envelope({"records": []})
+
+    sent = install_http(monkeypatch, tmp_path, respond)
+    options = dict(prompt_description=TASK["prompt_description"], field_list=TASK["field_list"],
+                   model="unregistered-science-model", base_url="https://unregistered-analysis.invalid/v1",
+                   api_key="synthetic-analysis-secret", execution=ExecutionOptions(max_model_calls=3),
+                   progress="quiet")
+    out = tmp_path / "original"
+    extract("Sample A has mass 3 g.", output_dir=out, **options)
+    assert len(sent) == 3
+    for directory in (out, tmp_path / "resumed"):
+        if directory != out:
+            extract("Sample A has mass 3 g.", output_dir=directory, resume_from=out, **options)
+        receipt = json.loads((directory/"diagnostics/field-preparation.json").read_bytes())
+        assert [a["status"] for a in receipt["route_attempts"]] == ["failed", "returned"]
+        assert receipt["calls_reserved"] == 2
+        ledger = json.loads((directory/"diagnostics/execution/checkpoint.json").read_bytes())["state"]
+        assert ledger["calls_used"] == ledger["max_model_calls"] == 1
+    assert len(sent) == 3
+    for entry in receipt["route_attempts"]:
+        assert (out/f"diagnostics/requests/{entry['artifact']}.request.json").is_file()
+    assert (out/"diagnostics/responses/task-field-types.route-2.txt").is_file()
+
+
+def test_rejected_field_planning_prompt_cannot_resend_or_use_backup(tmp_path, monkeypatch):
+    from niceextract.errors import BackendError
+
+    def respond(body, payload):
+        assert "fields" in payload
+        return httpx.Response(400, json={"error": {"type": "invalid_request_error", "param": "response_format",
+            "message": "Prompt must contain the word 'json' in some form to use 'response_format' of type 'json_object'."}})
+    sent = install_http(monkeypatch, tmp_path, respond)
+    out = tmp_path / "failed"
+    with pytest.raises(BackendError) as exc:
+        extract("Sample A has mass 3 g.", prompt_description=TASK["prompt_description"], field_list=TASK["field_list"],
+                model="unregistered-science-model", base_url="https://unregistered-analysis.invalid/v1",
+                model_options={"structured_output":"json_object"}, api_key="synthetic-analysis-secret",
+                output_dir=out, progress="quiet")
+    assert exc.value.code == "json_prompt_required" and len(sent) == 1
+    receipt = json.loads((out/"diagnostics/field-preparation.json").read_bytes())
+    assert receipt["calls_reserved"] == 1 and receipt["route_attempts"][0]["status"] == "failed"
 
 
 def decide(objects, bindings):

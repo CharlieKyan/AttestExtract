@@ -98,6 +98,43 @@ def split_chunk(text: str, parent: DocumentChunk, *, min_chars: int,
     return children
 
 
+def split_at_sentence_boundary(text: str, parent: DocumentChunk, structure=None) -> list[DocumentChunk]:
+    """Divide only owned prose at a real sentence end, retaining its original context policy."""
+    from .chunking import _protected_positions, _sentence_ends
+    from .contextual_chunking import enrich_chunk, merge_spans
+    from .structure import build_structure
+    body = merge_spans(parent.body_segments or parent.segments)
+    if not body:
+        return []
+    covered, blocked = _protected_positions(text)
+    # The splitter adds the final end unconditionally; it cannot serve as an interior sentence end.
+    boundaries = _sentence_ends(text, body[0].start, body[-1].end, covered, blocked)[:-1]
+    size = sum(s.end - s.start for s in body)
+    candidates = []
+    for cut in boundaries:
+        if not any(s.start < cut <= s.end for s in body):
+            continue
+        before = sum(max(0, min(cut, s.end) - s.start) for s in body)
+        candidates.append((abs(size - 2 * before), cut))
+    if not candidates:
+        return []
+    _, cut = min(candidates)
+    halves = [[SourceSpan(start=s.start, end=min(cut, s.end)) for s in body if s.start < cut],
+              [SourceSpan(start=max(cut, s.start), end=s.end) for s in body if cut < s.end]]
+    children = []
+    for index, spans in enumerate(halves, 1):
+        contents = "".join(text[s.start:s.end] for s in spans)
+        if not contents.strip():
+            return []
+        child = DocumentChunk(chunk_id=f"{parent.chunk_id}.{index}", text=contents, segments=spans,
+                              body_segments=spans if parent.body_segments or parent.context_policy is not None else [])
+        if parent.context_policy is not None:
+            structure = structure or build_structure(text)
+            child = enrich_chunk(text, child, structure, parent.context_policy)
+        children.append(child)
+    return children
+
+
 def plan_chunks(text: str, task: TaskSpec, generation: GenerationOptions,
                 options: ExecutionOptions, *, max_chars: int = 6000,
                 table_rows_per_chunk: int = 12, context: ContextOptions | None = None,

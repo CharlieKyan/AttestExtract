@@ -77,6 +77,17 @@ def _prose_item(result: ExtractionResult, index: int, simple: bool) -> dict:
     }
     if candidate.source_context:
         item["context"] = [passage.model_dump(mode="json") for passage in candidate.source_context]
+    if candidate.name_handling:
+        item["name_handling"] = candidate.name_handling
+    if candidate.row_relations:
+        item["row_relations"] = [r.model_dump() for r in candidate.row_relations]
+    if candidate.row_relation_issues:
+        item["row_relation_issues"] = [r.model_dump() for r in candidate.row_relation_issues]
+    if candidate.statement_basis is not None:
+        item.update(statement_basis=candidate.statement_basis, reported_use=candidate.reported_use,
+                    source_property=candidate.source_property)
+    if candidate.value_role is not None:
+        item["value_role"] = candidate.value_role
     if simple:
         return {**{name: values.get(name) for name in ("value", "unit", "entity", "conditions")}, **item}
     return {"fields": values, **item}
@@ -138,6 +149,17 @@ def _table_item(result: ExtractionResult, table_index: int, index: int, simple: 
         "evidence": _merge_evidence(evidence), "issues": issues,
     }
     if not rejected:
+        if record.get("name_handling"):
+            item["name_handling"] = record["name_handling"]
+        if record.get("row_relations"):
+            item["row_relations"] = deepcopy(record["row_relations"])
+        if record.get("row_relation_issues"):
+            item["row_relation_issues"] = deepcopy(record["row_relation_issues"])
+        if record.get("statement_basis") is not None:
+            item.update(statement_basis=record["statement_basis"], reported_use=record["reported_use"],
+                        source_property=record.get("source_property"))
+        if record.get("value_role") is not None:
+            item["value_role"] = record["value_role"]
         item["field_checks"] = {name: {key: value for key, value in checks.items()
                                       if key not in {"mechanical_errors", "relationship_warnings", "risk_diagnostics"}}
                                 for name, checks in record.get("field_checks", {}).items()}

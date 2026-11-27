@@ -9,6 +9,7 @@ from __future__ import annotations
 from copy import deepcopy
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Literal
 
@@ -18,7 +19,7 @@ from .errors import BackendError, ConfigurationError
 from .execution import digest
 from .expert_review import build_expert_review
 from .json_validation import load_json
-from .models import BackendResponse, ContractModel, ExtractionRequest, GenerationOptions
+from .models import BackendResponse, ContractModel, ExplainedRelationReceipt, ExtractionRequest, GenerationOptions, RowRelationReceipt
 
 
 REVISION = "document-identity-binding-v1"
@@ -32,23 +33,34 @@ def is_review_only_partial(data: dict) -> bool:
     This is not scientific acceptance and never covers pending jobs, exhausted
     limits, failed requests or incomplete extraction. Do not trust a saved flag.
     """
-    if (not isinstance(data, dict) or data.get("analysis_version") not in {"0.3", "0.4"}
+    if (not isinstance(data, dict) or data.get("analysis_version") not in ("0.3", "0.4")
             or data.get("status") != "partial" or data.get("source_format_status") != "complete"):
         return False
     jobs, groups = data.get("jobs"), data.get("review_groups")
     if not isinstance(jobs, list) or not jobs or not isinstance(groups, list) or not groups:
         return False
+    if any(not isinstance(job, dict) or job.get("status") not in ("completed", "review_required") for job in jobs):
+        return False
+    if data["analysis_version"] == "0.4":
+        # Export already checks required job targets, evidence, and the partition
+        # of retained/held decisions. Reuse that contract for batch continuation.
+        from .analysis_export import _validate
+        try:
+            _validate(data, check_context_text=False)
+        except (ValueError, TypeError, KeyError):
+            return False
+        return all(item["binding_status"] in ("as_extracted", "supported", "unknown", "review_required")
+                   for item in data["observations"])
+
+    # Version 0.3 isolated whole jobs and did not require observation-level receipts.
     expected, seen = {}, set()
     for job in jobs:
-        if not isinstance(job, dict) or job.get("status") not in {"completed", "review_required"}:
-            return False
         key = job.get("job_id")
         if not isinstance(key, str) or not key or key in seen:
             return False
         seen.add(key)
         if job["status"] == "review_required":
-            code = "proposal_review" if data["analysis_version"] == "0.4" else "quote_ambiguous"
-            if job.get("error_code") != code or not job.get("observation_ids"):
+            if job.get("error_code") != "quote_ambiguous" or not job.get("observation_ids"):
                 return False
             expected[key] = job
     if len(groups) != len(expected):
@@ -58,53 +70,9 @@ def is_review_only_partial(data: dict) -> bool:
                 or group["job_id"] not in expected):
             return False
         job = expected.pop(group["job_id"])
-        if data["analysis_version"] == "0.3":
-            if group.get("observation_ids") != job["observation_ids"]:
-                return False
-        else:
-            held, applied = group.get("observation_ids"), group.get("applied_observation_ids")
-            targets = group.get("target_observation_ids")
-            if (any(not isinstance(values, list) or any(not isinstance(value, str) for value in values)
-                    or len(values) != len(set(values)) for values in (held, applied, targets))
-                    or targets != job["observation_ids"] or held != job.get("review_observation_ids")
-                    or set(held).intersection(applied) or set(held).union(applied) != set(targets)
-                    or not isinstance(group.get("diagnostic"), dict)
-                    or group["diagnostic"].get("code") != "proposal_review"
-                    or not isinstance(group["diagnostic"].get("reviews"), list)
-                    or not group["diagnostic"]["reviews"]):
-                return False
-    if expected:
-        return False
-    if data["analysis_version"] == "0.4":
-        observations = data.get("observations")
-        if not isinstance(observations, list):
+        if group.get("observation_ids") != job["observation_ids"]:
             return False
-        by_id = {}
-        for item in observations:
-            if (not isinstance(item, dict) or not isinstance(item.get("observation_id"), str)
-                    or item["observation_id"] in by_id):
-                return False
-            by_id[item["observation_id"]] = item
-        all_targets, held = set(), set()
-        for job in jobs:
-            targets = job.get("observation_ids")
-            if (not isinstance(targets, list) or not targets
-                    or any(not isinstance(key, str) or key not in by_id for key in targets)
-                    or len(targets) != len(set(targets)) or all_targets.intersection(targets)):
-                return False
-            all_targets.update(targets)
-        for group in groups:
-            held.update(group["observation_ids"])
-        if all_targets != set(by_id):
-            return False
-        for key, item in by_id.items():
-            if key in held:
-                if (item.get("binding_status") != "review_required" or item.get("subject_id") is not None
-                        or item.get("binding_evidence_ids") or item.get("target_match") != "unknown"):
-                    return False
-            elif item.get("binding_status") not in {"supported", "unknown"}:
-                return False
-    return True
+    return not expected
 
 
 class _Quote(ContractModel):
@@ -210,6 +178,106 @@ def _evidence(text, quote, entries):
     return key
 
 
+def _route_extracted_names(observations, label_field):
+    """Find concrete alternatives to a first-pass assignment, preserving the original."""
+    names = set()
+    cell_fields = {}
+    value_cells = {}
+    for item in observations:
+        if item.get("source_kind") == "table":
+            cells = {(e["ref"], e["span"]["start"], e["span"]["end"], str(item["value"]))
+                     for e in item["source_evidence"]
+                     if "value" in e["fields"] and e.get("ref") and e.get("span")}
+            value_cells[item["observation_id"]] = cells
+            for cell in cells:
+                cell_fields.setdefault(cell, set()).add(item["record_type"])
+        label = item.get("value")
+        if (item["record_type"] == label_field and isinstance(label, str) and label.strip()
+                and any(label in s["quote"] for s in item["source_evidence"] if "value" in s["fields"])):
+            names.add(label.strip())
+    sorted_names = sorted(names)
+    for item in observations:
+        owner = item.get("entity")
+        if item.get("name_handling") != "as_reported" or not isinstance(owner, str) or not owner.strip():
+            continue
+        # Identical names can be retained at their occurrences without a global identity decision.
+        collisions = set()
+        for cell in value_cells.get(item.get("observation_id"), ()):
+            collisions.update(cell_fields[cell] - {item["record_type"]})
+        if collisions:
+            item["name_review"] = {"issue": "same_cell_competing_properties",
+                                   "candidate_fields": sorted(collisions)[:8], "candidate_count": len(collisions)}
+            continue
+        candidates = []
+        for label in sorted_names:
+            if label == owner or len(label) < 2:
+                continue
+            left = r"(?<![A-Za-z0-9_])" if label[0].isascii() and label[0].isalnum() else ""
+            right = r"(?![A-Za-z0-9_])" if label[-1].isascii() and label[-1].isalnum() else ""
+            if re.search(left + re.escape(label) + right, owner):
+                candidates.append(label)
+        cited = [s["quote"] for s in item["source_evidence"] if "entity" in s["fields"]]
+        if candidates and owner not in names:
+            item["name_review"] = {"issue": "possible_related_row_or_alias", "candidate_names": candidates[:8],
+                                   "candidate_count": len(candidates)}
+        elif cited and not any(owner in quote for quote in cited):
+            item["name_review"] = {"issue": "contextual_or_competing_owner"}
+
+
+def _can_retain_extracted_owner(item):
+    """Source-backed owner that can bypass a separate verification binding."""
+    if item.get("first_pass_filing") == "neighbor_context":
+        return any(b.get("code") == "value_only_in_context" for b in item.get("blockers", []))
+    if item.get("first_pass_filing") in {"direct", "associated", "excluded"}:
+        return (bool(item.get("entity")) and item.get("subject_id") is None
+                and not item.get("binding_evidence_ids") and not item.get("row_relation_issues"))
+    return (item.get("name_handling") == "as_reported"
+            and isinstance(item.get("entity"), str) and bool(item["entity"].strip())
+            and bool(item.get("evidence_ids")) and item.get("blockers") == []
+            and not item.get("name_review") and item.get("subject_id") is None
+            and not item.get("binding_evidence_ids")
+            and item.get("target_match") in ("unknown", "supported"))
+
+
+def _prepare_extraction_assignments(observations, label_field, same_task, *, statement_protocol=None, has_row_subject=True, source=""):
+    """Use the same first-pass decisions in both verification and extraction-only export."""
+    if same_task:
+        _route_extracted_names(observations, label_field)
+    for item in observations:
+        item.update(target_match="unknown", property_name=None, statistic=None)
+        if same_task and statement_protocol == "source-v2":
+            from .filing_evidence import filing_citation_problem
+            receipts = item.get("row_relations", [])
+            handling = item.get("name_handling")
+            if any(b.get("code") == "value_only_in_context" for b in item.get("blockers", [])):
+                item["first_pass_filing"] = "neighbor_context"
+                item.update(binding_status="as_extracted", reason="Only the neighboring source chunk owns this reading.")
+                continue
+            if any(b.get("code") == "value_owner_conflict" for b in item.get("blockers", [])):
+                item["filing_review_reason"] = "原值引文点名了另一直接对象，请查证对象、数值及其原文位置。"
+                continue
+            if item.get("row_relation_issues"):
+                item["filing_review_reason"] = "The proposed filing relationship could not be read."
+            elif len(receipts) == 1 and not receipts[0].get("alternative") and receipts[0]["field_applicability"] in {"included", "excluded"}:
+                problem = filing_citation_problem(source, receipts[0], item)
+                if problem:
+                    item["filing_review_reason"] = problem
+                else:
+                    item["first_pass_filing"] = ("excluded" if receipts[0]["field_applicability"] == "excluded"
+                                                 else "associated")
+            elif not receipts and (not has_row_subject or handling == "as_reported" and not item.get("name_review")):
+                item["first_pass_filing"] = "direct"
+            else:
+                item["filing_review_reason"] = (
+                    "Find the exact filing subject in the full source and explain whether this field applies. "
+                    "Keep the directly measured object and the observation unchanged.")
+            if item.get("filing_review_reason"):
+                continue
+        if same_task and _can_retain_extracted_owner(item):
+            item.update(binding_status="as_extracted",
+                        reason="Local owner supplied during extraction. Field selection is assessed separately.")
+
+
 def _input_observations(text, result, entries):
     review = build_expert_review(result)
     items = [item for row in review["rows"] for group in row["fields"].values() for item in group]
@@ -221,6 +289,27 @@ def _input_observations(text, result, entries):
         identities.add(candidate)
         pointers.add(pointer)
         evidence_ids = []
+        if result.task.row_relation_protocol and item["source_kind"] == "table":
+            from .row_relations import table_relation_receipts
+            # This is the candidate pointer generated by build_expert_review for this item.
+            _, _, table_index, _, record_index = pointer.split("/")
+            table = result.table_results[int(table_index)]
+            record = table.candidates[int(record_index)]
+            expected = (table_relation_receipts(record, table.evidence["table_input"])
+                        if record.get("row_relation") is not None else [])
+            if expected != item.get("row_relations", []):
+                raise ConfigurationError("Row relation evidence differs from the cited table cells.")
+        for receipt in item.get("row_relations", []):
+            contract = ExplainedRelationReceipt if result.task.row_relation_protocol == "explanation-v1" else RowRelationReceipt
+            relation = contract.model_validate(receipt)
+            if not result.task.row_relation_protocol:
+                raise ConfigurationError("Unexpected row relation metadata in a legacy result.")
+            if not result.task.statement_protocol and (not relation.evidence or relation.target_basis is not None):
+                raise ConfigurationError("The archived row relation protocol requires citations and has no target_basis.")
+            for citation in relation.evidence:
+                if citation.start is not None and (citation.end > len(text)
+                                                   or text[citation.start:citation.end] != citation.quote):
+                    raise ConfigurationError("Row relation evidence differs from the original source.")
         for source in item["evidence"]:
             from .normalization import normalized_view
 
@@ -247,6 +336,13 @@ def _input_observations(text, result, entries):
             blockers.append({"code": "original_review_required", "message": "Original extraction checks require review."})
         observations.append({
             "observation_id": "observation-" + digest({"source": result.source.sha256, "candidate": candidate})[:24],
+            **({"name_handling": item["name_handling"]} if item.get("name_handling") else {}),
+            **({"row_relations": deepcopy(item["row_relations"])} if item.get("row_relations") else {}),
+            **({"row_relation_issues": deepcopy(item["row_relation_issues"])} if item.get("row_relation_issues") else {}),
+            **{key: item[key] for key in ("statement_basis", "reported_use", "source_property", "value_role") if key in item},
+            **({"source_property_evidence_ids": [key for key in dict.fromkeys(evidence_ids)
+                                                 if item["source_property"] in entries[key]["quote"]]}
+               if item.get("source_property") else {}),
             "candidate_id": candidate, "source_record": pointer, "record_type": item["record_type"],
             "source_kind": item["source_kind"], **{key: deepcopy(item.get(key)) for key in ("value", "unit", "conditions", "entity")},
             "subject_id": None, "binding_status": "pending", "binding_evidence_ids": [], "reason": "",
@@ -586,7 +682,7 @@ def _build_legacy_analysis(text, result, *, table_subject, backend, generation=N
 def build_analysis(text, result, *, table_subject, backend, generation=None, trace=None,
                    max_calls=12, resume_from=None, backend_identity=None, check_only=False,
                    extraction_reserved=None, max_steps=4, input_budget=48000,
-                   format_retries=0, retry_failed_jobs=None):
+                   format_retries=0, retry_failed_jobs=None, label_field=None):
     """New runs use bounded lookup; existing v0.1 checkpoints keep their contract."""
     options = dict(table_subject=table_subject, backend=backend, generation=generation,
                    trace=trace, max_calls=max_calls, resume_from=resume_from,
@@ -606,4 +702,5 @@ def build_analysis(text, result, *, table_subject, backend, generation=None, tra
             return _build_legacy_analysis(text, result, **options)
     from .verification import build_verification
     return build_verification(text, result, max_steps=max_steps, input_budget=input_budget,
-                              format_retries=format_retries, retry_failed_jobs=retry_failed_jobs, **options)
+                              format_retries=format_retries, retry_failed_jobs=retry_failed_jobs,
+                              label_field=label_field, **options)

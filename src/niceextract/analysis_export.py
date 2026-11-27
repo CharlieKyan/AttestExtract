@@ -8,8 +8,10 @@ from pathlib import Path
 import re
 import sqlite3
 
+from .analysis import _can_retain_extracted_owner
 from .diagnostics import RunTrace
 from .expert_review import _literal
+from .scoped_names import validate_name_receipt
 
 
 _NOTICE = "模型提出的对象与归属，待人工复核；原机器检查问题仍然有效，不是专家确认。"
@@ -23,6 +25,7 @@ _CONTEXT_COLUMNS = ("evidence_id", "artifact_id", "passage_id", "start", "end", 
 _GROUP_COLUMNS = ("job_id", "observation_ids", "record_types", "response_details", "validation_details",
                   "validation_summary", "response_text", "diagnostic")
 _PARTIAL_GROUP_COLUMNS = (*_GROUP_COLUMNS, "target_observation_ids", "applied_observation_ids")
+_RELATION_ANCHORS = ("source_mention_id", "target_mention_id")
 _OBSERVATION_COLUMNS = (
     "observation_id", "candidate_id", "source_record", "record_type", "source_kind",
     "entity", "value", "unit", "conditions", "subject_id", "binding_status", "reason",
@@ -86,12 +89,25 @@ def _validate(data: dict, *, check_context_text=True) -> None:
             raise ValueError("Analysis objects require names, kinds and explicit table membership.")
         _refs(item, "mention_evidence_ids", evidence)
     for item in observations.values():
+        validate_name_receipt(item, objects, evidence)
+        for link in item.get("reviewed_row_relations", []):
+            if (link.get("target_id") not in objects or not isinstance(link.get("explanation"), str)
+                    or not link["explanation"].strip() or link.get("field_applicability") not in
+                    {"included", "excluded", "uncertain"} or link.get("target_basis") not in
+                    {"reported", "inferred", "unknown"} or not _refs(link, "evidence_ids", evidence)):
+                raise ValueError("A reviewed filing requires a declared row, its explanation and original citations.")
+        for link in item.get("reviewed_repeats", []):
+            if (link.get("target_id") not in observations or link["target_id"] == item["observation_id"]
+                    or len(set(_refs(link, "evidence_ids", evidence))) < 2):
+                raise ValueError("A repeated observation must have both original occurrences and a distinct observation.")
         subject = item.get("subject_id")
         if subject is not None and (not isinstance(subject, str) or subject not in objects):
             raise ValueError("Observation subjects must reference an existing object.")
         statuses = {"supported", "unknown", "pending", "failed"}
         if data["analysis_version"] in {"0.3", "0.4"}:
             statuses.add("review_required")
+        if data["analysis_version"] == "0.4" and _can_retain_extracted_owner(item):
+            statuses.add("as_extracted")
         if (item.get("binding_status") not in statuses
                 or item.get("binding_status") == "supported" and subject is None):
             raise ValueError("Observation binding status must agree with its subject reference.")
@@ -118,12 +134,22 @@ def _validate(data: dict, *, check_context_text=True) -> None:
                 or not isinstance(item.get("target_id"), str) or item["target_id"] not in objects
                 or not isinstance(item.get("predicate"), str) or not item["predicate"]):
             raise ValueError("Relations require existing object endpoints and a predicate.")
-        _refs(item, "evidence_ids", evidence)
+        proof_ids = _refs(item, "evidence_ids", evidence)
+        for field in _RELATION_ANCHORS:
+            if field not in item:
+                continue
+            ref = item[field]
+            anchor = evidence.get(ref) if isinstance(ref, str) else None
+            if (not anchor or anchor.get("start") is None or not any(
+                    evidence[key].get("start") is not None
+                    and evidence[key]["start"] <= anchor["start"] < anchor["end"] <= evidence[key]["end"]
+                    for key in proof_ids)):
+                raise ValueError("Relation endpoint evidence must be located within the cited proof.")
     if data["analysis_version"] in {"0.3", "0.4"}:
         _validate_review_materials(data, observations, evidence, check_context_text=check_context_text)
 
 
-def _validate_partial_group(group, job, observations):
+def _validate_partial_group(group, job, observations, *, single_entry=False):
     targets = _refs(group, "target_observation_ids", observations)
     held = _refs(group, "observation_ids", observations)
     applied = _refs(group, "applied_observation_ids", observations)
@@ -141,17 +167,37 @@ def _validate_partial_group(group, job, observations):
         if not isinstance(item, dict):
             raise ValueError("Rejected proposals must be objects.")
         kind, path, raw = item.get("proposal_type"), item.get("path"), item.get("raw_proposal")
-        folder = {"object": "objects", "relation": "relations", "binding": "bindings"}.get(kind)
-        if (folder is None or not isinstance(path, str) or not re.fullmatch(rf"{folder}\[[0-9]+\]", path)
-                or path in paths or not isinstance(raw, dict)
+        single_relation = single_entry and kind == "relation"
+        if single_entry and kind == "name_resolution":
+            raise ValueError("A single-entry decision records rejected name proposals in relations.")
+        folder = {"object": "objects", "relation": "relations", "binding": "bindings", "name_resolution": "bindings"}.get(kind)
+        suffix = r"\.name_resolution" if kind == "name_resolution" else ""
+        position = (re.fullmatch(rf"{folder}\[(0|[1-9][0-9]*)\]{suffix}", path)
+                    if folder and isinstance(path, str) else None)
+        # A rejected binding and a retained binding with an optional rejected name
+        # cannot occupy the same position in one model reply, even with distinct paths.
+        slot = path.removesuffix(".name_resolution") if position else None
+        if (not position or slot in paths or (folder == "bindings" and int(position[1]) >= len(targets))
+                or "raw_proposal" not in item or (not single_relation and not isinstance(raw, dict))
                 or not isinstance(item.get("proposal_id"), str) or not item["proposal_id"]
                 or not isinstance(item.get("code"), str) or not item["code"]):
             raise ValueError("Rejected proposals require unique canonical paths and original payloads.")
-        paths.add(path)
+        paths.add(slot)
         ids = _refs(item, "observation_ids", observations)
-        if not set(ids).issubset(held):
+        if single_relation:
+            # This link identifies the observation whose name was discussed. Its
+            # independent binding can still be applied or have its own rejection.
+            origin = raw.get("source_id") if isinstance(raw, dict) and raw.get("source_kind") in ("mention", "observation", "repeat") else None
+            expected = [origin] if isinstance(origin, str) and origin in targets else []
+            if item["proposal_id"] != path or ids != expected:
+                raise ValueError("Rejected relations must retain their original slot and mention reference.")
+        elif kind == "name_resolution":
+            if ids != [item["proposal_id"]] or ids[0] not in applied:
+                raise ValueError("A rejected optional name must reference its retained original observation.")
+        elif not set(ids).issubset(held):
             raise ValueError("Rejected proposal dependencies cannot include retained observations.")
-        affected.update(ids)
+        else:
+            affected.update(ids)
         if kind == "binding" and (ids != [item["proposal_id"]] or raw.get("observation_id") != item["proposal_id"]):
             raise ValueError("Rejected bindings must identify their original target observation.")
         dependencies = item.get("dependencies")
@@ -183,7 +229,7 @@ def _validate_review_materials(data, observations, evidence, *, check_context_te
             if not ids or targets.intersection(ids):
                 raise ValueError("Verification jobs must have nonempty, disjoint target sets.")
             targets.update(ids)
-        if targets != set(observations):
+        if targets != {oid for oid, item in observations.items() if item["binding_status"] != "as_extracted"}:
             raise ValueError("Verification job targets must cover every original observation.")
     held = set()
     for key, group in groups.items():
@@ -215,7 +261,8 @@ def _validate_review_materials(data, observations, evidence, *, check_context_te
                 or group["diagnostic"].get("code") != code):
             raise ValueError("Review groups must retain the original answer and validation diagnostic.")
         if data["analysis_version"] == "0.4":
-            _validate_partial_group(group, job, observations)
+            _validate_partial_group(group, job, observations,
+                                    single_entry=data.get("relation_entry_protocol") == "single-entry-v1")
     if (held != {key for key, item in observations.items() if item["binding_status"] == "review_required"}
             or set(groups) != {key for key, job in jobs.items() if job.get("status") == "review_required"}
             or groups and data["status"] not in {"partial", "failed"}):
@@ -351,6 +398,12 @@ def _database(path: Path, data: dict) -> None:
             connection.executemany("INSERT INTO relations VALUES (?, ?, ?, ?, ?)", [
                 (item["relation_id"], item["source_id"], item["target_id"], item["predicate"], item["semantic_status"])
                 for item in data["relations"]])
+            if data.get("relation_entry_protocol") == "single-entry-v1":
+                for column in _RELATION_ANCHORS:
+                    connection.execute(f"ALTER TABLE relations ADD COLUMN {column} TEXT REFERENCES evidence(evidence_id)")
+                connection.executemany("UPDATE relations SET source_mention_id=?, target_mention_id=? WHERE relation_id=?",
+                    [(row.get("source_mention_id"), row.get("target_mention_id"), row["relation_id"])
+                     for row in data["relations"]])
             connection.executemany("INSERT INTO object_evidence VALUES (?, ?)", [
                 (item["object_id"], key) for item in data["objects"] for key in item.get("mention_evidence_ids", [])])
             connection.executemany("INSERT INTO observation_evidence VALUES (?, ?, ?)", [
@@ -453,14 +506,16 @@ def _markdown(data: dict, view: dict) -> str:
         lines += ["目标表仅纳入模型判断归属有支持且字段匹配有支持的观测；仍不是专家确认。其他观测单独保留。", ""]
         observations = data["observations"]
         binding_counts = {status: sum(item["binding_status"] == status for item in observations)
-                          for status in ("supported", "unknown", "pending", "failed", "review_required")}
+                          for status in ("supported", "unknown", "pending", "failed", "review_required", "as_extracted")}
+        routing_counts = (f"，沿用首轮归属{binding_counts['as_extracted']}条，归属隔离待核{binding_counts['review_required']}条"
+                          if data["analysis_version"] == "0.4" else "")
         target_counts = {status: sum(item.get("target_match", "unknown") == status for item in observations)
                          for status in ("supported", "unsupported", "unknown")}
         direct_subjects = {item["subject_id"] for item in observations if _direct(item)}
         unbound_objects = sum(item["object_id"] not in direct_subjects for item in data["objects"])
         lines += ["## 查证状态摘要", "",
                   f"观测共{len(observations)}条；模型认为归属有支持{binding_counts['supported']}条，"
-                  f"归属未知{binding_counts['unknown']}条，待处理{binding_counts['pending']}条，查证失败{binding_counts['failed']}条。",
+                  f"归属未知{binding_counts['unknown']}条，待处理{binding_counts['pending']}条，查证失败{binding_counts['failed']}条{routing_counts}。",
                   f"目标字段匹配：模型认为有支持{target_counts['supported']}条，不支持{target_counts['unsupported']}条，"
                   f"未确定{target_counts['unknown']}条。",
                   f"对象共{len(data['objects'])}个；未被归属明确的观测直接引用的对象{unbound_objects}个。"
@@ -597,8 +652,10 @@ def save_analysis(analysis: dict, directory: Path, secrets=()) -> None:
                            ("unbound_observations.csv", view["unbound_observations"]),
                            ("unmatched_observations.csv", view["unmatched_observations"])):
         _write_csv(directory / filename, _OBSERVATION_COLUMNS, rows)
-    _write_csv(directory / "relations.csv", ("relation_id", "source_id", "target_id", "predicate",
-                                            "evidence_ids", "semantic_status"), data["relations"])
+    relation_columns = ("relation_id", "source_id", "target_id", "predicate", "evidence_ids", "semantic_status")
+    if data.get("relation_entry_protocol") == "single-entry-v1":
+        relation_columns += _RELATION_ANCHORS
+    _write_csv(directory / "relations.csv", relation_columns, data["relations"])
     _write_csv(directory / "evidence.csv", ("evidence_id", "quote", "start", "end"), data["evidence"])
     if data["analysis_version"] in {"0.3", "0.4"}:
         for stem in ("review_groups", "evidence_contexts"):

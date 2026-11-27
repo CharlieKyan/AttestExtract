@@ -205,7 +205,10 @@ def test_preset_prose_defaults_match_cli_without_execution_options(tmp_path, mon
 
     def respond(request):
         calls.append(json.loads(request.content))
-        return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(RESPONSE)},
+        requested = json.loads(calls[-1]["messages"][-1]["content"])
+        answer = ({"field_types": {f: {"kind": "numeric"} for f in requested["fields"]}}
+                  if "fields" in requested else RESPONSE)
+        return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(answer)},
                                                      "finish_reason": "stop"}]})
 
     monkeypatch.setattr("niceextract.backends.OpenAICompatibleBackend", lambda **kw:
@@ -227,7 +230,9 @@ def test_preset_prose_defaults_match_cli_without_execution_options(tmp_path, mon
     cli_state = read(cli_dir / "diagnostics/execution/checkpoint.json")["state"]
     assert py_state["max_model_calls"] == cli_state["max_model_calls"] == 3
     assert py_state["calls_used"] == cli_state["calls_used"] == 1
-    assert calls[0]["messages"] == calls[1]["messages"]
+    assert len(calls) == 4
+    assert calls[0]["messages"] == calls[2]["messages"]
+    assert calls[1]["messages"] == calls[3]["messages"]
     # No output_dir is needed to enable the ordinary preset's ledger.
     trace = RunTrace(tmp_path / "caller-trace")
     extract(SOURCE, model="deepseek:deepseek-flash", trace=trace, **TASK)
@@ -249,7 +254,11 @@ def test_model_key_is_redacted_from_saved_output_report_and_console(tmp_path, mo
     response["records"][0]["quotes"]["conditions"] = ""
 
     def respond(request):
-        return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(response)},
+        messages = json.loads(request.content)["messages"]
+        requested = json.loads(messages[-1]["content"])
+        answer = ({"field_types": {f: {"kind": "numeric"} for f in requested["fields"]}}
+                  if "fields" in requested else response)
+        return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(answer)},
                                                      "finish_reason": "stop"}]})
 
     monkeypatch.setattr("niceextract.backends.OpenAICompatibleBackend", lambda **kw:

@@ -84,7 +84,9 @@ class Service:
         if kind == "extract":
             records = []
             for quote, entity, value in CLAIMS:
-                if quote in payload["source"]:
+                source = payload["source"]
+                if (quote in source if isinstance(source, str) else
+                        any(part["role"] == "body" and quote in part["text"] for part in source)):
                     fields = {"entity": entity, "value": value, "unit": "g", "conditions": "condition " + value}
                     records.append({"record_type": "mass", "values": fields,
                                     "quotes": {name: quote for name in fields}})

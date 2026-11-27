@@ -3,24 +3,64 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, get_args
 
-from .models import DocumentChunk, OutputProtocol, TaskSpec
+from .models import DocumentChunk, NameHandling, OutputProtocol, TaskSpec, ValueRole
+from .row_relations import (INSTRUCTIONS as RELATION_INSTRUCTIONS, OPEN_RELATION_INSTRUCTIONS, SOURCE_RELATION_INSTRUCTIONS, STATEMENT_INSTRUCTIONS,
+                            response_property, statement_properties)
 from .task_input import observation_quotes, observation_values
+
+
+VALUE_ROLE_INSTRUCTIONS = (
+    "For each record set value_role from what the source says this particular value represents: label for a name "
+    "or identifier (including all-digit codes), description for a qualitative statement, quantity for a measured "
+    "or specified number, range or limit, and unknown when unresolved. Use the source wording and table headers. "
+    "Keep codes as quoted strings with any leading zeros. Report the author's property in source_property. "
+    "If the unit is attached to the number in the source, also supply it in the unit field when available. "
+    "A mean is a statistic, and an experimental setting is a use; record them separately from numeric shape.\n"
+)
+
+
+def value_role_property():
+    return {"type": "string", "enum": list(get_args(ValueRole))}
 
 
 SIMPLE_OBSERVATION_INSTRUCTIONS = (
     "This task uses one observation type for each declared target. The complete target list is "
     "defined by task.record_types, including targets absent from the examples. entity identifies "
-    "the reported object; value preserves its original number, range, or qualitative statement; "
+    "the reported object in the source's own words. Keep a local name even when its document-wide "
+    "identity is uncertain. If the source explicitly offers alternative owners, preserve that "
+    "single alternative expression and quote it; do not duplicate the observation for each owner. "
+    "value preserves its original number, range, or qualitative statement; "
     "unit preserves the reported unit; conditions preserves explicit test conditions, direction, "
     "scenario, and statistical scope. Keep ranges and separately reported means as separate "
     "observations; never calculate a mean from endpoints. Do not infer absent objects, units, "
     "or conditions. Empty condition_fields and measurement_groups do not disable conditions "
-    "extraction, and do not request extra measurement structures. If a target is unreported, "
+    "extraction, and do not request extra measurement structures. When the source reports the "
+    "base property but leaves a requested qualification undecided, preserve the reported property "
+    "and qualifier in the verbatim evidence for that candidate. Never add the requested qualifier "
+    "to the reported value. Respect task exclusions and keep a stated different use separate. "
+    "Read parallel statements for each named subject, including qualitative properties. If a target is unreported, "
     "return no observation for it rather than an empty placeholder. A returned observation "
     "needs a reported value; missing optional fields remain null.\n"
 )
+
+
+NAME_HANDLING_INSTRUCTIONS = (
+    "For each record set name_handling at record level. entity is already the owner as reported. "
+    "Use as_reported for an owner suitable as the requested row with this property's stated scope. "
+    "Use compare_names when a shorthand, pronoun, label or cross-reference needs to be linked "
+    "to another mention. If an author introduces members and later uses short names, request compare_names "
+    "even when the local owner of the value is clear. Match the members by their described roles across "
+    "reordered text or a table; the first-mentioned member need not be the first measured. "
+    "Use related if the owner and the requested row are distinct related subjects; "
+    "uncertain for competing interpretations, unreported owner or unresolved field qualification. "
+    "Keep the original entity and observation in all cases. These choices route follow-up, not deletion. "
+)
+
+
+def name_handling_schema():
+    return {"type": "string", "enum": list(get_args(NameHandling))}
 
 
 def _user_examples(task: TaskSpec, output_protocol: OutputProtocol) -> list[dict[str, Any]]:
@@ -61,6 +101,8 @@ def build_output_schema(task: TaskSpec, *, output_protocol: OutputProtocol = "fl
                 "required": ["value", "quote"],
                 "additionalProperties": False,
             }
+            if task.typed_value(record_type, name):
+                fields[name]["properties"]["value"]["type"] = ["string", "number", "null"]
             if spec.description:
                 fields[name]["description"] = spec.description
         branch = {
@@ -91,6 +133,18 @@ def build_output_schema(task: TaskSpec, *, output_protocol: OutputProtocol = "fl
             branch["required"].append("measurements")
         if record.description:
             branch["description"] = record.description
+        if task.row_subject is not None and task.input_materials is not None:
+            branch["properties"]["name_handling"] = name_handling_schema()
+            branch["required"].append("name_handling")
+        if task.row_relation_protocol == "evidence-v1":
+            branch["properties"]["row_relation"] = response_property(source_statements=bool(task.statement_protocol))
+            branch["required"].append("row_relation")
+        if task.statement_protocol:
+            properties = statement_properties()
+            if task.field_types:
+                properties["value_role"] = value_role_property()
+            branch["properties"].update(properties)
+            branch["required"].extend(properties)
         if output_protocol == "flat-v1":
             wrapped = branch["properties"].pop("fields")["properties"]
             values = {}
@@ -104,6 +158,10 @@ def build_output_schema(task: TaskSpec, *, output_protocol: OutputProtocol = "fl
                                                "required": list(properties), "additionalProperties": False}
             branch["required"] = [name for name in branch["required"] if name != "fields"] + ["values", "quotes"]
         branches.append(branch)
+        if task.row_relation_protocol == "explanation-v1":
+            branches.append({**branch, "properties": {**branch["properties"],
+                             "row_relation": response_property(source_statements=True, open_relation=True)},
+                             "required": [*branch["required"], "row_relation"]})
     items = branches[0] if len(branches) == 1 else {"anyOf": branches}
     return {
         "type": "object",
@@ -141,6 +199,14 @@ def build_example(task: TaskSpec, *, output_protocol: OutputProtocol = "flat-v1"
             lines.append(quote)
             fields[name] = {"value": value, "quote": quote}
         output = {"record_type": record_type, "fields": fields}
+        if task.row_subject and task.input_materials:
+            output["name_handling"] = "as_reported"
+        if task.row_relation_protocol == "evidence-v1":
+            output["row_relation"] = None
+        if task.statement_protocol:
+            output.update(statement_basis="reported", reported_use="unspecified", source_property=None)
+            if task.field_types:
+                output["value_role"] = "unknown"
         if record.measurement_groups:
             output["measurements"] = {}
             for name, group in record.measurement_groups.items():
@@ -222,6 +288,21 @@ def build_messages(task: TaskSpec, chunk: DocumentChunk, *, output_protocol: Out
     )
     if task.input_materials is not None:
         instructions += SIMPLE_OBSERVATION_INSTRUCTIONS
+        if task.row_subject is not None:
+            instructions += NAME_HANDLING_INSTRUCTIONS
+        if task.row_relation_protocol == "explanation-v1":
+            instructions += OPEN_RELATION_INSTRUCTIONS
+        elif task.row_relation_protocol:
+            instructions += RELATION_INSTRUCTIONS
+        if task.statement_protocol:
+            instructions += STATEMENT_INSTRUCTIONS
+            if task.field_types:
+                instructions += VALUE_ROLE_INSTRUCTIONS
+            if task.statement_protocol == "source-v2":
+                instructions += ("If a translated abstract repeats the same measurement within this input, return it once. "
+                                 "Keep separate observations whenever owner, use, conditions or value differ.\n")
+            if task.row_relation_protocol:
+                instructions += SOURCE_RELATION_INSTRUCTIONS
     if task.input_materials is not None and task.input_materials.examples:
         instructions += (
             "The following USER-LABELLED TASK EXAMPLES are guidance only, not the actual source. "
@@ -229,6 +310,10 @@ def build_messages(task: TaskSpec, chunk: DocumentChunk, *, output_protocol: Out
             "the actual answer. Extract only from the actual user source.\n"
         )
         example_data = _user_examples(task, output_protocol)
+        if task.row_subject:
+            instructions += "User examples label observed values only; choose name_handling for the actual source.\n"
+        if task.row_relation_protocol:
+            instructions += "Choose row_relation from the actual source; task examples only illustrate field values.\n"
     else:
         instructions += (
             "The following complete task-specific example is SYNTHETIC FORMAT GUIDANCE ONLY. "

@@ -36,7 +36,8 @@ def read_original(execution_dir, key, node, *, table_input=None, task=None):
     if digest(payload) != node.table_original_hash:
         raise ValueError("original table response checksum")
     response = BackendResponse.model_validate(payload)
-    parsed = parse_route_response_partial("A", response.text)
+    parsed = parse_route_response_partial("A", response.text, row_relations=task and task.row_relation_protocol,
+                                          source_statements=bool(task and task.statement_protocol))
     if table_input is not None:
         from .table_windows import filter_window_records
         parsed = filter_window_records(parsed, table_input, task)
@@ -57,7 +58,10 @@ def select_table_retries(session):
         if node.table_retry_pending:
             selected.append(key)
         elif key in session.cached and not node.table_retries_reserved and node.calls == 1:
-            parsed = parse_route_response_partial("A", session.cached[key].text)
+            task = session.task
+            parsed = parse_route_response_partial("A", session.cached[key].text,
+                                                  row_relations=task and task.row_relation_protocol,
+                                                  source_statements=bool(task and task.statement_protocol))
             from .document_routing import table_input_for_chunk
             from .table_windows import filter_window_records
             table_input = table_input_for_chunk(session.text, session.chunks[key], session.structure)

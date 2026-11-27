@@ -53,6 +53,14 @@ def normalized_view(text: str, *, offset: int = 0) -> SearchView:
             character = " "
             if text[index:end] != character:
                 rules.add("whitespace")
+        elif (not protected[index] and character == "\\" and index > 0
+              and text[index - 1] in "0123456789%％" and text[end:end + 1] == "~"
+              and text[end + 1:end + 2].isdecimal()):
+            # A Markdown escape between numeric endpoints is presentational. Map the
+            # result to both original characters; keep commands and math unchanged.
+            end += 1
+            character = "~"
+            rules.add("markdown_range")
         elif not protected[index]:
             character = character.translate(_PUNCTUATION)
             if character != text[index]:

@@ -297,12 +297,23 @@ def test_console_heartbeat_stops_and_does_not_echo_payload():
         console({"stage": "transport", "event": "tls_selected", "effective_tls_mode": "1.2", "fallback": True, "probe_requests": 2})
         console({"stage": "http", "event": "started", "read_timeout": 180})
         assert ready.wait(2)
+        console({"stage": "model_response", "event": "completed"})
+        ready.clear()
+        console({"stage": "analysis", "event": "call_reserved", "job_id": "verify-0003", "step": 1})
+        console({"stage": "http", "event": "started", "read_timeout": 180})
+        assert ready.wait(2)
+        console({"stage": "analysis", "event": "finished", "status": "partial", "review_only": True,
+                 "as_extracted": 18, "used": 5, "limit": 48, "total_reserved": 22})
     finally:
         console.close()
     assert not console._thread.is_alive()
     assert "private-example" not in stream.getvalue()
     assert "read timeout 180s" in stream.getvalue()
     assert "compatibility fallback" in stream.getvalue()
+    assert "[1/1] waiting for model" in stream.getvalue()
+    assert "Analysis verify-0003: waiting for model" in stream.getvalue()
+    assert "all verification groups processed" in stream.getvalue()
+    assert "First-pass ownership retained for 18 observations" in stream.getvalue()
 
 
 @pytest.mark.parametrize("mode", ["normal", "verbose", "quiet"])

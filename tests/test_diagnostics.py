@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 
+
 import httpx
 import pytest
 
@@ -526,3 +527,26 @@ def test_json_redaction_preserves_nonstring_literals_that_look_like_secrets(tmp_
     assert payload["boolean"] is True
     assert type(payload["number"]) is int and payload["number"] == 1
     assert payload["value"] == "[REDACTED]"
+
+
+def test_atomic_diagnostic_update_tolerates_a_short_windows_lock(tmp_path, monkeypatch):
+    from niceextract import diagnostics
+
+    trace = diagnostics.RunTrace(tmp_path / "trace")
+    trace.write_json("state.json", {"reserved": 1}, atomic=True)
+    target = trace.directory / "state.json"
+    replace = diagnostics.os.replace
+    delays = []
+
+    def temporarily_locked(src, dest):
+        assert json.loads(target.read_bytes()) == {"reserved": 1}
+        if len(delays) < 2:
+            exc = PermissionError("locked")
+            exc.winerror = 32
+            raise exc
+        replace(src, dest)
+
+    monkeypatch.setattr(diagnostics.os, "replace", temporarily_locked)
+    monkeypatch.setattr(diagnostics.time, "sleep", delays.append)
+    trace.write_json("state.json", {"reserved": 2}, atomic=True)
+    assert len(delays) == 2 and json.loads(target.read_bytes()) == {"reserved": 2}

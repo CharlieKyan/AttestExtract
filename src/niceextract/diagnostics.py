@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
+import time
 from typing import Any
 from uuid import uuid4
 
@@ -129,7 +130,15 @@ class RunTrace:
                     stream.write(text)
                     stream.flush()
                     os.fsync(stream.fileno())
-                os.replace(temporary, target)
+                # A sync client or scanner can briefly hold the previous checkpoint on Windows.
+                for delay in (0.02, 0.05, 0.1, 0.2, None):
+                    try:
+                        os.replace(temporary, target)
+                        break
+                    except PermissionError as exc:
+                        if delay is None or getattr(exc, "winerror", None) not in {5, 32, 33}:
+                            raise
+                        time.sleep(delay)
             finally:
                 temporary.unlink(missing_ok=True)
         else:

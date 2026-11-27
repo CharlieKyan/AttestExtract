@@ -2,20 +2,138 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal, Protocol
+from typing import Annotated, Any, Literal, Protocol, get_args
 
 from pydantic import (
-    BaseModel, ConfigDict, Field, StrictBool, StrictFloat, StrictInt, StrictStr,
+    BaseModel, BeforeValidator, ConfigDict, Field, StrictBool, StrictFloat, StrictInt, StrictStr,
     model_validator, model_serializer,
 )
 
 
 Scalar = StrictStr | StrictInt | StrictFloat | StrictBool | None
 OutputProtocol = Literal["flat-v1", "native-v1"]
+NameHandling = Literal["as_reported", "compare_names", "related", "uncertain"]
+StatementBasis = Literal["reported", "inferred", "unknown"]
+ValueRole = Literal["label", "description", "quantity", "unknown"]
+
+
+def _read_value_role(value):
+    return value if value in get_args(ValueRole) else "unknown"
+
+
+# This optional interpretation is independent of the original value and its evidence.
+ModelValueRole = Annotated[ValueRole, BeforeValidator(_read_value_role)]
+ReportedUse = Literal["measured", "model_input", "process_setting", "derived_setting",
+                      "boundary_condition", "classification_threshold", "sensitivity_input_range", "unspecified"]
 
 
 class ContractModel(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, allow_inf_nan=False)
+
+
+class RelationCitation(ContractModel):
+    quote: str = Field(min_length=1)
+    ref: str | None
+
+
+class RowRelation(ContractModel):
+    """A directed first-pass proposal from this observation's entity to a row."""
+
+    target: str = Field(min_length=1)
+    predicate: Literal["part_of", "sample_of", "member_of", "located_in"]
+    field_applicability: Literal["included", "excluded", "uncertain"]
+    evidence: list[RelationCitation]
+    target_basis: StatementBasis | None = None
+
+    @model_serializer(mode="wrap")
+    def _serialize_relation(self, handler):
+        result = handler(self)
+        if self.target_basis is None:
+            result.pop("target_basis", None)
+        return result
+
+
+class RowRelationAlternatives(ContractModel):
+    """Explicit alternatives for one observation, never multiple measurements."""
+
+    alternatives: list[RowRelation] = Field(min_length=2)
+
+    @model_validator(mode="after")
+    def distinct_targets(self):
+        if len({item.target.strip() for item in self.alternatives}) != len(self.alternatives):
+            raise ValueError("Each alternative must identify a distinct source target.")
+        return self
+
+
+RowRelationProposal = RowRelation | RowRelationAlternatives
+
+
+class ExplainedRowRelation(ContractModel):
+    """The model's account of a specific owner's connection to a proposed row."""
+
+    target: str = Field(min_length=1)
+    explanation: str = Field(min_length=1)
+    field_applicability: Literal["included", "excluded", "uncertain"]
+    evidence: list[RelationCitation]
+    target_basis: StatementBasis = "unknown"
+    target_contains_direct: bool | None = None
+    target_source_name: str | None = Field(default=None, min_length=1)
+
+    @model_validator(mode="after")
+    def nonblank(self):
+        if not self.target.strip() or not self.explanation.strip():
+            raise ValueError("The target and explanation must contain text.")
+        return self
+
+    @model_serializer(mode="wrap")
+    def _serialize_explanation(self, handler):
+        result = handler(self)
+        if self.target_source_name is None:
+            result.pop("target_source_name", None)
+        return result
+
+
+class RowRelationIssue(ContractModel):
+    status: Literal["malformed"] = "malformed"
+    reason: str
+    raw: Any
+
+
+class LocatedRelationCitation(RelationCitation):
+    start: int | None
+    end: int | None
+
+
+class RowRelationReceipt(RowRelation):
+    alternative: bool = False
+    status: Literal["located", "unresolved"]
+    evidence: list[LocatedRelationCitation]
+
+    @model_validator(mode="after")
+    def check_locations(self):
+        _check_relation_citations(self.evidence, self.status)
+        return self
+
+
+class ExplainedRelationReceipt(ExplainedRowRelation):
+    alternative: bool = False
+    status: Literal["located", "unresolved"]
+    evidence: list[LocatedRelationCitation]
+
+    @model_validator(mode="after")
+    def check_locations(self):
+        _check_relation_citations(self.evidence, self.status)
+        return self
+
+
+def _check_relation_citations(evidence, status):
+    for citation in evidence:
+        if (citation.start is None) != (citation.end is None):
+            raise ValueError("Relation citation offsets must be paired.")
+        if citation.start is not None and (citation.start < 0 or citation.end - citation.start != len(citation.quote)):
+            raise ValueError("Relation citation offsets must enclose its original quote.")
+    if (status == "located") != (bool(evidence) and all(c.start is not None for c in evidence)):
+        raise ValueError("Relation location status must match its citations.")
 
 
 class FieldSpec(ContractModel):
@@ -84,12 +202,36 @@ class TaskInputExample(ContractModel):
     extractions: list[TaskExampleExtraction]
 
 
+class FieldTypePlan(ContractModel):
+    kind: Literal["text", "numeric", "mixed", "unknown"]
+    shapes: list[Literal["scalar", "range", "bound"]] = Field(default_factory=list)
+    source: Literal["user", "model"] = "user"
+
+    @model_validator(mode="after")
+    def check_shapes(self):
+        if self.kind in ("numeric", "mixed") and "shapes" not in self.model_fields_set:
+            self.shapes = ["scalar", "range", "bound"]
+        if self.kind in ("numeric", "mixed") and not self.shapes:
+            raise ValueError("Numeric and mixed fields need at least one numeric shape.")
+        if self.kind in ("text", "unknown") and self.shapes or len(self.shapes) != len(set(self.shapes)):
+            raise ValueError("Shapes must be distinct and apply only to numeric or mixed fields.")
+        return self
+
+
 class SimpleTaskInput(ContractModel):
     """The complete target list and optional user-labelled examples."""
 
     prompt_description: str = Field(min_length=1)
     field_list: dict[str, str] = Field(min_length=1)
     examples: list[TaskInputExample] = Field(default_factory=list)
+    field_types: dict[str, FieldTypePlan] = Field(default_factory=dict)
+
+    @model_serializer(mode="wrap")
+    def _serialize_inputs(self, handler):
+        result = handler(self)
+        if not self.field_types:
+            result.pop("field_types", None)
+        return result
 
 
 class TaskInputMaterials(SimpleTaskInput):
@@ -104,11 +246,27 @@ class TaskSpec(ContractModel):
     description: str = ""
     record_types: dict[str, RecordSpec] = Field(min_length=1)
     input_materials: TaskInputMaterials | None = None
+    field_types: dict[str, FieldTypePlan] = Field(default_factory=dict)
+
+    row_subject: str | None = Field(default=None, min_length=1, max_length=1000)
+    row_relation_protocol: Literal["evidence-v1", "explanation-v1"] | None = None
+    statement_protocol: Literal["source-v1", "source-v2"] | None = None
+
+    def typed_value(self, record_type: str, field: str) -> bool:
+        return field == "value" and record_type in self.field_types
 
     @model_validator(mode="after")
     def check_names(self) -> TaskSpec:
         if not self.name.strip() or any(not name.strip() for name in self.record_types):
             raise ValueError("Task and record type names must not be blank")
+        if self.row_relation_protocol and (not self.row_subject or self.input_materials is None):
+            raise ValueError("Row relation evidence requires a field_list task with a row subject.")
+        if self.statement_protocol and self.input_materials is None:
+            raise ValueError("Source statements require a field_list task.")
+        if self.field_types and (not self.input_materials or self.field_types.keys() - self.record_types.keys()):
+            raise ValueError("Field types must refer to declared field_list fields.")
+        if self.row_relation_protocol == "explanation-v1" and self.statement_protocol != "source-v2":
+            raise ValueError("Open row explanations require source-v2.")
         if self.input_materials is not None:
             from .task_input import validate_compiled_task
             validate_compiled_task(self)
@@ -119,6 +277,14 @@ class TaskSpec(ContractModel):
         result = handler(self)
         if self.input_materials is None:
             result.pop("input_materials", None)
+        if not self.field_types:
+            result.pop("field_types", None)
+        if self.row_subject is None:
+            result.pop("row_subject", None)
+        if self.row_relation_protocol is None:
+            result.pop("row_relation_protocol", None)
+        if self.statement_protocol is None:
+            result.pop("statement_protocol", None)
         return result
 
 
@@ -219,7 +385,7 @@ class EvidenceMatch(ContractModel):
     source_quote: str
     span: SourceSpan
     method: Literal["normalized"] = "normalized"
-    rules: list[Literal["whitespace", "punctuation"]] = Field(min_length=1)
+    rules: list[Literal["whitespace", "punctuation", "markdown_range"]] = Field(min_length=1)
 
 
 class TableReference(ContractModel):
@@ -291,6 +457,27 @@ class Candidate(ContractModel):
     field_status: dict[str, Literal["reported", "not_reported", "not_applicable", "required_missing"]] = Field(default_factory=dict)
     measurements: dict[str, MeasurementEvidence] = Field(default_factory=dict)
     source_context: list[ContextPassage] = Field(default_factory=list)
+    name_handling: NameHandling | None = None
+    row_relations: list[RowRelationReceipt | ExplainedRelationReceipt] = Field(default_factory=list)
+    row_relation_issues: list[RowRelationIssue] = Field(default_factory=list)
+    statement_basis: StatementBasis | None = None
+    reported_use: ReportedUse | None = None
+    source_property: str | None = Field(default=None, min_length=1)
+    value_role: ValueRole | None = None
+
+    @model_serializer(mode="wrap")
+    def _serialize_candidate(self, handler):
+        result = handler(self)
+        if self.name_handling is None:
+            result.pop("name_handling", None)
+        if not self.row_relations:
+            result.pop("row_relations", None)
+        if not self.row_relation_issues:
+            result.pop("row_relation_issues", None)
+        for key in ("statement_basis", "reported_use", "source_property", "value_role"):
+            if getattr(self, key) is None:
+                result.pop(key, None)
+        return result
 
 
 class ReviewItem(ContractModel):
@@ -403,6 +590,7 @@ class ExtractionResult(ContractModel):
     # Independent, versioned analysis product. The original extraction archive
     # remains byte-contract compatible; saved analysis lives in analysis.json.
     analysis: dict[str, Any] | None = Field(default=None, exclude=True)
+    dataset: dict[str, Any] | None = Field(default=None, exclude=True)
 
     @model_serializer(mode="wrap")
     def _serialize_result(self, handler):

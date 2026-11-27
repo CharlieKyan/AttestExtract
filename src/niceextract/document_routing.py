@@ -56,6 +56,14 @@ def table_input_for_chunk(text: str, chunk: DocumentChunk, structure=None) -> di
             raise ConfigurationError("Table chunk contains unrelated prose in its owned source range.")
     from .table_routes import build_table_input
     table_input = build_table_input(text, table_id=table.table_id, structure=detected)
+    indexed = {(entry["start"], entry["end"]) for entry in table_input["entries"]}
+    for segment in chunk.context_segments:
+        span = segment.span
+        if segment.role in {"neighbor_before", "neighbor_after"} and (span.start, span.end) not in indexed:
+            table_input["entries"].append({
+                "ref": f"{segment.role}-{span.start}", "kind": segment.role,
+                "quote": text[span.start:span.end], "start": span.start, "end": span.end,
+            })
     if window:
         from .table_windows import add_table_window
         return add_table_window(table_input, chunk)
@@ -112,7 +120,8 @@ def plan_routed_chunks(text, task, generation, options, *, max_chars, table_rows
         else:
             chunk_id = f"table-{table_index:04d}"
             # These are the same mandatory heading/caption/footnote sources as A's input.
-            policy = ContextOptions(mode="structure")
+            policy = (context if task.statement_protocol == "source-v2" and context.mode == "neighbors"
+                      else ContextOptions(mode="structure"))
         base = DocumentChunk(chunk_id=chunk_id, text="".join(text[s.start:s.end] for s in spans),
                              segments=spans, body_segments=spans)
         chunk = enrich_chunk(text, base, structure, policy)

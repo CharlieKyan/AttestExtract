@@ -292,16 +292,20 @@ def test_batch_continuation_distinguishes_review_from_unfinished_or_failed_work(
     ("complete", 3, "analysis_review_required"),
     ("partial_format_error", 2, "analysis_incomplete"),
 ])
+@pytest.mark.parametrize("mixed", [False, True], ids=["legacy-whole-job", "first-pass-and-verified"])
 def test_cli_review_continuation_never_overrides_incomplete_extraction(
-        tmp_path, monkeypatch, capsys, format_status, expected_code, manifest_status):
+        tmp_path, monkeypatch, capsys, format_status, expected_code, manifest_status, mixed):
     import httpx
     from niceextract import analysis_export
+    from test_partial_analysis_export import mixed_partial_sample
     monkeypatch.setattr(httpx.Client, "send", lambda *a, **k: pytest.fail("Unexpected network"))
     result = extract(TEXT, TASK, backend=Backend())
+    analysis = mixed_partial_sample() if mixed else review_only_analysis()
     result = result.model_copy(update={"schema_version": "0.6", "format_status": format_status,
-                                       "analysis": review_only_analysis()})
+                                       "analysis": analysis})
     monkeypatch.setattr(cli, "extract", lambda *a, **k: result)
-    monkeypatch.setattr(analysis_export, "save_analysis", lambda *a, **k: None)
+    if not mixed:
+        monkeypatch.setattr(analysis_export, "save_analysis", lambda *a, **k: None)
     monkeypatch.setenv("NICEEXTRACT_API_KEY", "synthetic-check-key")
     source, task, output = tmp_path / "source.txt", tmp_path / "task.json", tmp_path / "run"
     source.write_text(TEXT, encoding="utf-8")

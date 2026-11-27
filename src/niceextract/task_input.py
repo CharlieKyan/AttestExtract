@@ -74,6 +74,10 @@ def _check_materials(materials: SimpleTaskInput, *, emit_warnings: bool) -> None
 
     if not materials.prompt_description.strip():
         raise ValueError("prompt_description must not be blank")
+    if set(materials.field_types) - materials.field_list.keys():
+        raise ValueError("field_types references an undeclared field")
+    if any(rule.source != "user" for rule in materials.field_types.values()):
+        raise ValueError("Simple task declarations must have source=user.")
     for name, description in materials.field_list.items():
         if not name.strip():
             raise ValueError("field_list contains a blank field name")
@@ -138,27 +142,31 @@ def validate_compiled_task(task: TaskSpec) -> None:
     if (task.name != _COMPILED_NAME or task.description != materials.prompt_description
             or task.record_types != _records(materials)):
         raise ValueError("input_materials do not match the compiled task; update the simple task inputs and compile again")
+    if (any(task.field_types.get(k) != v for k, v in materials.field_types.items())
+            or any(v.source != "model" for k, v in task.field_types.items() if k not in materials.field_types)):
+        raise ValueError("Prepared field types must preserve the user's declarations and identify model suggestions.")
 
 
-def compile_task(*, prompt_description: str, field_list: dict[str, str], examples=None) -> TaskSpec:
+def compile_task(*, prompt_description: str, field_list: dict[str, str], examples=None, field_types=None) -> TaskSpec:
     """Compile the declared scope without semantic inference or model calls."""
     materials = _validate(TaskInputMaterials, {
         "prompt_description": prompt_description, "field_list": field_list,
         "examples": [] if examples is None else examples,
+        "field_types": {} if field_types is None else field_types,
     })
     try:
         _check_materials(materials, emit_warnings=True)
     except ValueError as exc:
         raise TaskValidationError(f"Invalid task input: {exc}") from None
     return TaskSpec(name=_COMPILED_NAME, description=materials.prompt_description,
-                    record_types=_records(materials), input_materials=materials)
+                    record_types=_records(materials), input_materials=materials, field_types=materials.field_types)
 
 
 def resolve_task(task: TaskSpec | dict[str, Any] | None = None, *,
-                 prompt_description=None, field_list=None, examples=None) -> TaskSpec:
+                 prompt_description=None, field_list=None, examples=None, field_types=None) -> TaskSpec:
     """Accept exactly one legacy/compiled task or one set of simple inputs."""
     if task is not None:
-        if any(value is not None for value in (prompt_description, field_list, examples)):
+        if any(value is not None for value in (prompt_description, field_list, examples, field_types)):
             raise TaskValidationError("Pass task or prompt_description/field_list/examples, not both")
         if isinstance(task, TaskSpec):
             return _validate(TaskSpec, task.model_dump(mode="python"))
@@ -174,7 +182,8 @@ def resolve_task(task: TaskSpec | dict[str, Any] | None = None, *,
         return _validate(TaskSpec, task)
     if prompt_description is None or field_list is None:
         raise TaskValidationError("Provide task, or both prompt_description and field_list; examples are optional")
-    return compile_task(prompt_description=prompt_description, field_list=field_list, examples=examples)
+    return compile_task(prompt_description=prompt_description, field_list=field_list, examples=examples,
+                        field_types=field_types)
 
 
 def task_from_json(text: str) -> TaskSpec:
@@ -188,6 +197,7 @@ def task_from_json(text: str) -> TaskSpec:
             "measurement_groups", "value_field", "unit_field", "input_materials",
             "input_version", "compiler_revision", "prompt_description", "field_list",
             "examples", "text", "extractions", "field", "entity", "unit", "conditions", "quotes",
+            "field_types", "kind", "shapes", "source",
         })
     except JSONValidationError as exc:
         error = exc.diagnostic["errors"][0]

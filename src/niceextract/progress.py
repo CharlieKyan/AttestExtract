@@ -25,6 +25,7 @@ class ConsoleProgress:
         self._call_limit = 0
         self._read_timeout: float | None = None
         self._waiting_since: float | None = None
+        self._waiting_label = ""
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -40,7 +41,14 @@ class ConsoleProgress:
                 if self._waiting_since is not None:
                     elapsed = time.monotonic() - self._waiting_since
                     limit = f"; read timeout {self._read_timeout:g}s" if self._read_timeout is not None else ""
-                    self._write(f"[{self.current}/{self.total}] waiting for model; {elapsed:.0f}s elapsed{limit}")
+                    self._write(f"{self._waiting_label} waiting for model; {elapsed:.0f}s elapsed{limit}")
+
+    def _wait_for_model(self, label: str) -> None:
+        self._waiting_label = label
+        self._waiting_since = time.monotonic()
+        if self._thread is None:
+            self._thread = threading.Thread(target=self._heartbeat, daemon=True)
+            self._thread.start()
 
     def close(self) -> None:
         self._stop.set()
@@ -68,7 +76,7 @@ class ConsoleProgress:
                 self._write(f"Analysis {event.get('job_id', '?')}: format regeneration requested; "
                             "additional model call within existing budgets; original response preserved")
             elif kind == "call_reserved":
-                self._waiting_since = time.monotonic()
+                self._wait_for_model(f"Analysis {event.get('job_id', '?')}:")
                 step = f"; step {event['step']}" if event.get("step") is not None else ""
                 self._write(f"Analysis {event.get('job_id', '?')}: calls {event.get('used', '?')}/{event.get('limit', '?')}{step}")
             elif kind == "reused":
@@ -155,8 +163,14 @@ class ConsoleProgress:
                     self._write("Ordinary resume preserves this failed job; it may process pending jobs but will not repair this failure.")
             elif kind == "finished":
                 self._waiting_since = None
-                self._write(f"Document analysis: {event.get('status', '?')}; analysis calls {event.get('used', '?')}/{event.get('limit', '?')}; "
+                status = event.get("status", "?")
+                if status == "partial" and event.get("review_only") is True:
+                    status = "partial (all verification groups processed; isolated proposals require review)"
+                self._write(f"Document analysis: {status}; analysis calls {event.get('used', '?')}/{event.get('limit', '?')}; "
                             f"combined extraction + analysis reservations {event.get('total_reserved')}; inspect analysis/analysis.md")
+                direct = event.get("as_extracted")
+                if type(direct) is int and direct > 0:
+                    self._write(f"First-pass ownership retained for {direct} observations outside verification groups.")
             return
         if stage == "configuration" and kind == "completed":
             self._read_timeout = event.get("read_timeout")
@@ -230,7 +244,8 @@ class ConsoleProgress:
             if self._last_chunk == event["chunk_id"]:
                 self.current = max(0, self.current - 1)
             self.total = event["leaf_chunks"]
-            self._write(f"Truncated {event['chunk_id']}; split into {len(event['children'])} children; {self.total} leaf chunks")
+            reason = "Invalid JSON for" if event.get("reason") == "invalid_response" else "Truncated"
+            self._write(f"{reason} {event['chunk_id']}; split into {len(event['children'])} children; {self.total} leaf chunks")
         elif stage == "execution" and kind == "reused":
             self.current += 1
             self._last_chunk = event["chunk_id"]
@@ -238,14 +253,15 @@ class ConsoleProgress:
         elif stage == "execution" and kind in {"unsplittable", "budget_exhausted", "format_retry_exhausted"}:
             self._waiting_since = None
             self._write(f"Execution stopped: {kind}; retain this run and its checkpoint")
+        elif stage == "execution" and kind == "table_coverage_reread":
+            self.total += 1
+            self._write(f"Table coverage reread: {event['chunk_id']}; missing fields "
+                        + ", ".join(event["target_fields"]))
         elif stage == "model_request" and kind == "started":
             if self._last_chunk != event["chunk_id"]:
                 self.current += 1
                 self._last_chunk = event["chunk_id"]
-            self._waiting_since = time.monotonic()
-            if self._thread is None:
-                self._thread = threading.Thread(target=self._heartbeat, daemon=True)
-                self._thread.start()
+            self._wait_for_model(f"[{self.current}/{self.total}]")
             budget = f"; calls {self._calls_reserved}/{self._call_limit}" if self._managed_execution else ""
             self._write(f"[{self.current}/{self.total}] requesting model; format attempt {event['format_attempt']}{budget}")
         elif stage == "model_response" and kind == "completed":
